@@ -1,0 +1,1352 @@
+/* global Dexie, window, Html5Qrcode, html2pdf, XLSX */
+"use strict";
+
+window.onerror = function(msg, url, lineNo, columnNo, error) { console.error("Error detectado:", msg, "en línea:", lineNo); return false; };
+
+const DEFAULT_BUSINESS_ID = '00000000-0000-0000-0000-000000000000';
+const localDB = new Dexie("POS_OfflineDB");
+
+localDB.version(9).stores({ 
+    products: 'id, barcode, name, category, business_id, deleted', 
+    clients: 'id, name, phone, business_id', 
+    suppliers: 'id, name, business_id', 
+    sales: 'id, numero, fecha, business_id', 
+    purchases: 'id, fecha, business_id', 
+    sync_queue: '++id, action, table_name, status',
+    cajaSessions: '++id, business_id, estado, fechaAperturaTS',
+    gastos: '++id, business_id, fecha, categoria, sessionId',
+    abonos: '++id, business_id, tipo, referenciaId, monto, fecha, fechaTS, usuario',
+    inventory_movements: '++id, business_id, producto_id, fechaTS',
+    audit_logs: '++id, business_id, fechaTS, usuario, modulo, accion'
+});
+
+const USERS = [ { username: "vendedor1", password: "1234", role: "vendedor" }, { username: "gestor", password: "4321", role: "gestor" } ];
+
+let products = [], clients = [], suppliers = [], purchasesHistory = [], salesHistory = [], cart = [];
+let cajaActual = null, cajaHistorial = [], gastosHistory = [], abonosHistory = [], auditHistory = [];
+let buyerType = "retail", paymentMethod = "cash", currentUser = null;
+let unlockedModuleId = null;
+let saleNumber = 1, totalTemporal = 0, pendingAdminView = null, tempImageBase64 = null, tempConfigLogoBase64 = null;
+let procesandoVenta = false;
+let ticketEsVentaNueva = false;
+let html5QrCode = null, isCameraActive = false;
+let isProdCameraActive = false, prodHtml5QrCode = null;
+const GASTOS_CATEGORIES = ["Servicios Básicos", "Renta / Alquiler", "Transporte", "Sueldos", "Mantenimiento", "Insumos de Limpieza", "Otro"];
+
+let sysConfig = JSON.parse(localStorage.getItem('posSystemConfig')) || {
+    name: "POS DISTRIBUIDORA", ruc: "", address: "", phone: "", currency: "C$", header: "", footer: "¡Gracias por su compra!", tax: 0, minStock: 5, logo: null
+};
+
+let reporteDesdeTS = null, reporteHastaTS = null;
+
+const loginScreen = document.getElementById("loginScreen"), app = document.getElementById("app"), barcodeInput = document.getElementById("barcodeInput"), searchProductInput = document.getElementById("searchProductInput"), toggleCameraBtn = document.getElementById("toggleCameraBtn"), cameraScannerContainer = document.getElementById("cameraScannerContainer"), notificationArea = document.getElementById("notificationArea");
+
+function isAdmin() { return !!currentUser && (currentUser.role === "gestor" || unlockedModuleId !== null); }
+
+function puedeAccederAVista(viewId) {
+    if (viewId === "salesView") return true;
+    if (!currentUser) return false;
+    if (currentUser.role === "gestor") return true;
+    return viewId === unlockedModuleId;
+}
+
+function escapeHtml(str) {
+    if (str === null || str === undefined) return "";
+    return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+const r2 = value => Math.round((Number(value) || 0) * 100) / 100;
+const fechaLocalISO = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const esHoyTS = timestamp => new Date(timestamp).toLocaleDateString() === new Date().toLocaleDateString();
+const MSG_SIN_CAJA = "No hay una caja abierta. Un administrador debe abrir la caja en la sección Caja antes de cobrar en efectivo.";
+let ultimoEscaneo = 0, camaraVentasBusy = false, reporteHastaManual = false;
+
+function stockReal(item) {
+    const live = products.find(product => String(product.id) === String(item.id));
+    return live ? (live.stock || 0) : 0;
+}
+
+function detenerCamaraVentas() {
+    if (isCameraActive && html5QrCode) html5QrCode.stop().catch(() => {});
+    cameraScannerContainer?.classList.add("hidden");
+    isCameraActive = false;
+}
+
+function iconoAjuste() {
+    return `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>`;
+}
+
+// Cola local reservada para conectar con una futura capa backend; no realiza llamadas de red.
+async function encolarSincronizacion(action, table_name, data) {
+    try {
+        await localDB.sync_queue.add({ action, table_name, data: JSON.stringify(data), status: 'pending' });
+    } catch (e) { console.error("Error encolando sincronización:", e); }
+}
+
+async function initApp() {
+    try {
+        products = await localDB.products.toArray() || [];
+        clients = await localDB.clients.toArray() || [];
+        suppliers = await localDB.suppliers.toArray() || [];
+        salesHistory = await localDB.sales.toArray() || [];
+        purchasesHistory = await localDB.purchases.toArray() || [];
+        abonosHistory = await localDB.abonos.toArray() || [];
+        gastosHistory = await localDB.gastos.toArray() || [];
+        auditHistory = await localDB.audit_logs.toArray() || [];
+        if(salesHistory.length > 0) saleNumber = Math.max(...salesHistory.map(s => s.numero || 0)) + 1;
+        const saleNumberEl = document.getElementById("currentSaleNumber");
+        if (saleNumberEl) saleNumberEl.textContent = String(saleNumber).padStart(6, "0");
+        
+        const brandName = document.getElementById("brandNameDisplay");
+        if(brandName) brandName.textContent = sysConfig.name;
+
+        await initCaja();
+    } catch (err) { console.error("Error cargando base de datos local:", err.message); }
+}
+window.addEventListener('DOMContentLoaded', initApp);
+
+async function registrarAuditoria(modulo, accion, detalleTexto) {
+    const log = { business_id: DEFAULT_BUSINESS_ID, fecha: new Date().toLocaleString(), fechaTS: Date.now(), usuario: currentUser ? currentUser.displayName : 'Sistema', modulo: modulo, accion: accion, detalle: detalleTexto };
+    auditHistory.push(log); await localDB.audit_logs.put(log); await encolarSincronizacion('INSERT', 'audit_logs', log); if (!document.getElementById("historyView")?.classList.contains("hidden")) actualizarTablaAuditoria();
+}
+
+const modalFocusReturn = new Map();
+
+function modalFocusableElements(modal) {
+    return [...modal.querySelectorAll('a[href], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+        .filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+}
+
+function topOpenModal() {
+    return [...document.querySelectorAll(".modal:not(.hidden)")]
+        .sort((a, b) => (parseInt(getComputedStyle(b).zIndex, 10) || 0) - (parseInt(getComputedStyle(a).zIndex, 10) || 0))[0] || null;
+}
+
+function focusModal(modal) {
+    const focusTarget = modalFocusableElements(modal)[0] || modal.querySelector(".modal-card, .ticket-modal");
+    focusTarget?.focus();
+}
+
+document.querySelectorAll(".modal").forEach(modal => {
+    const heading = modal.querySelector("h2");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    if (heading) {
+        if (!heading.id) heading.id = `${modal.id}Title`;
+        modal.setAttribute("aria-labelledby", heading.id);
+    } else {
+        modal.setAttribute("aria-label", "Comprobante");
+    }
+    modal.querySelector(".modal-card, .ticket-modal")?.setAttribute("tabindex", "-1");
+});
+
+const modalObserver = new MutationObserver(records => {
+    records.forEach(record => {
+        const modal = record.target;
+        const wasOpen = !(record.oldValue || "").split(/\s+/).includes("hidden");
+        const isOpen = !modal.classList.contains("hidden");
+
+        if (!wasOpen && isOpen) {
+            modalFocusReturn.set(modal, document.activeElement);
+            setTimeout(() => {
+                if (topOpenModal() === modal) focusModal(modal);
+            }, 0);
+        } else if (wasOpen && !isOpen) {
+            const returnTarget = modalFocusReturn.get(modal);
+            modalFocusReturn.delete(modal);
+            queueMicrotask(() => {
+                const topModal = topOpenModal();
+                if (topModal) {
+                    if (!topModal.contains(document.activeElement)) focusModal(topModal);
+                } else if (returnTarget?.isConnected && returnTarget.getClientRects().length > 0) {
+                    returnTarget.focus();
+                }
+            });
+        }
+    });
+});
+
+document.querySelectorAll(".modal").forEach(modal => {
+    modalObserver.observe(modal, { attributes: true, attributeFilter: ["class"], attributeOldValue: true });
+});
+
+document.addEventListener("keydown", event => {
+    const modal = topOpenModal();
+    if (!modal) return;
+
+    if (event.key === "Escape") {
+        event.preventDefault();
+        const closeButton = modal.querySelector(".close-modal-btn, .modal-close, #newSaleBtn") ||
+            [...modal.querySelectorAll("button")].find(button => button.textContent.trim().startsWith("Cancelar"));
+        if (closeButton) closeButton.click();
+        else modal.classList.add("hidden");
+        return;
+    }
+
+    if (event.key !== "Tab") return;
+    const focusable = modalFocusableElements(modal);
+    if (!focusable.length) {
+        event.preventDefault();
+        modal.querySelector(".modal-card, .ticket-modal")?.focus();
+        return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+    }
+});
+
+function showAlert(mensaje) { const msgEl = document.getElementById("customAlertMessage"); const modalEl = document.getElementById("customAlertModal"); if(msgEl && modalEl) { msgEl.innerHTML = escapeHtml(mensaje).replace(/\n/g, "<br>"); modalEl.style.zIndex = "10100"; modalEl.classList.remove("hidden"); } else { alert(mensaje); } }
+let confirmCallback = null;
+function showConfirm(mensaje, callback) { const msgEl = document.getElementById("customConfirmMessage"); const modalEl = document.getElementById("customConfirmModal"); if(msgEl && modalEl) { msgEl.innerHTML = escapeHtml(mensaje).replace(/\n/g, "<br>"); confirmCallback = callback; modalEl.style.zIndex = "10100"; modalEl.classList.remove("hidden"); } else { if(confirm(mensaje)) callback(); } }
+document.getElementById("customConfirmBtn")?.addEventListener("click", () => { document.getElementById("customConfirmModal")?.classList.add("hidden"); if(confirmCallback) confirmCallback(); });
+
+document.querySelectorAll(".close-modal-btn").forEach(btn => { 
+    btn.addEventListener("click", (e) => { 
+        const modal = e.target.closest(".modal"); 
+        if (!modal) return;
+        const modalesLectura = ["customAlertModal", "customConfirmModal", "strictConfirmModal", "ticketModal", "statementModal", "kardexModal", "authModal", "supplierModal"];
+        if (modalesLectura.includes(modal.id)) {
+            modal.classList.add("hidden");
+            if (modal.id === "supplierModal") modal.style.zIndex = ""; 
+            if (typeof window.detenerProdCamara === 'function') window.detenerProdCamara();
+        } else {
+            showConfirm("¿Estás seguro de cancelar? Se perderá la operación actual.", () => {
+                modal.classList.add("hidden");
+                if (typeof window.detenerProdCamara === 'function') window.detenerProdCamara();
+                if (modal.id === "purchaseModal") currentPurchaseCart = [];
+            });
+        }
+    }); 
+});
+
+let strictConfirmCallback = null;
+function showStrictConfirm(mensaje, callback) {
+    const msgEl = document.getElementById("strictConfirmMessage"); const modalEl = document.getElementById("strictConfirmModal");
+    const inputEl = document.getElementById("strictConfirmInput"); const errEl = document.getElementById("strictConfirmError");
+    if (!msgEl || !modalEl || !inputEl) return;
+    msgEl.textContent = mensaje; inputEl.value = ""; errEl?.classList.add("hidden"); strictConfirmCallback = callback; modalEl.classList.remove("hidden");
+    setTimeout(() => inputEl.focus(), 100);
+}
+document.getElementById("strictConfirmBtn")?.addEventListener("click", () => {
+    const inputEl = document.getElementById("strictConfirmInput"); const errEl = document.getElementById("strictConfirmError");
+    if (!inputEl || inputEl.value.trim().toUpperCase() !== "ELIMINAR") { errEl?.classList.remove("hidden"); return; }
+    document.getElementById("strictConfirmModal")?.classList.add("hidden");
+    if (strictConfirmCallback) strictConfirmCallback();
+});
+
+let anularRegistroCallback = null;
+function showAnularRegistro(titulo, descripcion, callback) {
+    const tituloEl = document.getElementById("anularRegistroTitulo"); const descEl = document.getElementById("anularRegistroDescripcion");
+    const motivoEl = document.getElementById("anularRegistroMotivo"); const modalEl = document.getElementById("anularRegistroModal");
+    if (!modalEl) return;
+    if (tituloEl) tituloEl.textContent = titulo; if (descEl) descEl.textContent = descripcion; if (motivoEl) motivoEl.value = "";
+    anularRegistroCallback = callback; modalEl.classList.remove("hidden");
+}
+window.confirmarAnularRegistro = function() {
+    const motivoEl = document.getElementById("anularRegistroMotivo"); const motivo = motivoEl ? motivoEl.value.trim() : "";
+    if (!motivo) { showAlert("Debe indicar un motivo de anulación."); return; }
+    document.getElementById("anularRegistroModal")?.classList.add("hidden");
+    if (anularRegistroCallback) anularRegistroCallback(motivo);
+};
+
+document.getElementById("loginForm")?.addEventListener("submit", (e) => {
+    e.preventDefault(); 
+    const uVal = document.getElementById("loginUsername").value.trim(); 
+    const pVal = document.getElementById("loginPassword").value;
+    
+    let user = null;
+    if (pVal === "1234") { user = { username: uVal, password: "1234", role: "vendedor" }; } 
+    else if (pVal === "4321") { user = { username: uVal, password: "4321", role: "gestor" }; }
+    
+    if (user && uVal !== "") { 
+        currentUser = { ...user, displayName: user.username }; 
+        loginScreen?.classList.add("hidden"); app?.classList.remove("hidden"); 
+        if(document.getElementById("sellerName")) document.getElementById("sellerName").textContent = currentUser.username; 
+        if(document.getElementById("roleBadge")) document.getElementById("roleBadge").textContent = currentUser.role === "gestor" ? "Administrador" : "Usuario"; 
+        unlockedModuleId = null; switchView("salesView"); actualizarCatalogo();
+        registrarAuditoria('SESION', 'LOGIN', `Inicio de sesión (${currentUser.role})`);
+    } else { document.getElementById("loginError")?.classList.remove("hidden"); }
+});
+
+document.getElementById("logoutBtn")?.addEventListener("click", () => {
+    detenerCamaraVentas();
+    if (currentUser) registrarAuditoria('SESION', 'LOGOUT', `Cierre de sesión`);
+    app?.classList.add("hidden"); loginScreen?.classList.remove("hidden"); document.getElementById("loginForm")?.reset(); cart = []; actualizarCarrito(); unlockedModuleId = null; currentUser = null;
+});
+
+const NAV_MAP = { "navSalesBtn": "salesView", "navInventoryBtn": "inventoryView", "navPurchasesBtn": "purchasesView", "navPayablesBtn": "payablesView", "navClientsBtn": "clientsView", "navSuppliersBtn": "suppliersView", "navHistoryBtn": "historyView", "navCajaBtn": "cajaView", "navGastosBtn": "gastosView", "navReportesBtn": "reportesView", "navDashboardBtn": "dashboardView", "navConfigBtn": "configView" };
+
+document.querySelectorAll("nav .nav-btn").forEach(btn => { 
+    btn.addEventListener("click", (e) => { 
+        const navBtn = e.target.closest('.nav-btn'); if (!navBtn) return; const targetView = NAV_MAP[navBtn.id]; if (!targetView) return;
+        if(puedeAccederAVista(targetView)) { switchView(targetView); } else { pendingAdminView = targetView; document.getElementById("authModal")?.classList.remove("hidden"); setTimeout(() => document.getElementById("gestorPassword")?.focus(), 100); } 
+    }); 
+});
+
+document.getElementById("authForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const gestorUser = USERS.find(u => u.role === "gestor");
+    const enteredPass = document.getElementById("gestorPassword").value;
+    if (gestorUser && enteredPass === gestorUser.password) {
+        unlockedModuleId = pendingAdminView; document.getElementById("authModal")?.classList.add("hidden"); document.getElementById("gestorPassword").value = ""; document.getElementById("authError")?.classList.add("hidden");
+        registrarAuditoria('SESION', 'DESBLOQUEO_GESTOR', `Desbloqueó acceso administrativo (vista: ${pendingAdminView || '-'})`);
+        if (pendingAdminView) switchView(pendingAdminView);
+    } else { document.getElementById("authError")?.classList.remove("hidden"); }
+});
+
+function switchView(viewId) {
+    if (viewId !== "salesView") detenerCamaraVentas();
+    if (viewId !== unlockedModuleId) unlockedModuleId = null;
+    document.querySelectorAll(".view-panel").forEach(panel => panel.classList.add("hidden")); 
+    document.querySelectorAll("nav .nav-btn").forEach(btn => btn.classList.remove("active"));
+    const targetElement = document.getElementById(viewId); if(targetElement) targetElement.classList.remove("hidden");
+    const activeBtnId = Object.keys(NAV_MAP).find(k => NAV_MAP[k] === viewId);
+    if (activeBtnId && document.getElementById(activeBtnId)) document.getElementById(activeBtnId).classList.add("active");
+
+    if(viewId === "salesView") setTimeout(() => barcodeInput?.focus(), 100);
+    if(viewId === "inventoryView") actualizarTablaInventario();
+    if(viewId === "purchasesView") actualizarTablaCompras();
+    if(viewId === "payablesView") actualizarTablaCuentasPorPagar();
+    if(viewId === "clientsView") actualizarTablaClientes();
+    if(viewId === "suppliersView") actualizarTablaProveedores();
+    if(viewId === "historyView") { actualizarTablaHistorial(); actualizarTablaAuditoria(); }
+    if(viewId === "cajaView") renderCajaView();
+    if(viewId === "gastosView") renderGastosView();
+    if(viewId === "reportesView") { initReportesFiltros(); renderReportes(); }
+    if(viewId === "dashboardView") renderDashboard();
+    if(viewId === "configView") cargarVistaConfiguracion();
+}
+
+document.getElementById("confLogoInput")?.addEventListener("change", function(e) { const file = e.target.files[0]; if(file) { const reader = new FileReader(); reader.onload = function(evt) { tempConfigLogoBase64 = evt.target.result; const prev = document.getElementById("confLogoPreview"); if(prev) { prev.src = tempConfigLogoBase64; prev.style.display = "block"; } }; reader.readAsDataURL(file); } });
+document.getElementById("prodImageInput")?.addEventListener("change", function(e) {
+    const file = e.target.files[0];
+    if(file) {
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            tempImageBase64 = evt.target.result;
+            const prev = document.getElementById("prodImagePreview");
+            if(prev) { prev.src = tempImageBase64; prev.style.display = "block"; }
+        };
+        reader.readAsDataURL(file);
+    }
+});
+
+function cargarVistaConfiguracion() {
+    document.getElementById("confName").value = sysConfig.name || ""; document.getElementById("confRuc").value = sysConfig.ruc || ""; document.getElementById("confAddress").value = sysConfig.address || ""; document.getElementById("confPhone").value = sysConfig.phone || ""; document.getElementById("confCurrency").value = sysConfig.currency || "C$"; document.getElementById("confHeader").value = sysConfig.header || ""; document.getElementById("confFooter").value = sysConfig.footer || ""; document.getElementById("confMinStock").value = sysConfig.minStock || 5;
+    tempConfigLogoBase64 = sysConfig.logo || null; const logoPrev = document.getElementById("confLogoPreview"); if (logoPrev) { if (tempConfigLogoBase64) { logoPrev.src = tempConfigLogoBase64; logoPrev.style.display = "block"; } else { logoPrev.style.display = "none"; } }
+}
+
+window.guardarConfiguracion = function() {
+    if (!isAdmin()) { showAlert("No tiene permisos."); return; }
+    const prevConfig = JSON.stringify(sysConfig);
+    sysConfig = { name: document.getElementById("confName").value.trim() || "POS DISTRIBUIDORA", ruc: document.getElementById("confRuc").value.trim(), address: document.getElementById("confAddress").value.trim(), phone: document.getElementById("confPhone").value.trim(), currency: document.getElementById("confCurrency").value.trim() || "C$", header: document.getElementById("confHeader").value.trim(), footer: document.getElementById("confFooter").value.trim(), tax: 0, minStock: parseInt(document.getElementById("confMinStock").value) || 5, logo: tempConfigLogoBase64 };
+    localStorage.setItem('posSystemConfig', JSON.stringify(sysConfig));
+    if (prevConfig !== JSON.stringify(sysConfig)) registrarAuditoria('CONFIGURACION', 'ACTUALIZACION', 'Actualizó configuración del negocio');
+    showAlert("Configuración guardada exitosamente.");
+    const brandName = document.getElementById("brandNameDisplay"); if(brandName) brandName.textContent = sysConfig.name;
+    actualizarCatalogo();
+};
+
+window.resetConfiguracion = function() {
+    if (!isAdmin()) { showAlert("No tiene permisos."); return; }
+    showConfirm("⚠️ ¿Seguro que deseas restablecer la configuración?", () => {
+        sysConfig = { name: "POS DISTRIBUIDORA", ruc: "", address: "", phone: "", currency: "C$", header: "", footer: "¡Gracias por su compra!", tax: 0, minStock: 5, logo: null };
+        localStorage.removeItem('posSystemConfig');
+        cargarVistaConfiguracion();
+        const brandName = document.getElementById("brandNameDisplay"); if(brandName) brandName.textContent = sysConfig.name;
+        actualizarCatalogo(); showAlert("Configuración restablecida.");
+    });
+};
+
+function obtenerCostoHistoricoItem(item) {
+    if (item && item.cost !== undefined && item.cost !== null) return item.cost;
+    const prod = products.find(p => String(p.id) === String(item.id) || p.name === item.name);
+    return prod ? (prod.cost || 0) : 0;
+}
+
+function renderDashboard() {
+    const hoyStr = new Date().toLocaleDateString(); const ahora = new Date(); const mesActual = ahora.getMonth(); const anoActual = ahora.getFullYear();
+    const ventasValidas = salesHistory.filter(v => !v.anulada);
+    const ventasHoy = ventasValidas.filter(v => new Date(v.fechaTS || v.id).toLocaleDateString() === hoyStr).reduce((sum, v) => sum + (v.total || 0), 0);
+    const ventasMesValidas = ventasValidas.filter(v => { const d = new Date(v.fechaTS || v.id); return d.getMonth() === mesActual && d.getFullYear() === anoActual; });
+    const ventasMes = ventasMesValidas.reduce((sum, v) => sum + (v.total || 0), 0);
+    const totalVentasHistoricas = ventasValidas.reduce((sum, v) => sum + (v.total || 0), 0);
+    
+    let costoMercanciaTotal = 0; ventasValidas.forEach(v => { if (v.items) { v.items.forEach(i => { costoMercanciaTotal += obtenerCostoHistoricoItem(i) * (i.cantidad || 0); }); } });
+    const gananciaBrutaTotal = totalVentasHistoricas - costoMercanciaTotal; const gastosTotales = gastosHistory.filter(g => !g.anulado).reduce((sum, g) => sum + (g.monto || 0), 0); const gananciaEstimadaTotal = gananciaBrutaTotal - gastosTotales;
+    const prodsVendidosCount = ventasValidas.reduce((sum, v) => { return sum + (v.items ? v.items.reduce((s, i) => s + (i.cantidad || 0), 0) : 0); }, 0);
+    
+    const stockMinimoSys = sysConfig.minStock !== undefined ? sysConfig.minStock : 5;
+    const bajoStockCount = products.filter(p => !p.deleted && p.active !== false && (p.stock || 0) <= (p.minStock !== undefined ? p.minStock : stockMinimoSys)).length;
+    
+    const cxcTotal = clients.reduce((sum, c) => sum + (c.debt || 0), 0); const cxpTotal = suppliers.reduce((sum, s) => sum + (s.debt || 0), 0);
+
+    const setEl = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
+    setEl("dashGananciaVentas", `${sysConfig.currency}${totalVentasHistoricas.toFixed(2)}`); setEl("dashGananciaCosto", `${sysConfig.currency}${costoMercanciaTotal.toFixed(2)}`); setEl("dashGananciaBruta", `${sysConfig.currency}${gananciaBrutaTotal.toFixed(2)}`); setEl("dashGananciaGastos", `${sysConfig.currency}${gastosTotales.toFixed(2)}`); setEl("dashGananciaEstimada", `${sysConfig.currency}${gananciaEstimadaTotal.toFixed(2)}`);
+    setEl("dashVentasHoy", `${sysConfig.currency}${ventasHoy.toFixed(2)}`); setEl("dashVentasMes", `${sysConfig.currency}${ventasMes.toFixed(2)}`); setEl("dashGanancia", `${sysConfig.currency}${gananciaEstimadaTotal.toFixed(2)}`); setEl("dashProdsVendidos", `${prodsVendidosCount} uds.`); setEl("dashBajoStock", `${bajoStockCount}`); setEl("dashCxC", `${sysConfig.currency}${cxcTotal.toFixed(2)}`); setEl("dashCxP", `${sysConfig.currency}${cxpTotal.toFixed(2)}`); setEl("dashGastos", `${sysConfig.currency}${gastosTotales.toFixed(2)}`);
+
+    const porVendedor = {}; ventasValidas.forEach(v => { const vend = v.vendedor || 'Desconocido'; if(!porVendedor[vend]) porVendedor[vend] = { ventas: 0, total: 0 }; porVendedor[vend].ventas++; porVendedor[vend].total += (v.total || 0); });
+    const vendBody = document.getElementById("dashVendedoresBody");
+    if(vendBody) {
+        const sortedVend = Object.entries(porVendedor).sort((a,b) => b[1].total - a[1].total);
+        if(sortedVend.length === 0) { vendBody.innerHTML = `<tr><td colspan="3" class="text-center">Sin registros.</td></tr>`; } else { vendBody.innerHTML = sortedVend.map(([nombre, d]) => `<tr><td><strong>${escapeHtml(nombre)}</strong></td><td>${d.ventas}</td><td style="font-weight:bold; color:#16a34a;">${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
+    }
+}
+
+document.getElementsByName("buyerType").forEach(radio => { radio.addEventListener("change", (e) => { buyerType = e.target.value; const applied = document.getElementById("appliedRate"); if(applied) applied.textContent = buyerType === "retail" ? "Menudeo" : "Mayoreo"; actualizarCarrito(); actualizarCatalogo(); }); });
+function refrescarSelectClientesCredito(seleccionarId) {
+    const sel = document.getElementById("creditClientSelect");
+    if (!sel) return;
+    const actual = seleccionarId !== undefined ? seleccionarId : sel.value;
+    sel.innerHTML = clients.filter(c => c.active !== false).map(c =>
+        `<option value="${c.id}">${escapeHtml(c.name)} (Disp: ${sysConfig.currency}${((c.creditLimit || 0) - (c.debt || 0)).toFixed(2)})</option>`
+    ).join("");
+    if (actual) sel.value = String(actual);
+}
+
+document.getElementsByName("paymentMethod").forEach(radio => { radio.addEventListener("change", (e) => { paymentMethod = e.target.value; const clientBox = document.getElementById("creditClientContainer"); if(paymentMethod === "credit") { clientBox?.classList.remove("hidden"); refrescarSelectClientesCredito(); } else { clientBox?.classList.add("hidden"); } }); });
+document.getElementById("purchType")?.addEventListener("change", (e) => { const pdc = document.getElementById("purchDaysContainer"); if (pdc) pdc.style.display = e.target.value === "credito" ? "block" : "none"; });
+
+barcodeInput?.addEventListener("keypress", (e) => { if (e.key === "Enter") { e.preventDefault(); procesarCodigoBarras(barcodeInput.value); } });
+document.getElementById("addBarcodeBtn")?.addEventListener("click", () => { procesarCodigoBarras(barcodeInput.value); });
+
+let scannerBuffer = "", scannerTimeout;
+document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === 'INPUT' && e.target.id !== 'barcodeInput') return;
+    if (e.key === "Enter") {
+        const codigo = e.target?.id === "barcodeInput" ? e.target.value : scannerBuffer;
+        if ((codigo || "").trim().length > 2) { e.preventDefault(); procesarCodigoBarras(codigo); scannerBuffer = ""; }
+    } else if (e.key.length === 1) {
+        scannerBuffer += e.key; clearTimeout(scannerTimeout);
+        scannerTimeout = setTimeout(() => { scannerBuffer = ""; }, 200);
+    }
+});
+
+searchProductInput?.addEventListener("input", actualizarCatalogo);
+document.getElementById("toggleCameraBtn")?.addEventListener("click", async () => {
+    if (camaraVentasBusy) return;
+    camaraVentasBusy = true;
+    try {
+        if (isCameraActive) { detenerCamaraVentas(); return; }
+        cameraScannerContainer?.classList.remove("hidden");
+        html5QrCode = new Html5Qrcode("interactiveReader");
+        await html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, texto => {
+            if (Date.now() - ultimoEscaneo < 1500) return;
+            ultimoEscaneo = Date.now();
+            procesarCodigoBarras(texto);
+        });
+        isCameraActive = true;
+    } catch (err) {
+        cameraScannerContainer?.classList.add("hidden"); isCameraActive = false;
+        showAlert("No se pudo iniciar la cámara.");
+    } finally { camaraVentasBusy = false; }
+});
+
+function procesarCodigoBarras(codigo) {
+    codigo = (codigo || "").trim();
+    if (!codigo) return;
+    const producto = products.find(p => (p.barcode || "").trim() === codigo && !p.deleted && p.active !== false);
+    if (producto) agregarAlCarrito(producto);
+    else showAlert("Producto no encontrado o inactivo.");
+    if (barcodeInput) barcodeInput.value = "";
+}
+
+function actualizarCatalogo() {
+    const searchTerm = searchProductInput ? searchProductInput.value.toLowerCase() : ""; 
+    const list = products.filter(p => !p.deleted && p.active !== false && ((p.name||"").toLowerCase().includes(searchTerm) || (p.barcode||"").includes(searchTerm))); 
+    const pCount = document.getElementById("productCount"); if(pCount) pCount.textContent = list.length;
+    const pGrid = document.getElementById("productGrid");
+    if(pGrid) {
+        pGrid.innerHTML = list.map(p => { 
+            const retail = p.retailPrice || p.retail || 0; const wholesale = p.wholesalePrice || p.wholesale || 0; const precio = buyerType === "retail" ? retail : wholesale; 
+            const iconOrImage = p.image ? `<img src="${p.image}" style="width:100%; height:80px; object-fit:cover; border-radius:4px; margin-bottom:5px;">` : `<div style="text-align:center; padding:15px;">${iconoProducto("width:2.2rem;height:2.2rem;stroke-width:1.5;")}</div>`; 
+            const minStock = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); const stockColor = p.stock <= minStock ? "color: red;" : "color: #666;";
+            return `<div class="product-card" onclick="window.agregarAlCarritoPorId('${p.id}')">${iconOrImage}<strong>${escapeHtml(p.name)}</strong><br><small style="color:#666;">Cód: ${escapeHtml(p.barcode)}</small><br><div style="font-size:.85rem; font-weight:600; ${stockColor}">Stock: ${p.stock||0}</div><br><span style="color: #28a745; font-weight: bold;">${sysConfig.currency}${precio.toFixed(2)}</span></div>`; 
+        }).join("");
+    }
+}
+
+function iconoProducto(style) {
+    return `<svg class="ic" style="${style}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`;
+}
+
+window.agregarAlCarritoPorId = function(id) { const prod = products.find(p => String(p.id) === String(id)); if(prod) agregarAlCarrito(prod); };
+function agregarAlCarrito(producto) { const existe = cart.find(item => String(item.id) === String(producto.id)); if ((existe ? existe.cantidad : 0) + 1 > producto.stock) { showAlert(`❌ ¡STOCK INSUFICIENTE!\nSolo te quedan ${producto.stock} unidades de ${producto.name}.`); return; } if (existe) { existe.cantidad += 1; } else { cart.push({ ...producto, cantidad: 1 }); } actualizarCarrito(); }
+
+window.cambiarCantidadManual = function(index, valorStr) {
+    const item = cart[index]; if (!item) return;
+    let nuevaCant = parseInt(valorStr);
+    if (isNaN(nuevaCant) || nuevaCant <= 0) nuevaCant = 1;
+    const disp = stockReal(item);
+    if (nuevaCant > disp) { showAlert(`❌ ¡STOCK INSUFICIENTE!\nSolo quedan ${disp} unidades de ${item.name}.`); actualizarCarrito(); return; }
+    item.cantidad = nuevaCant; actualizarCarrito();
+};
+window.cambiarCantidad = function(index, delta) {
+    const item = cart[index]; if (!item) return;
+    const nuevaCant = item.cantidad + delta;
+    if (nuevaCant <= 0) { window.eliminarDelCarrito(index); return; }
+    const disp = stockReal(item);
+    if (nuevaCant > disp) { showAlert(`❌ ¡STOCK INSUFICIENTE!\nSolo quedan ${disp} unidades de ${item.name}.`); return; }
+    item.cantidad = nuevaCant; actualizarCarrito();
+};
+window.eliminarDelCarrito = function(index) { cart.splice(index, 1); actualizarCarrito(); };
+document.getElementById("clearCartBtn")?.addEventListener("click", () => { 
+    if (cart.length === 0) return;
+    showConfirm("¿Desea cancelar esta venta y vaciar el carrito?", () => { cart = []; actualizarCarrito(); });
+});
+
+function actualizarCarrito() { 
+    let subtotalSinImpuesto = 0; let total = 0; const cartItemsDiv = document.getElementById("cartItems"); 
+    if (cart.length === 0) { if(cartItemsDiv) cartItemsDiv.innerHTML = `<div class="text-center" style="padding:20px; color:#999;">Carrito vacío</div>`; } else { 
+        if(cartItemsDiv) cartItemsDiv.innerHTML = cart.map((item, index) => { const retail = item.retailPrice || item.retail || 0; const wholesale = item.wholesalePrice || item.wholesale || 0; const precio = buyerType === "retail" ? retail : wholesale; const itemTotal = r2(precio * item.cantidad); const currentStock = stockReal(item); subtotalSinImpuesto = r2(subtotalSinImpuesto + itemTotal); total = r2(total + itemTotal); return `<div class="cart-item-row" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding:12px 0;"><div style="flex:1;"><strong>${escapeHtml(item.name)}</strong><br><small>${sysConfig.currency}${precio.toFixed(2)} c/u · Stock: ${currentStock}</small></div><div class="qty-control" style="display:flex; align-items:center; gap:8px;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, -1)">-</button><input type="number" value="${item.cantidad}" onchange="window.cambiarCantidadManual(${index}, this.value)" style="width: 45px; text-align: center;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, 1)">+</button></div><div style="text-align:right; margin-left:15px;"><strong>${sysConfig.currency}${itemTotal.toFixed(2)}</strong><br><button onclick="window.eliminarDelCarrito(${index})" style="background:transparent; color:#d32f2f; border:none; cursor:pointer; font-size:12px;">Quitar</button></div></div>`; }).join(""); 
+    } 
+    totalTemporal = total; 
+    if(document.getElementById("subtotal")) document.getElementById("subtotal").textContent = `${sysConfig.currency}${subtotalSinImpuesto.toFixed(2)}`; 
+    if(document.getElementById("total")) document.getElementById("total").textContent = `${sysConfig.currency}${total.toFixed(2)}`; 
+    if(document.getElementById("cartItemCount")) document.getElementById("cartItemCount").textContent = `${cart.length} productos`; 
+}
+
+async function registrarMovimientoKardex(productoId, tipoMovimiento, cantidadFisica, motivoRef) {
+    const prodIndex = products.findIndex(p => String(p.id) === String(productoId)); if (prodIndex === -1) return false;
+    const stockAnterior = products[prodIndex].stock || 0; const stockNuevo = stockAnterior + cantidadFisica;
+    if (stockNuevo < 0) return false;
+    const costoUnitarioActual = products[prodIndex].cost || 0;
+    products[prodIndex].stock = stockNuevo; await localDB.products.put(products[prodIndex]); await encolarSincronizacion('UPDATE', 'products', products[prodIndex]);
+    const movimiento = { id: Date.now() + Math.random(), business_id: DEFAULT_BUSINESS_ID, producto_id: products[prodIndex].id, tipo: tipoMovimiento, cantidad: cantidadFisica, costo_unitario: costoUnitarioActual, stock_nuevo: stockNuevo, fecha: new Date().toLocaleString(), fechaTS: Date.now(), motivo: motivoRef, usuario: currentUser ? currentUser.displayName : 'Sistema' };
+    await localDB.inventory_movements.put(movimiento); await encolarSincronizacion('INSERT', 'inventory_movements', movimiento);
+    return true;
+}
+
+document.getElementById("processSaleBtn")?.addEventListener("click", () => {
+    if (procesandoVenta) return;
+    if (cart.length === 0) {
+        showAlert("El carrito está vacío. Agregue productos antes de cobrar.");
+        return;
+    }
+
+    if (paymentMethod === "cash") {
+        if (!cajaActual) { showAlert(MSG_SIN_CAJA); return; }
+        const cDisp = document.getElementById("cashTotalDisplay");
+        if (cDisp) cDisp.textContent = `${sysConfig.currency}${totalTemporal.toFixed(2)}`;
+
+        const cRec = document.getElementById("cashReceivedInput");
+        if (cRec) cRec.value = "";
+
+        document.getElementById("cashModal")?.classList.remove("hidden");
+        setTimeout(() => document.getElementById("cashReceivedInput")?.focus(), 100);
+    } else {
+        const clientSelectId = document.getElementById("creditClientSelect")?.value;
+        const client = clients.find(c => String(c.id) === String(clientSelectId));
+
+        if (!clientSelectId || !client) {
+            showAlert("Debe seleccionar o crear un cliente para vender a crédito.");
+            return;
+        }
+
+        if (((client.debt || 0) + totalTemporal) > (client.creditLimit || 0)) {
+            showAlert(`Crédito Excedido.\nDisponible: ${sysConfig.currency}${((client.creditLimit || 0) - (client.debt || 0)).toFixed(2)}`);
+            return;
+        }
+
+        procesandoVenta = true;
+        registrarVenta(totalTemporal, totalTemporal, 0);
+    }
+});
+
+document.getElementById("confirmCashBtn")?.addEventListener("click", () => {
+    if (procesandoVenta) return;
+    if (!cajaActual) { document.getElementById("cashModal")?.classList.add("hidden"); showAlert(MSG_SIN_CAJA); return; }
+    const montoPagado = r2(parseFloat(document.getElementById("cashReceivedInput")?.value));
+    if (montoPagado < totalTemporal) {
+        document.getElementById("cashError")?.classList.remove("hidden");
+        return;
+    }
+
+    document.getElementById("cashError")?.classList.add("hidden");
+    document.getElementById("cashModal")?.classList.add("hidden");
+
+    procesandoVenta = true;
+    registrarVenta(totalTemporal, montoPagado, r2(montoPagado - totalTemporal));
+});
+
+async function registrarVenta(total, pago, vuelto) {
+    try {
+    if (paymentMethod === "cash" && !cajaActual) { showAlert(MSG_SIN_CAJA); return; }
+    for (const item of cart) {
+        const live = products.find(p => String(p.id) === String(item.id));
+        if (!live || (live.stock || 0) < item.cantidad) {
+            showAlert(`❌ Stock insuficiente de ${item.name}.\nDisponible: ${live ? (live.stock || 0) : 0}.`);
+            return;
+        }
+    }
+    let detalleFijo = document.getElementById("saleDetailInput")?.value.trim() || "-"; let clienteTicket = "-"; let dueDateStr = null; let termsStr = "-"; let dueTS = null; const fechaObj = new Date(); const fechaSolo = fechaObj.toLocaleDateString(); const horaSolo = fechaObj.toLocaleTimeString();
+
+    if (paymentMethod === "credit") { 
+        const clientSelectId = document.getElementById("creditClientSelect")?.value; const c = clients.find(x => String(x.id) === String(clientSelectId)); 
+        c.debt = r2((c.debt || 0) + total); clienteTicket = c.name; const days = Math.max(1, parseInt(document.getElementById("creditDays").value) || 30); let d = new Date(); d.setDate(d.getDate() + days); dueDateStr = d.toLocaleDateString(); dueTS = d.getTime(); termsStr = `${days} días`; detalleFijo = `(Crédito: ${c.name})`; await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c);
+    }
+    
+    const newSale = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, numero: saleNumber, fecha: `${fechaSolo} ${horaSolo}`, fechaTS: Date.now(), vendedor: currentUser.displayName, detalle: detalleFijo, metodo: paymentMethod === "cash" ? "Contado" : "Crédito", cliente: clienteTicket, vencimiento: dueDateStr, vencimientoTS: dueTS, total: r2(total), tarifa: buyerType === "retail" ? "Menudeo" : "Mayoreo", items: [...cart], plazo: termsStr, anulada: false };
+    salesHistory.push(newSale); await localDB.sales.put(newSale); await encolarSincronizacion('INSERT', 'sales', newSale);
+    
+    for (let cItem of cart) { await registrarMovimientoKardex(cItem.id, 'VENTA', -cItem.cantidad, `Venta #${saleNumber}`); }
+    actualizarTablaInventario();
+    actualizarCatalogo();
+    
+    let detalleProds = cart.map(item => `${item.name} x ${item.cantidad}`).join("\n"); 
+    await registrarAuditoria('VENTAS', 'NUEVA_VENTA', `Vendió:\n${detalleProds}\nFactura: #${saleNumber}\nTotal: ${sysConfig.currency}${total.toFixed(2)}`);
+    
+    renderDashboard(); 
+    ticketEsVentaNueva = true;
+    generarVisualizacionTicket(newSale, pago, vuelto, false);
+    } catch (error) {
+        console.error("Error al registrar la venta:", error);
+        showAlert("No se pudo completar la venta. Revise el estado de la operación antes de volver a intentarlo.");
+    } finally {
+        procesandoVenta = false;
+        refrescarSelectClientesCredito();
+    }
+}
+
+window.reimprimirTicket = function(id) { ticketEsVentaNueva = false; const sale = salesHistory.find(s => String(s.id) === String(id)); if(!sale) return; generarVisualizacionTicket(sale, sale.total, 0, true); };
+
+function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
+    let prods = ""; let subtotalTicket = 0;
+    if (sale.items && sale.items.length > 0) { prods = sale.items.map(i => { const precio = sale.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); subtotalTicket += (precio * i.cantidad); return `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${i.cantidad}x ${escapeHtml(i.name)}</span><span>${sysConfig.currency}${(precio * i.cantidad).toFixed(2)}</span></div>`; }).join(""); } else { prods = `<div style="text-align:center; font-size:12px; color:#888;">(Detalle no disponible)</div>`; subtotalTicket = sale.total; }
+    let saldoPendienteHtml = "";
+    if (sale.metodo === "Crédito") { const c = clients.find(cl => cl.name === sale.cliente); if (c) { saldoPendienteHtml = `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top:5px; border-top:1px dashed #000; padding-top:5px; color:#d32f2f;"><span>Saldo Pendiente:</span><span>${sysConfig.currency}${(c.debt||0).toFixed(2)}</span></div>`; } }
+    let pagoH = sale.metodo === "Contado" ? `<div style="display:flex; justify-content:space-between; margin-top:10px;"><span>PAGO CONTADO</span>${esCopia ? '' : `<span>Efectivo: ${sysConfig.currency}${(pago||0).toFixed(2)}</span></div><div style="display:flex; justify-content:space-between; font-weight:bold;"><span>CAMBIO:</span><span>${sysConfig.currency}${(vuelto||0).toFixed(2)}</span>`}</div>` : `<div style="border: 2px dashed #000; padding: 10px; margin-top:10px; background:#f9f9f9; font-size:12px;"><div style="text-align:center; font-weight:bold; margin-bottom:5px;">*** FACTURA DE CRÉDITO ***</div><div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>A nombre de:</span><span style="font-weight:bold; text-align:right;">${escapeHtml(sale.cliente)}</span></div>${sale.plazo && sale.plazo !== "-" ? `<div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Plazo a pagar:</span><span>${sale.plazo}</span></div>` : ''}<div style="display:flex; justify-content:space-between; font-weight:bold; border-top:1px solid #ccc; padding-top:2px;"><span>VENCE:</span><span style="color:#d32f2f;">${sale.vencimiento || '-'}</span></div>${saldoPendienteHtml}</div>`;
+    const statusAnulada = sale.anulada ? `<div style="text-align:center; color:white; background:#d32f2f; font-weight:bold; padding:5px; margin-bottom:10px;">FACTURA ANULADA</div>` : ``;
+    const confLogoImg = sysConfig.logo ? `<div style="text-align:center; margin-bottom: 5px;"><img src="${sysConfig.logo}" style="max-width: 120px; max-height: 80px; object-fit: contain;"></div>` : ''; const confH3 = `<h3 style="text-align:center; margin:0;">${escapeHtml(sysConfig.name)}</h3>`; const confRucInfo = sysConfig.ruc ? `<div style="text-align:center; font-size:12px;">RUC: ${escapeHtml(sysConfig.ruc)}</div>` : ''; const confAddressInfo = sysConfig.address ? `<div style="text-align:center; font-size:12px;">Dir: ${escapeHtml(sysConfig.address)}</div>` : ''; const confPhoneInfo = sysConfig.phone ? `<div style="text-align:center; font-size:12px;">Tel: ${escapeHtml(sysConfig.phone)}</div>` : ''; const confExtraHeader = sysConfig.header ? `<div style="text-align:center; font-size:12px; margin-bottom:5px;">${escapeHtml(sysConfig.header)}</div>` : ''; const confFooterFinal = sysConfig.footer ? `<div style="text-align: center; margin-top: 15px; font-size: 13px;">${escapeHtml(sysConfig.footer)}</div>` : `<div style="text-align: center; margin-top: 15px; font-size: 13px;">¡Gracias por su compra!</div>`;
+    const tkCont = document.getElementById("ticketContent"); if(tkCont) { tkCont.innerHTML = `<div id="imprimibleTicket" style="font-family: monospace; background: #fff; border: 1px dashed #ccc; padding: 25px; width: 100%; max-width: 350px; margin: 0 auto;">${statusAnulada}${confLogoImg}${confH3}${confRucInfo}${confAddressInfo}${confPhoneInfo}${confExtraHeader}<div style="text-align:center; color:#555; font-size:12px; margin-bottom:10px;">${esCopia ? "COPIA DE FACTURA" : "COMPROBANTE DE VENTA"}</div><div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Factura:</span><span>#${String(sale.numero).padStart(6, '0')}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Fecha/Hora:</span><span>${sale.fecha}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Cajero:</span><span>${escapeHtml(sale.vendedor)}</span></div><div style="border-top:1px dashed #000; margin:10px 0;"></div>${prods}<div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:3px;"><span>Subtotal</span><span>${sysConfig.currency}${subtotalTicket.toFixed(2)}</span></div><div style="display:flex; justify-content:space-between; font-weight:bold; font-size:18px; margin-top:5px; border-top:1px solid #000; padding-top:5px;"><span>TOTAL</span><span>${sysConfig.currency}${(sale.total||0).toFixed(2)}</span></div>${pagoH}<div style="border-top:1px dashed #000; margin:10px 0;"></div>${confFooterFinal}${esCopia ? '<div style="text-align: center; color: #333; margin-top: 5px; font-size: 13px;">*** REIMPRESIÓN ***</div>' : ''}</div>`; }
+    document.getElementById("ticketModal")?.classList.remove("hidden"); actualizarTablaClientes();
+}
+
+document.querySelectorAll("#closeTicketBtn, #newSaleBtn").forEach(b => {
+    b.addEventListener("click", () => {
+        document.getElementById("ticketModal")?.classList.add("hidden");
+        if (!ticketEsVentaNueva) return;
+        ticketEsVentaNueva = false;
+        cart = [];
+        saleNumber = Math.max(1, (salesHistory.length > 0 ? Math.max(...salesHistory.map(s => s.numero || 0)) : 0) + 1);
+        const csn = document.getElementById("currentSaleNumber"); if (csn) csn.textContent = String(saleNumber).padStart(6, '0');
+        const sdi = document.getElementById("saleDetailInput"); if (sdi) sdi.value = "";
+        actualizarCarrito(); actualizarCatalogo();
+        if (barcodeInput) barcodeInput.value = "";
+        barcodeInput?.focus();
+    });
+});
+
+document.getElementById("pdfTicketBtn")?.addEventListener("click", () => {
+    const el = document.getElementById("imprimibleTicket");
+    if (!el) return;
+    if (typeof html2pdf === 'undefined') { showAlert("La librería PDF no está cargada."); return; }
+    html2pdf().set({ filename: `ticket_${Date.now()}.pdf`, jsPDF: { unit: 'mm', format: [58, 200] } }).from(el).save();
+});
+
+window.abrirAnularVenta = function(id) { if (!isAdmin()) { showAlert("No tiene permisos para anular ventas."); return; } const s = salesHistory.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("anularVentaId").value = s.id; document.getElementById("anularVentaNumero").textContent = '#' + String(s.numero).padStart(6, '0'); document.getElementById("anularVentaMotivo").value = ""; document.getElementById("anularVentaModal").classList.remove("hidden"); };
+window.confirmarAnularVenta = async function() {
+    if (!isAdmin()) { showAlert("No tiene permisos para anular ventas."); return; }
+    const id = document.getElementById("anularVentaId").value; const motivo = document.getElementById("anularVentaMotivo").value.trim(); const sale = salesHistory.find(x => String(x.id) === String(id)); if (!sale || sale.anulada) return;
+    sale.anulada = true; sale.motivoAnulacion = motivo; sale.fechaAnulacion = new Date().toLocaleString(); sale.usuarioAnulacion = currentUser.displayName;
+    
+    if (sale.items) { for (let item of sale.items) { let prod = products.find(p => String(p.id) === String(item.id)); if (!prod) prod = products.find(p => (p.name||"").toLowerCase() === (item.name||"").toLowerCase()); if (prod) { await registrarMovimientoKardex(prod.id, 'DEVOLUCION_VENTA', item.cantidad, `Anulación Venta #${sale.numero}: ${motivo}`); } } }
+    if (sale.metodo === "Crédito") { let c = clients.find(cl => cl.name === sale.cliente); if (c) { c.debt = r2(Math.max(0, (c.debt || 0) - sale.total)); await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c); } }
+    
+    await localDB.sales.put(sale); await encolarSincronizacion('UPDATE', 'sales', sale); await registrarAuditoria('VENTAS', 'ANULACION', `Anuló Factura #${sale.numero} por C$${sale.total}. Motivo: ${motivo}`);
+    document.getElementById("anularVentaModal").classList.add("hidden"); actualizarTablaHistorial(); actualizarTablaInventario(); actualizarCatalogo(); actualizarTablaClientes(); if (cajaActual) renderCajaView(); renderDashboard(); showAlert(`Venta #${sale.numero} anulada exitosamente.`);
+};
+
+function actualizarTablaHistorial() {
+    const tbody = document.getElementById("historyTableBody"); if (!tbody) return; tbody.innerHTML = "";
+    let tV = 0, cV = 0, crV = 0, tG = 0; const productSalesCounter = {};
+    purchasesHistory.forEach(p => { if (!p.anulada) tG += p.total; });
+    gastosHistory.forEach(g => { if (!g.anulado) tG += g.monto; });
+    if (salesHistory.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center">No hay ventas registradas.</td></tr>`;
+    } else {
+        [...salesHistory].reverse().forEach(v => {
+            if (!v.anulada) {
+                if (esHoyTS(v.fechaTS || v.id)) tV += v.total;
+                if (v.metodo === "Contado") cV += v.total; else crV += v.total;
+                if (v.items) v.items.forEach(i => { productSalesCounter[i.name] = (productSalesCounter[i.name] || 0) + i.cantidad; });
+            }
+            const pagoHtml = v.metodo === "Crédito" ? `<span style="color:#d32f2f; font-weight:bold;">CRÉDITO</span><br><small style="color:#666;">Vence: ${escapeHtml(v.vencimiento)}</small>` : `<span style="color:#28a745; font-weight:bold;">CONTADO</span>`;
+            const detalleFormat = v.anulada ? `<strong>${escapeHtml(v.detalle)}</strong><br><span style="color:#d32f2f; font-size:10px; font-weight:bold;">❌ ANULADA</span>` : `<strong>${escapeHtml(v.detalle)}</strong> (${escapeHtml(v.tarifa)})`;
+            const totalFormat = v.anulada ? `<del>${sysConfig.currency}${r2(v.total).toFixed(2)}</del>` : `${sysConfig.currency}${r2(v.total).toFixed(2)}`;
+            const actionBtns = v.anulada ? `<button class="btn btn-sm btn-secondary" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-secondary" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.abrirAnularVenta('${v.id}')">Anular</button>`;
+            const tr = document.createElement("tr");
+            if (v.anulada) tr.style.cssText = "background-color:#fdf5f5;color:#888;";
+            tr.innerHTML = `<td>#${escapeHtml(v.numero)}</td><td>${escapeHtml(v.fecha)}</td><td>${escapeHtml(v.vendedor)}</td><td>${detalleFormat}</td><td>${pagoHtml}</td><td style="font-weight:bold;">${totalFormat}</td><td>${actionBtns}</td>`;
+            tbody.appendChild(tr);
+        });
+    }
+    const setTotal = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = `${sysConfig.currency}${r2(value).toFixed(2)}`; };
+    setTotal("summaryTodaySales", tV); setTotal("summaryTotalSales", cV + crV); setTotal("summaryCashSales", cV); setTotal("summaryCreditSales", crV); setTotal("summaryTotalExpenses", tG);
+
+    const minGlobal = sysConfig.minStock || 5;
+    const bajos = products.filter(p => !p.deleted && p.active !== false && (p.stock || 0) <= (p.minStock ?? minGlobal));
+    const lowEl = document.getElementById("lowStockList");
+    if (lowEl) lowEl.innerHTML = bajos.length ? bajos.map(p => `<li>${escapeHtml(p.name)}: <strong>${p.stock || 0}</strong> uds.</li>`).join("") : `<li>Sin alertas.</li>`;
+    const topEl = document.getElementById("topSellingList");
+    if (topEl) {
+        const top = Object.entries(productSalesCounter).sort((a, b) => b[1] - a[1]).slice(0, 5);
+        topEl.innerHTML = top.length ? top.map(([name, count]) => `<li>${escapeHtml(name)}: <strong>${count}</strong> uds.</li>`).join("") : `<li>Sin datos.</li>`;
+    }
+}
+
+function actualizarTablaAuditoria() { const tbody = document.getElementById("auditTableBody"); if(!tbody) return; if (auditHistory.length === 0) { tbody.innerHTML = `<tr><td colspan="5" class="text-center">Sin registros de auditoría.</td></tr>`; } else { tbody.innerHTML = [...auditHistory].reverse().map(a => `<tr><td>${a.fecha}</td><td><strong>${escapeHtml(a.usuario)}</strong></td><td>${escapeHtml(a.modulo)}</td><td>${escapeHtml(a.accion)}</td><td style="white-space: pre-line; font-size: 0.9em;">${escapeHtml(a.detalle)}</td></tr>`).join(""); } }
+
+// CORRECCIÓN BUGS 2 Y 3: Discrepancia Margen vs Margin. Ahora mapea correctamente con tu HTML prodMargenRetail
+document.getElementById("addNewProductBtn")?.addEventListener("click", () => { document.getElementById("productForm")?.reset(); tempImageBase64 = null; const imgPrevNew = document.getElementById("prodImagePreview"); if (imgPrevNew) { imgPrevNew.src = ""; imgPrevNew.style.display = "none"; } const pi = document.getElementById("prodId"); if(pi) pi.value = ""; document.getElementById("prodMinStock").value = sysConfig.minStock || "5"; document.getElementById("prodMargenRetail").value = "10"; document.getElementById("prodMargenWholesale").value = "10"; actualizarSelectProveedoresProducto(); const pstat = document.getElementById("prodStatus"); if(pstat) pstat.value = "true"; document.getElementById("productModal")?.classList.remove("hidden"); window.calcularPreciosPorMargen(); });
+document.getElementById("quickAddProductFromPurchBtn")?.addEventListener("click", () => { document.getElementById("productForm")?.reset(); tempImageBase64 = null; const imgPrevNew = document.getElementById("prodImagePreview"); if (imgPrevNew) { imgPrevNew.src = ""; imgPrevNew.style.display = "none"; } const pi = document.getElementById("prodId"); if(pi) pi.value = ""; document.getElementById("prodMinStock").value = sysConfig.minStock || "5"; document.getElementById("prodMargenRetail").value = "10"; document.getElementById("prodMargenWholesale").value = "10"; actualizarSelectProveedoresProducto(); const pstat = document.getElementById("prodStatus"); if(pstat) pstat.value = "true"; document.getElementById("productModal")?.classList.remove("hidden"); window.calcularPreciosPorMargen(); });
+
+function actualizarSelectProveedoresProducto() { const ps = document.getElementById("prodSupplier"); if(ps) { ps.innerHTML = `<option value="">-- Ninguno --</option>` + suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join(""); } }
+
+window.calcularPreciosPorMargen = function() {
+    const cost = parseFloat(document.getElementById("prodCost")?.value) || 0;
+    const mRet = parseFloat(document.getElementById("prodMargenRetail")?.value) || 0;
+    const mWho = parseFloat(document.getElementById("prodMargenWholesale")?.value) || 0;
+    const pRetEl = document.getElementById("prodRetail");
+    const pWhoEl = document.getElementById("prodWholesale");
+    if(pRetEl) pRetEl.value = (cost + (cost * (mRet / 100))).toFixed(2);
+    if(pWhoEl) pWhoEl.value = (cost + (cost * (mWho / 100))).toFixed(2);
+};
+['prodCost', 'prodMargenRetail', 'prodMargenWholesale'].forEach(id => { document.getElementById(id)?.addEventListener('input', window.calcularPreciosPorMargen); });
+
+document.getElementById("productForm")?.addEventListener("submit", async (e) => { 
+    e.preventDefault(); 
+    const barcode = document.getElementById("prodBarcode").value.trim(); if (!barcode) { showAlert("⚠️ El código de barras es obligatorio."); return; }
+    const idVal = document.getElementById("prodId").value;
+    const nombreVal = document.getElementById("prodName").value.trim(); if (!nombreVal) { showAlert("⚠️ El nombre del producto es obligatorio."); return; }
+    
+    const barcodeDuplicado = products.find(p => (p.barcode || "").trim() === barcode && String(p.id) !== String(idVal) && !p.deleted);
+    if (barcodeDuplicado) { showAlert(`⚠️ El código de barras "${barcode}" ya está registrado.`); return; }
+    
+    const newStock = parseInt(document.getElementById("prodStock").value); const minStockVal = parseInt(document.getElementById("prodMinStock").value); const costVal = r2(parseFloat(document.getElementById("prodCost").value)); 
+    const marginRetailVal = parseFloat(document.getElementById("prodMargenRetail").value) || 0; const marginWholesaleVal = parseFloat(document.getElementById("prodMargenWholesale").value) || 0;
+    const retailVal = r2(parseFloat(document.getElementById("prodRetail").value)); const wholesaleVal = r2(parseFloat(document.getElementById("prodWholesale").value)); 
+    const supplierVal = document.getElementById("prodSupplier")?.value || "";
+    const isActive = document.getElementById("prodStatus").value === "true";
+    
+    if (isNaN(newStock) || isNaN(minStockVal) || newStock < 0 || minStockVal < 0) { showAlert("⚠️ El stock y el stock mínimo no pueden ser negativos."); return; }
+    if (costVal < 0 || retailVal < 0 || wholesaleVal < 0) { showAlert("El costo y los precios no pueden ser negativos."); return; }
+
+    const existente = idVal ? products.find(p => String(p.id) === String(idVal)) : null;
+    const newProd = { id: existente ? existente.id : Date.now(), business_id: DEFAULT_BUSINESS_ID, barcode: barcode, name: nombreVal, category: document.getElementById("prodCategory").value, cost: costVal, marginRetail: marginRetailVal, marginWholesale: marginWholesaleVal, retailPrice: retailVal, wholesalePrice: wholesaleVal, stock: newStock, minStock: minStockVal, supplier: supplierVal, active: isActive, deleted: false, image: tempImageBase64 }; 
+    
+    if (idVal) { const oldIndex = products.findIndex(p => String(p.id) === String(idVal)); if (oldIndex > -1) { const oldProd = products[oldIndex]; if ((oldProd.stock||0) !== newStock) { const diff = newStock - (oldProd.stock||0); await registrarMovimientoKardex(oldProd.id, 'EDICION_MANUAL', diff, 'Ajuste desde edición'); } products[oldIndex] = newProd; await registrarAuditoria('INVENTARIO', 'EDITAR_PRODUCTO', `Editó el producto "${newProd.name}"`); } } else { const stockInicial = newProd.stock; newProd.stock = 0; products.push(newProd); await registrarMovimientoKardex(newProd.id, 'INICIAL', stockInicial, 'Creación de producto'); await registrarAuditoria('INVENTARIO', 'CREAR_PRODUCTO', `Creó el producto "${newProd.name}"`); } 
+    
+    await localDB.products.put(newProd); await encolarSincronizacion(idVal ? 'UPDATE' : 'INSERT', 'products', newProd); window.detenerProdCamara(); document.getElementById("productModal")?.classList.add("hidden"); 
+    actualizarTablaInventario(); actualizarCatalogo(); renderDashboard();
+
+    const purchModalRef = document.getElementById("purchaseModal"); const vieneDesdeCompras = purchModalRef && !purchModalRef.classList.contains("hidden");
+    if (vieneDesdeCompras) { const pdl = document.getElementById("productDataList"); if (pdl) pdl.innerHTML = products.filter(p => !p.deleted).map(p => `<option value="${escapeHtml(p.name)}">`).join(""); const pTemp = document.getElementById("purchProductTemp"); const cTemp = document.getElementById("purchCostTemp"); if (pTemp) { pTemp.value = newProd.name; pTemp.dataset.productId = String(newProd.id); } if (cTemp) cTemp.value = newProd.cost; pTemp?.focus(); }
+    showAlert("Producto guardado exitosamente.");
+});
+
+function actualizarTablaInventario() { 
+    const tb = document.getElementById("inventoryTableBody"); if(!tb) return; 
+    const prodActivosReales = products.filter(p => !p.deleted);
+    let bajoStock = 0; let agotados = 0;
+    
+    tb.innerHTML = prodActivosReales.map(p => {
+        let rowStyle = ""; let stockHtml = p.stock || 0; const minStockLimit = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); const isActive = p.active !== false; let estadoHtml = '';
+        if (!isActive) { rowStyle = "background-color: #f4f4f4; color: #888;"; estadoHtml = '<span style="color:#666; font-weight:bold;">Inactivo</span>'; } else if ((p.stock||0) <= 0) { agotados++; rowStyle = "background-color: #ffebee;"; stockHtml = `<span style="color:#d32f2f; font-weight:bold;">${p.stock||0} (Agotado)</span>`; estadoHtml = 'Agotado'; } else if ((p.stock||0) <= minStockLimit) { bajoStock++; stockHtml = `<span style="color:#ff9800; font-weight:bold;">${p.stock} (Bajo)</span>`; estadoHtml = 'Activo'; } else { estadoHtml = 'Activo'; }
+        const retail = p.retailPrice || p.retail || 0; const wholesale = p.wholesalePrice || p.wholesale || 0;
+        
+        const btnKardex = `<button class="btn btn-sm" style="background:#0891b2; color:#fff; margin-right:4px;" onclick="window.verKardex('${p.id}')">Kardex</button>`;
+        const btnEditar = `<button class="btn btn-sm" style="background:#2563eb; color:#fff; margin-right:4px;" onclick="window.editarProducto('${p.id}')">Editar</button>`;
+        const btnEstado = `<button class="btn btn-sm" style="background:${isActive ? '#d97706' : '#16a34a'}; color:#fff; margin-right:4px;" onclick="window.toggleEstadoProducto('${p.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>`;
+        const btnEliminar = `<button class="btn btn-sm" style="background:#dc2626; color:#fff;" onclick="window.eliminarProductoLogico('${p.id}')">Eliminar</button>`;
+
+        const btnAjuste = `<button class="btn btn-sm" style="background:#d97706; color:#fff; margin-right:4px;" onclick="window.abrirAjuste('${p.id}')">${iconoAjuste()} Ajuste</button>`;
+        const fotoHtml = p.image ? `<img src="${p.image}" style="width:40px; height:40px; object-fit:cover; border-radius:4px;">` : iconoProducto("width:40px;height:40px;");
+        return `<tr style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(p.barcode)}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}${btnEliminar}</div></td></tr>`; 
+    }).join(""); 
+    
+    if(document.getElementById("invTotalProducts")) document.getElementById("invTotalProducts").textContent = prodActivosReales.length; 
+    if(document.getElementById("invLowStock")) document.getElementById("invLowStock").textContent = bajoStock; 
+    if(document.getElementById("invOutOfStock")) document.getElementById("invOutOfStock").textContent = agotados;
+}
+
+window.editarProducto = function(id) { 
+    const p = products.find(x => String(x.id) === String(id)); if(!p) return; 
+    document.getElementById("prodId").value = p.id; document.getElementById("prodBarcode").value = p.barcode || ""; document.getElementById("prodName").value = p.name || ""; document.getElementById("prodCategory").value = p.category || "Abarrotes"; document.getElementById("prodCost").value = p.cost || 0; document.getElementById("prodMargenRetail").value = p.marginRetail !== undefined ? p.marginRetail : 10; document.getElementById("prodMargenWholesale").value = p.marginWholesale !== undefined ? p.marginWholesale : 10; document.getElementById("prodRetail").value = p.retailPrice || p.retail || 0; document.getElementById("prodWholesale").value = p.wholesalePrice || p.wholesale || 0; document.getElementById("prodStock").value = p.stock || 0; document.getElementById("prodMinStock").value = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); document.getElementById("prodStatus").value = p.active !== false ? "true" : "false"; 
+    actualizarSelectProveedoresProducto(); const pSupp = document.getElementById("prodSupplier"); if(pSupp) pSupp.value = p.supplier || "";
+    tempImageBase64 = p.image || null;
+    const imgPrev = document.getElementById("prodImagePreview");
+    if (imgPrev) { if (tempImageBase64) { imgPrev.src = tempImageBase64; imgPrev.style.display = "block"; } else { imgPrev.src = ""; imgPrev.style.display = "none"; } }
+    document.getElementById("productModal")?.classList.remove("hidden"); 
+};
+
+window.toggleEstadoProducto = async function(id) {
+    if (!isAdmin()) { showAlert("No tiene permisos."); return; }
+    const p = products.find(x => String(x.id) === String(id)); if(!p) return;
+    const nuevoEstado = p.active === false ? true : false;
+    showConfirm(`¿Deseas ${nuevoEstado ? 'activar' : 'inactivar'} este producto?\n${nuevoEstado ? 'Estará disponible para ventas.' : 'No podrá venderse temporalmente.'}`, async () => {
+        p.active = nuevoEstado; await localDB.products.put(p); await encolarSincronizacion('UPDATE', 'products', p);
+        await registrarAuditoria('INVENTARIO', 'CAMBIO_ESTADO', `Cambió estado de "${p.name}" a ${nuevoEstado ? 'Activo' : 'Inactivo'}`);
+        actualizarTablaInventario(); actualizarCatalogo(); showAlert(`Producto ${nuevoEstado ? 'activado' : 'inactivado'} correctamente.`);
+    });
+};
+
+window.eliminarProductoLogico = function(id) {
+    if (!isAdmin()) { showAlert("No tiene permisos. Ingrese la contraseña de gestor."); return; }
+    const p = products.find(x => String(x.id) === String(id));
+    if (!p) return;
+    const idStr = String(id);
+    const barcode = (p.barcode || "").trim();
+    const nombre = p.name;
+
+    showConfirm("¿Seguro que deseas eliminar este producto y los registros con el mismo ID o código de barras? No afectará facturas ni compras pasadas.", async () => {
+        try {
+            const todos = await localDB.products.toArray();
+            const afectados = todos.filter(x => !x.deleted && (
+                String(x.id) === idStr || (barcode && (x.barcode || "").trim() === barcode)
+            ));
+            afectados.forEach(x => { x.deleted = true; x.active = false; });
+
+            if (afectados.length) {
+                await localDB.products.bulkPut(afectados);
+                for (const producto of afectados) await encolarSincronizacion('UPDATE', 'products', producto);
+            }
+
+            const idsAfectados = new Set(afectados.map(producto => String(producto.id)));
+            const codigosAfectados = new Set(afectados.map(producto => (producto.barcode || "").trim()).filter(Boolean));
+            products = await localDB.products.toArray();
+            cart = cart.filter(item => !idsAfectados.has(String(item.id)) && !codigosAfectados.has((item.barcode || "").trim()));
+
+            if (afectados.length) {
+                await registrarAuditoria('INVENTARIO', 'ELIMINAR_PRODUCTO', `Eliminó el producto "${nombre}" (${afectados.length} registro(s))`);
+            }
+            showAlert(afectados.length ? `Producto eliminado (${afectados.length} registro(s)).` : "No se encontraron registros activos para eliminar.");
+        } catch (err) {
+            console.error(err);
+            showAlert(`No se pudo eliminar: ${err.message || err}`);
+        } finally {
+            actualizarTablaInventario();
+            actualizarCatalogo();
+            actualizarCarrito();
+            renderDashboard();
+        }
+    });
+};
+
+// FUNCIONES DE CÁMARA (También estaban causando un posible cuelgue en la edición/cierre)
+window.toggleProdCamera = function() {
+    const container = document.getElementById("prodCameraScannerContainer");
+    if (!container) return;
+    if (isProdCameraActive) { window.detenerProdCamara(); return; }
+    container.classList.remove("hidden");
+    prodHtml5QrCode = new Html5Qrcode("prodInteractiveReader");
+    prodHtml5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, decodedText => {
+        document.getElementById("prodBarcode").value = (decodedText || "").trim();
+        window.detenerProdCamara();
+    }).then(() => { isProdCameraActive = true; })
+      .catch(err => { console.log(err); isProdCameraActive = false; container.classList.add("hidden"); showAlert("Error al iniciar cámara."); });
+};
+
+window.detenerProdCamara = function() {
+    const container = document.getElementById("prodCameraScannerContainer");
+    if (isProdCameraActive && prodHtml5QrCode) {
+        prodHtml5QrCode.stop().catch(() => {}).finally(() => { container?.classList.add("hidden"); isProdCameraActive = false; });
+    } else { container?.classList.add("hidden"); }
+};
+
+window.verKardex = async function(id) {
+    const p = products.find(x => String(x.id) === String(id)); if(!p) return;
+    document.getElementById("kardexModalTitle").textContent = `Kardex: ${p.name||""}`; document.getElementById("kardexModalSubtitle").textContent = `Código: ${p.barcode||""} | Stock Actual: ${p.stock||0}`;
+    const movimientos = await localDB.inventory_movements.toArray(); const filtrados = movimientos.filter(m => String(m.producto_id) === String(p.id)).sort((a, b) => b.fechaTS - a.fechaTS);
+    const tbody = document.getElementById("kardexTableBody");
+    const thead = document.getElementById("kardexTableHead");
+    if(thead) thead.innerHTML = `<tr><th>Fecha</th><th>Movimiento</th><th>Cant.</th><th>Costo Unit.</th><th>Stock Final</th><th>Motivo</th><th>Usuario</th></tr>`;
+    
+    if (filtrados.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="text-center">No hay movimientos en el Kardex.</td></tr>`; } else { 
+        tbody.innerHTML = filtrados.map(m => { 
+            const colorCant = m.cantidad > 0 ? '#28a745' : '#d32f2f'; const signo = m.cantidad > 0 ? '+' : ''; 
+            return `<tr><td>${m.fecha}</td><td><strong>${m.tipo}</strong></td><td style="color:${colorCant}; font-weight:bold;">${signo}${m.cantidad}</td><td>${sysConfig.currency}${(m.costo_unitario||0).toFixed(2)}</td><td style="font-weight:bold;">${m.stock_nuevo}</td><td>${escapeHtml(m.motivo)}</td><td>${escapeHtml(m.usuario)}</td></tr>`; 
+        }).join(""); 
+    }
+    document.getElementById("kardexModal").classList.remove("hidden");
+};
+window.abrirAjuste = function(id) { if (!isAdmin()) { showAlert("No tiene permisos para ajustar inventario."); return; } const p = products.find(x => String(x.id) === String(id)); if(!p) return; document.getElementById("ajusteProductoId").value = p.id; document.getElementById("ajusteProductoNombre").textContent = `${p.name||""} (Stock Actual: ${p.stock||0})`; document.getElementById("ajusteInventarioForm")?.reset(); document.getElementById("ajusteInventarioModal").classList.remove("hidden"); };
+window.guardarAjusteInventario = async function() { if (!isAdmin()) { showAlert("No tiene permisos para ajustar inventario."); return; } const pId = document.getElementById("ajusteProductoId").value; const tipo = document.getElementById("ajusteTipo").value; const cantidad = parseInt(document.getElementById("ajusteCantidad").value); const motivo = document.getElementById("ajusteMotivo").value.trim(); if (isNaN(cantidad) || cantidad <= 0) { showAlert("Ingrese una cantidad válida, mayor que cero."); return; } if (!motivo) { showAlert("Debe indicar un motivo para el ajuste."); return; } const cantReal = tipo === "MERMA" ? -Math.abs(cantidad) : Math.abs(cantidad); const prod = products.find(p => String(p.id) === String(pId)); if (!prod) { showAlert("Producto no encontrado."); return; } if ((prod.stock || 0) + cantReal < 0) { showAlert(`No puede descontar ${Math.abs(cantReal)} unidades: solo hay ${prod.stock || 0} en stock.`); return; } const ok = await registrarMovimientoKardex(pId, tipo, cantReal, motivo); if (!ok) { showAlert("No se pudo registrar el ajuste."); return; } await registrarAuditoria('INVENTARIO', 'AJUSTE', `Ajuste (${tipo}) de ${cantReal} unidades en "${prod.name}". Motivo: ${motivo}`); document.getElementById("ajusteInventarioModal").classList.add("hidden"); actualizarTablaInventario(); actualizarCatalogo(); renderDashboard(); showAlert("Ajuste de inventario guardado correctamente."); };
+
+function prepararCampoDeudaCliente(esEdicion) {
+    const debtInput = document.getElementById("clientDebt"), hint = document.getElementById("clientDebtHint");
+    if (!debtInput) return;
+    debtInput.readOnly = esEdicion;
+    if (hint) hint.textContent = esEdicion ? "La deuda solo cambia con ventas a crédito, abonos y anulaciones." : "";
+}
+
+document.getElementById("addNewClientBtn")?.addEventListener("click", () => { document.getElementById("clientForm")?.reset(); const ci = document.getElementById("clientId"); if(ci) ci.value = ""; prepararCampoDeudaCliente(false); document.getElementById("clientModal")?.classList.remove("hidden"); });
+document.getElementById("quickAddClientBtn")?.addEventListener("click", () => {
+    document.getElementById("clientForm")?.reset();
+    const ci = document.getElementById("clientId"); if (ci) ci.value = "";
+    prepararCampoDeudaCliente(false);
+    document.getElementById("clientModal")?.classList.remove("hidden");
+});
+document.getElementById("clientForm")?.addEventListener("submit", async (e) => { 
+    e.preventDefault(); const id = document.getElementById("clientId").value;
+    const existingClient = id ? clients.find(c => String(c.id) === String(id)) : null;
+    const nuevaDeuda = existingClient ? (existingClient.debt || 0) : r2(parseFloat(document.getElementById("clientDebt").value));
+    const nuevoLimite = r2(parseFloat(document.getElementById("clientLimit").value));
+    const nombreCliente = document.getElementById("clientName").value.trim(); if (!nombreCliente) { showAlert("⚠️ El nombre del cliente es obligatorio."); return; }
+    if (isNaN(nuevoLimite) || isNaN(nuevaDeuda) || nuevoLimite < 0 || nuevaDeuda < 0) { showAlert("⚠️ El límite de crédito y la deuda deben ser valores válidos y no negativos."); return; }
+    const clientData = { id: existingClient ? existingClient.id : Date.now(), business_id: DEFAULT_BUSINESS_ID, name: nombreCliente, phone: document.getElementById("clientPhone").value.trim(), ruc: document.getElementById("clientRuc").value.trim(), address: document.getElementById("clientAddress").value.trim(), creditLimit: nuevoLimite, debt: nuevaDeuda, active: id ? (existingClient?.active !== false) : true }; 
+    if (id) { const idx = clients.findIndex(c => String(c.id) === String(id)); if(idx > -1) { clients[idx] = clientData; } } else { clients.push(clientData); }
+    await localDB.clients.put(clientData); await encolarSincronizacion(id ? 'UPDATE' : 'INSERT', 'clients', clientData); document.getElementById("clientModal")?.classList.add("hidden"); actualizarTablaClientes(); renderDashboard(); refrescarSelectClientesCredito(clientData.id);
+});
+
+function actualizarTablaClientes() { 
+    const tb = document.getElementById("clientsTableBody"); if(!tb) return; const hoyTS = Date.now(); 
+    tb.innerHTML = clients.map(c => { 
+        const disponible = (c.creditLimit||0) - (c.debt||0); const facturasCliente = salesHistory.filter(s => s.cliente === c.name && s.metodo === "Crédito" && !s.anulada); const tieneVencido = facturasCliente.some(s => s.vencimientoTS && s.vencimientoTS < hoyTS && (c.debt||0) > 0); 
+        const isActive = c.active !== false;
+        let estadoHtml = '';
+        if (!isActive) { estadoHtml = `Inactivo`; }
+        else if (tieneVencido) { estadoHtml = `⚠️ Vencido`; }
+        else if ((c.debt||0) > 0) { estadoHtml = `Activo`; }
+        else { estadoHtml = `Al día`; }
+        
+        const tieneHist = true;
+        const btnBorrar = tieneHist ? `<button class="btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}" onclick="window.toggleEstadoCliente('${c.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>` : `<button class="btn btn-sm btn-danger" onclick="window.eliminarClienteFisico('${c.id}')">Borrar</button>`;
+            
+        return `<tr style="${isActive ? '' : 'background-color:#f9f9f9; opacity:0.8;'}"><td>${c.id}<br><strong>${escapeHtml(c.name)}</strong></td><td>${escapeHtml(c.phone)}</td><td>${sysConfig.currency}${(c.creditLimit||0).toFixed(2)}</td><td style="color:${disponible<0?'red':'green'}; font-weight:bold;">${sysConfig.currency}${disponible.toFixed(2)}</td><td style="color:red; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(c.debt||0).toFixed(2)}</td><td>${estadoHtml}</td><td><button class="btn btn-sm btn-secondary" onclick="window.verEstadoCuentaCliente('${c.id}')">Historial</button> <button class="btn btn-sm btn-primary" onclick="window.editarCliente('${c.id}')">Editar</button> ${btnBorrar}</td></tr>`; 
+    }).join(""); 
+}
+
+window.toggleEstadoCliente = async function(id) {
+    if (!isAdmin()) { showAlert("No tiene permisos."); return; }
+    const c = clients.find(x => String(x.id) === String(id)); if(!c) return;
+    const nuevoEstado = c.active === false ? true : false;
+    showConfirm(`¿Deseas ${nuevoEstado ? 'activar' : 'inactivar'} al cliente ${c.name}?`, async () => {
+        c.active = nuevoEstado; await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c);
+        actualizarTablaClientes(); showAlert(`Cliente ${nuevoEstado ? 'activado' : 'inactivado'}.`);
+    });
+};
+
+window.editarCliente = function(id) { const c = clients.find(x => String(x.id) === String(id)); if(!c) return; document.getElementById("clientId").value = c.id; document.getElementById("clientName").value = c.name; document.getElementById("clientPhone").value = c.phone || ""; document.getElementById("clientRuc").value = c.ruc || ""; document.getElementById("clientAddress").value = c.address || ""; document.getElementById("clientLimit").value = c.creditLimit||0; document.getElementById("clientDebt").value = c.debt||0; prepararCampoDeudaCliente(true); document.getElementById("clientModal")?.classList.remove("hidden"); };
+window.abrirAbono = function(id) { const c = clients.find(x => String(x.id) === String(id)); if(!c) return; document.getElementById("payClientId").value = c.id; document.getElementById("payClientName").textContent = c.name; document.getElementById("payClientDebt").textContent = `${sysConfig.currency}${(c.debt||0).toFixed(2)}`; const pa = document.getElementById("payAmount"); if(pa) pa.value = ""; document.getElementById("paymentModal")?.classList.remove("hidden"); };
+document.getElementById("paymentForm")?.addEventListener("submit", async (e) => { e.preventDefault(); const id = document.getElementById("payClientId").value; const amount = r2(parseFloat(document.getElementById("payAmount").value)); const c = clients.find(x => String(x.id) === String(id)); if (isNaN(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; } if (amount > r2(c.debt || 0)) { showAlert("El abono no puede ser mayor a la deuda total."); return; } c.debt = r2((c.debt || 0) - amount); await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c); const newAbono = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, tipo: 'cliente', referenciaId: c.id, monto: amount, fecha: new Date().toLocaleDateString(), fechaTS: Date.now(), usuario: currentUser.displayName, anulado: false }; abonosHistory.push(newAbono); await localDB.abonos.put(newAbono); await encolarSincronizacion('INSERT', 'abonos', newAbono); await registrarAuditoria('CLIENTES', 'ABONO', `Registró abono de ${sysConfig.currency}${amount.toFixed(2)} del cliente "${c.name}"`); if (cajaActual) { cajaActual.movimientos.push({ tipo: "entrada", monto: amount, concepto: `Abono de crédito: ${c.name}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); } document.getElementById("paymentModal")?.classList.add("hidden"); actualizarTablaClientes(); renderDashboard(); refrescarSelectClientesCredito(); showAlert(`Abono registrado exitosamente.`); });
+
+window.verEstadoCuentaCliente = function(id) { 
+    const c = clients.find(x => String(x.id) === String(id)); if(!c) return; 
+    document.getElementById("statementModalTitle").textContent = `Historial: ${c.name}`; 
+    document.getElementById("statementModalSubtitle").textContent = `Límite: ${sysConfig.currency}${(c.creditLimit||0).toFixed(2)} | Deuda Actual: ${sysConfig.currency}${(c.debt||0).toFixed(2)}`; 
+    
+    const clientSales = salesHistory.filter(s => s.cliente === c.name && s.metodo === "Crédito").map(s => ({ type: 'cargo', date: s.fecha, ts: s.fechaTS || s.id, ref: `#${String(s.numero).padStart(6, '0')}`, detail: s.anulada ? 'Factura Anulada' : 'Factura de crédito', amount: s.total, dueDate: s.vencimiento, dueTS: s.vencimientoTS, saleId: s.id, anulado: s.anulada })); 
+    const clientAbonos = abonosHistory.filter(a => a.tipo === 'cliente' && String(a.referenciaId) === String(c.id)).map(a => ({ type: 'abono', date: a.fecha, ts: a.fechaTS, ref: `Abono`, detail: `Pago recibido (${a.usuario})`, amount: a.monto, id: a.id, anulado: a.anulado })); 
+    const ledger = [...clientSales, ...clientAbonos].sort((a,b) => a.ts - b.ts); 
+    const tbody = document.getElementById("statementTableBody"); if(!tbody) return; 
+    
+    if(ledger.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="text-center">No hay movimientos registrados.</td></tr>`; } else { 
+        let saldo = 0; const hoy = Date.now(); 
+        tbody.innerHTML = ledger.map(mov => { 
+            if (!mov.anulado) { if (mov.type === 'cargo') saldo += mov.amount; else saldo -= mov.amount; }
+            const isOverdue = mov.type === 'cargo' && mov.dueTS && mov.dueTS < hoy && !mov.anulado; 
+            const dateHtml = mov.type === 'cargo' ? `${mov.date}<br><small style="color:${isOverdue?'#d32f2f':'#666'}; font-weight:${isOverdue?'bold':'normal'}">Vence: ${mov.dueDate||'-'}</small>` : mov.date; 
+            const cargoHtml = mov.type === 'cargo' ? (mov.anulado ? `<del>${sysConfig.currency}${mov.amount.toFixed(2)}</del>` : `${sysConfig.currency}${mov.amount.toFixed(2)}`) : ''; 
+            const abonoHtml = mov.type === 'abono' ? (mov.anulado ? `<del>${sysConfig.currency}${mov.amount.toFixed(2)}</del>` : `${sysConfig.currency}${mov.amount.toFixed(2)}`) : ''; 
+            
+            let btnHtml = '';
+            if (mov.type === 'cargo') { 
+                btnHtml = `<button class="btn btn-sm btn-secondary" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.reimprimirTicket('${mov.saleId}'), 100);">Ver Factura</button> ` +
+                          (mov.anulado ? '' : `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbono('${c.id}'), 100);">Abonar</button>`); 
+            } 
+            else if (mov.type === 'abono') { btnHtml = mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoCliente('${mov.id}'), 100);">Anular</button>`; }
+            
+            const trStyle = mov.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : '';
+            return `<tr ${trStyle}><td>${dateHtml}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>`; 
+        }).join(""); 
+    } 
+    document.getElementById("statementModal")?.classList.remove("hidden"); 
+};
+
+window.anularAbonoCliente = async function(abonoId) {
+    if (!isAdmin()) { showAlert("No tiene permisos."); return; }
+    const abono = abonosHistory.find(a => String(a.id) === String(abonoId)); if(!abono || abono.anulado) return;
+    const cliente = clients.find(c => String(c.id) === String(abono.referenciaId));
+    showAnularRegistro("Anular Abono", `Cliente: ${cliente ? cliente.name : 'Desconocido'} - Monto: ${sysConfig.currency}${abono.monto.toFixed(2)}`, async (motivo) => {
+        abono.anulado = true; abono.motivoAnulacion = motivo; abono.fechaAnulacion = new Date().toLocaleString(); abono.usuarioAnulacion = currentUser.displayName;
+        if (cliente) { cliente.debt = r2((cliente.debt || 0) + abono.monto); await localDB.clients.put(cliente); await encolarSincronizacion('UPDATE', 'clients', cliente); }
+        if (cajaActual) { cajaActual.movimientos.push({ tipo: "salida", monto: abono.monto, concepto: `Anulación Abono Cliente: ${cliente ? cliente.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion('UPDATE', 'cajaSessions', cajaActual); }
+        await localDB.abonos.put(abono); await encolarSincronizacion('UPDATE', 'abonos', abono); await registrarAuditoria('CLIENTES', 'ANULAR_ABONO', `Anuló abono de ${sysConfig.currency}${abono.monto.toFixed(2)} del cliente ${cliente ? cliente.name : ''}. Motivo: ${motivo}`);
+        actualizarTablaClientes(); refrescarSelectClientesCredito(); if(cajaActual) renderCajaView(); renderDashboard(); showAlert("Abono anulado exitosamente.");
+        if(cliente) setTimeout(() => window.verEstadoCuentaCliente(cliente.id), 500);
+    });
+};
+
+document.getElementById("addNewSupplierBtn")?.addEventListener("click", () => { document.getElementById("supplierForm")?.reset(); const si = document.getElementById("supplierId"); if(si) si.value = ""; document.getElementById("supplierModal")?.classList.remove("hidden"); });
+
+document.getElementById("quickAddSupplierFromPurchBtn")?.addEventListener("click", () => { 
+    document.getElementById("supplierForm")?.reset(); 
+    const si = document.getElementById("supplierId"); if(si) si.value = ""; 
+    const suppModal = document.getElementById("supplierModal");
+    if(suppModal) {
+        suppModal.style.zIndex = "10050"; 
+        suppModal.classList.remove("hidden");
+    }
+});
+
+document.getElementById("supplierForm")?.addEventListener("submit", async (e) => { 
+    e.preventDefault(); 
+    const id = document.getElementById("supplierId").value; 
+    const existingSupplier = id ? suppliers.find(s => String(s.id) === String(id)) : null;
+    const suppData = { 
+        id: existingSupplier ? existingSupplier.id : (id ? Number(id) : Date.now()), business_id: DEFAULT_BUSINESS_ID, name: document.getElementById("suppName").value.trim(), 
+        contact: document.getElementById("suppContact").value.trim(), phone: document.getElementById("suppPhone").value.trim(), 
+        ruc: document.getElementById("suppRuc").value.trim(), address: document.getElementById("suppAddress").value.trim(), 
+        debt: id ? (suppliers.find(s => String(s.id) === String(id))?.debt||0) : 0, 
+        active: id ? (suppliers.find(s => String(s.id) === String(id))?.active !== false) : true 
+    }; 
+    
+    if (id) { 
+        const idx = suppliers.findIndex(s => String(s.id) === String(id)); 
+        if(idx > -1) suppliers[idx] = suppData; 
+        await registrarAuditoria('PROVEEDORES', 'EDITAR_PROVEEDOR', `Editó al proveedor "${suppData.name}"`); 
+    } else { 
+        suppliers.push(suppData); 
+        await registrarAuditoria('PROVEEDORES', 'CREAR_PROVEEDOR', `Creó al proveedor "${suppData.name}"`); 
+    } 
+    await localDB.suppliers.put(suppData); 
+    await encolarSincronizacion(id ? 'UPDATE' : 'INSERT', 'suppliers', suppData); 
+    
+    const sModal = document.getElementById("supplierModal");
+    if(sModal) { sModal.classList.add("hidden"); sModal.style.zIndex = ""; }
+    
+    actualizarTablaProveedores(); 
+    renderDashboard(); 
+    
+    const purchModalRef = document.getElementById("purchaseModal"); 
+    if (purchModalRef && !purchModalRef.classList.contains("hidden")) { 
+        const sdl = document.getElementById("supplierDataList"); 
+        if (sdl) sdl.innerHTML = suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">`).join(""); 
+        const pSupp = document.getElementById("purchSupplier"); 
+        if (pSupp) { pSupp.value = suppData.name; } 
+        showAlert("Proveedor creado y añadido a la factura rápida."); 
+    } else {
+        showAlert("Proveedor guardado correctamente.");
+    }
+});
+
+function actualizarTablaProveedores() { 
+    const tb = document.getElementById("suppliersTableBody"); if(!tb) return; 
+    tb.innerHTML = suppliers.map(s => { 
+        const comprasProv = purchasesHistory.filter(p => p.proveedor === s.name && !p.anulada); const totalComprado = comprasProv.reduce((sum, p) => sum + p.total, 0); 
+        const isActive = s.active !== false;
+        const btnBorrar = `<button class="btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}" onclick="window.toggleEstadoProveedor('${s.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>`;
+        
+        return `<tr style="${isActive ? '' : 'background-color:#f9f9f9; opacity:0.8;'}"><td><strong>${escapeHtml(s.name)}</strong><br><small style="color:#666;">RUC: ${escapeHtml(s.ruc) || 'N/A'}</small></td><td>${escapeHtml(s.contact)}<br><small>${escapeHtml(s.phone)}</small></td><td><small>${escapeHtml(s.address) || '-'}</small></td><td><span style="color:#0066cc; font-weight:bold;">${sysConfig.currency}${totalComprado.toFixed(2)}</span><br><small>${comprasProv.length} compras</small></td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td><td><button class="btn btn-sm btn-secondary" onclick="window.verEstadoCuentaProveedor('${s.id}')">Edo. Cuenta</button> <button class="btn btn-sm btn-primary" onclick="window.editarProveedor('${s.id}')">Editar</button> ${btnBorrar}</td></tr>`; 
+    }).join(""); 
+}
+
+window.toggleEstadoProveedor = async function(id) {
+    if (!isAdmin()) { showAlert("No tiene permisos."); return; }
+    const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return;
+    const nuevoEstado = s.active === false ? true : false;
+    showConfirm(`¿Deseas ${nuevoEstado ? 'activar' : 'inactivar'} al proveedor ${s.name}?`, async () => {
+        s.active = nuevoEstado; await localDB.suppliers.put(s); await encolarSincronizacion('UPDATE', 'suppliers', s);
+        actualizarTablaProveedores(); showAlert(`Proveedor ${nuevoEstado ? 'activado' : 'inactivado'}.`);
+    });
+};
+
+window.editarProveedor = function(id) { const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("supplierId").value = s.id; document.getElementById("suppName").value = s.name; document.getElementById("suppContact").value = s.contact; document.getElementById("suppPhone").value = s.phone; document.getElementById("suppRuc").value = s.ruc || ""; document.getElementById("suppAddress").value = s.address || ""; document.getElementById("supplierModal")?.classList.remove("hidden"); };
+
+window.verEstadoCuentaProveedor = function(id) { 
+    const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; 
+    document.getElementById("statementModalTitle").textContent = `Cuentas por Pagar: ${s.name}`; document.getElementById("statementModalSubtitle").textContent = `Deuda Total: ${sysConfig.currency}${(s.debt||0).toFixed(2)}`; 
+    
+    const suppPurch = purchasesHistory.filter(p => p.proveedor === s.name && p.tipo === "credito").map(p => ({ type: 'cargo', date: p.fecha, ts: p.fechaTS||p.id, ref: p.factura, detail: p.anulada ? 'Factura Anulada' : 'Factura de Compra', amount: p.total, id: p.id, anulado: p.anulada }));
+    const suppAbonos = abonosHistory.filter(a => a.tipo === 'proveedor' && String(a.referenciaId) === String(s.id)).map(a => ({ type: 'abono', date: a.fecha, ts: a.fechaTS, ref: 'Abono', detail: `Pago a proveedor (${a.usuario})`, amount: a.monto, id: a.id, anulado: a.anulado }));
+    const ledger = [...suppPurch, ...suppAbonos].sort((a,b) => a.ts - b.ts);
+    
+    const tbody = document.getElementById("statementTableBody"); if(!tbody) return; 
+    if(ledger.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="text-center">No hay movimientos registrados.</td></tr>`; } else { 
+        let saldo = 0;
+        tbody.innerHTML = ledger.map(mov => { 
+            if (!mov.anulado) { if (mov.type === 'cargo') saldo += mov.amount; else saldo -= mov.amount; }
+            const cargoHtml = mov.type === 'cargo' ? (mov.anulado ? `<del>${sysConfig.currency}${mov.amount.toFixed(2)}</del>` : `${sysConfig.currency}${mov.amount.toFixed(2)}`) : ''; 
+            const abonoHtml = mov.type === 'abono' ? (mov.anulado ? `<del>${sysConfig.currency}${mov.amount.toFixed(2)}</del>` : `${sysConfig.currency}${mov.amount.toFixed(2)}`) : '';
+            
+            let btnHtml = '';
+            if (mov.type === 'cargo') { 
+                btnHtml = `<button class="btn btn-sm btn-secondary" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.verFacturaCompra('${mov.id}'), 100);">Ver Factura</button> ` +
+                          (mov.anulado ? '' : `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoProveedor('${s.id}'), 100);">Abonar</button>`); 
+            }
+            else if (mov.type === 'abono') { btnHtml = mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoProveedor('${mov.id}'), 100);">Anular</button>`; }
+            
+            const trStyle = mov.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : '';
+            return `<tr ${trStyle}><td>${mov.date}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>`; 
+        }).join(""); 
+    } 
+    document.getElementById("statementModal")?.classList.remove("hidden"); 
+};
+
+window.anularAbonoProveedor = async function(abonoId) {
+    if (!isAdmin()) { showAlert("No tiene permisos."); return; }
+    const abono = abonosHistory.find(a => String(a.id) === String(abonoId)); if(!abono || abono.anulado) return;
+    const proveedor = suppliers.find(s => String(s.id) === String(abono.referenciaId));
+    showAnularRegistro("Anular Pago a Proveedor", `Proveedor: ${proveedor ? proveedor.name : 'Desconocido'} - Monto: ${sysConfig.currency}${abono.monto.toFixed(2)}`, async (motivo) => {
+        abono.anulado = true; abono.motivoAnulacion = motivo; abono.fechaAnulacion = new Date().toLocaleString(); abono.usuarioAnulacion = currentUser.displayName;
+        if (proveedor) { proveedor.debt = r2((proveedor.debt || 0) + abono.monto); await localDB.suppliers.put(proveedor); await encolarSincronizacion('UPDATE', 'suppliers', proveedor); }
+        if (cajaActual) { cajaActual.movimientos.push({ tipo: "entrada", monto: abono.monto, concepto: `Anulación Pago Proveedor: ${proveedor ? proveedor.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion('UPDATE', 'cajaSessions', cajaActual); }
+        await localDB.abonos.put(abono); await encolarSincronizacion('UPDATE', 'abonos', abono); await registrarAuditoria('PROVEEDORES', 'ANULAR_PAGO', `Anuló pago de ${sysConfig.currency}${abono.monto.toFixed(2)} al proveedor ${proveedor ? proveedor.name : ''}. Motivo: ${motivo}`);
+        actualizarTablaCuentasPorPagar(); if(cajaActual) renderCajaView(); renderDashboard(); showAlert("Pago anulado exitosamente.");
+        if(proveedor) setTimeout(() => window.verEstadoCuentaProveedor(proveedor.id), 500);
+    });
+};
+
+window.verFacturaCompra = function(id) { const p = purchasesHistory.find(x => String(x.id) === String(id)); if(!p) return; let prods = p.items && p.items.length > 0 ? p.items.map(i => `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${i.cantidad}x ${escapeHtml(i.producto)}</span><span>${sysConfig.currency}${(i.total||0).toFixed(2)}</span></div>`).join("") : `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${p.cantidad || '-'}x ${escapeHtml(p.producto) || 'Varios'}</span><span>${sysConfig.currency}${(p.total||0).toFixed(2)}</span></div>`; const estadoAnulada = p.anulada ? `<div style="text-align:center; color:white; background:#d32f2f; font-weight:bold; padding:5px; margin-bottom:10px;">FACTURA ANULADA${p.motivoAnulacion ? ' - ' + escapeHtml(p.motivoAnulacion) : ''}</div>` : ''; const tkCont = document.getElementById("ticketContent"); if(tkCont) { tkCont.innerHTML = `<div id="imprimibleTicket" style="font-family: monospace; background: #fff; border: 1px dashed #ccc; padding: 25px; width: 100%; max-width: 350px;">${estadoAnulada}<h3 style="text-align:center; margin:0;">COMPROBANTE DE COMPRA</h3><div style="text-align:center; color:#555; font-size:12px; margin-bottom:10px;">PROVEEDOR: ${escapeHtml(p.proveedor)}</div><div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Factura Nº:</span><span>${escapeHtml(p.factura)}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Fecha:</span><span>${p.fecha}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Condición:</span><span>${p.tipo.toUpperCase()}</span></div>${p.tipo === 'credito' ? `<div style="display:flex; justify-content:space-between; margin-bottom:3px; color:#d32f2f;"><span>Vence:</span><span>${p.vencimiento || '-'}</span></div>` : ''}<div style="border-top:1px dashed #000; margin:10px 0;"></div>${prods}<div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; font-weight:bold; font-size:18px;"><span>TOTAL</span><span>${sysConfig.currency}${(p.total||0).toFixed(2)}</span></div></div>`; } document.getElementById("ticketModal")?.classList.remove("hidden"); };
+
+const mostrarFacturaCompraOriginal = window.verFacturaCompra;
+window.verFacturaCompra = function(id) {
+    ticketEsVentaNueva = false;
+    return mostrarFacturaCompraOriginal(id);
+};
+
+let currentPurchaseCart = [];
+const purchProductInputEl = document.getElementById("purchProductTemp");
+purchProductInputEl?.addEventListener("input", () => { delete purchProductInputEl.dataset.productId; });
+document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { delete purchProductInputEl?.dataset.productId; });
+document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { document.getElementById("purchaseForm")?.reset(); const pi = document.getElementById("purchId"); if(pi) pi.value = ""; currentPurchaseCart = []; renderPurchaseCart(); document.getElementById("purchDaysContainer").style.display = "none"; const sdl = document.getElementById("supplierDataList"); if(sdl) sdl.innerHTML = suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">`).join(""); const pdl = document.getElementById("productDataList"); if(pdl) pdl.innerHTML = products.filter(p=>!p.deleted).map(p => `<option value="${escapeHtml(p.name)}">`).join(""); document.getElementById("purchaseModal")?.classList.remove("hidden"); });
+document.getElementById("btnAddItemToPurch")?.addEventListener("click", () => {
+    const prodName = purchProductInputEl.value.trim(); const qty = parseInt(document.getElementById("purchQtyTemp").value); const cost = parseFloat(document.getElementById("purchCostTemp").value);
+    if(!prodName || isNaN(qty) || isNaN(cost) || qty <= 0) { showAlert("Ingrese producto, cantidad y costo unitario."); return; }
+    if (cost < 0) { showAlert("El costo unitario no puede ser negativo."); return; }
+    const quickProductId = purchProductInputEl.dataset.productId;
+    const quickProduct = quickProductId && products.find(p => String(p.id) === quickProductId && !p.deleted && (p.name || "").trim().toLowerCase() === prodName.toLowerCase());
+    const matchedProd = quickProduct || products.find(p => (p.name || "").trim().toLowerCase() === prodName.toLowerCase() && !p.deleted);
+    if (!matchedProd) { showAlert("El producto no existe. Créelo con el botón de agregar producto antes de incluirlo en la compra."); return; }
+
+    currentPurchaseCart.push({ producto: prodName, productId: matchedProd.id, cantidad: qty, costo: r2(cost), total: r2(qty * cost) });
+    purchProductInputEl.value = ""; delete purchProductInputEl.dataset.productId; document.getElementById("purchQtyTemp").value = "1"; document.getElementById("purchCostTemp").value = ""; renderPurchaseCart();
+});
+document.getElementById("quickEditProductFromPurchBtn")?.addEventListener("click", () => { const prodName = document.getElementById("purchProductTemp").value.trim(); if (!prodName) { showAlert("Escribe el nombre del producto en el campo para poder editarlo."); return; } const p = products.find(pr => (pr.name || "").toLowerCase() === prodName.toLowerCase() && !pr.deleted); if (p) { window.editarProducto(p.id); } else { showAlert("Producto no encontrado en la base de datos."); } });
+
+function renderPurchaseCart() { const tbody = document.getElementById("purchCartBody"); if(!tbody) return; let totalFactura = 0; if(currentPurchaseCart.length === 0) { tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color:#999;">Aún no hay productos en la factura.</td></tr>`; } else { tbody.innerHTML = currentPurchaseCart.map((item, idx) => { totalFactura += item.total; return `<tr><td><strong>${escapeHtml(item.producto)}</strong>${!item.productId ? ' <small style="color:#ff9800;">(sin vincular)</small>' : ''}</td><td>${item.cantidad}</td><td>${sysConfig.currency}${item.costo.toFixed(2)}</td><td>${sysConfig.currency}${item.total.toFixed(2)}</td><td><button type="button" onclick="window.removePurchItem(${idx})" style="background:#d32f2f; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;">X</button></td></tr>`; }).join(""); } const pTot = document.getElementById("purchTotalDisplay"); if(pTot) pTot.textContent = `${sysConfig.currency}${totalFactura.toFixed(2)}`; }
+window.removePurchItem = function(idx) { currentPurchaseCart.splice(idx, 1); renderPurchaseCart(); };
+
+function resolverProductoDeItemCompra(item) {
+    if (item.productId) { const p = products.find(pr => String(pr.id) === String(item.productId)); if (p) return p; }
+    return products.find(pr => (pr.name || "").toLowerCase() === (item.producto || "").toLowerCase() && !pr.deleted);
+}
+
+document.getElementById("purchaseForm")?.addEventListener("submit", async (e) => { 
+    e.preventDefault(); if (!isAdmin()) { showAlert("No tiene permisos para registrar compras."); return; } if(currentPurchaseCart.length === 0) { showAlert("Agrega al menos un producto a la factura."); return; } 
+    const pId = document.getElementById("purchId").value; const tipoCompra = document.getElementById("purchType").value; const proveedorNombre = document.getElementById("purchSupplier").value.trim(); const facturaNum = document.getElementById("purchInvoice").value.trim() || "S/F";
+    const purchaseItems = currentPurchaseCart.map(item => { const producto = resolverProductoDeItemCompra(item); return producto ? { ...item, productId: producto.id } : null; });
+    if (purchaseItems.some(item => !item)) { showAlert("No se puede guardar la compra: cada producto debe estar vinculado a un producto del inventario."); return; }
+    const totalFactura = r2(purchaseItems.reduce((sum, item) => sum + item.total, 0));
+    let dueDateStr = null; if(tipoCompra === "credito") { const days = Math.max(1, parseInt(document.getElementById("purchDays")?.value) || 30); let d = new Date(); d.setDate(d.getDate() + days); dueDateStr = d.toLocaleDateString(); } 
+    const newPurch = { id: pId ? pId : Date.now(), business_id: DEFAULT_BUSINESS_ID, fecha: new Date().toLocaleDateString(), fechaTS: Date.now(), factura: facturaNum, tipo: tipoCompra, proveedor: proveedorNombre, items: purchaseItems, total: totalFactura, vencimiento: dueDateStr, anulada: false }; 
+    
+    if (pId) { const index = purchasesHistory.findIndex(p => String(p.id) === String(pId)); if(index > -1) purchasesHistory[index] = newPurch; } else {
+        purchasesHistory.push(newPurch);
+        for (let newItem of newPurch.items) {
+            const prodMatch = resolverProductoDeItemCompra(newItem);
+            if (!prodMatch) continue;
+            const costoNuevo = Number(newItem.costo);
+            const costoCambio = !isNaN(costoNuevo) && costoNuevo !== Number(prodMatch.cost || 0);
+            if (costoCambio) {
+                prodMatch.cost = r2(costoNuevo);
+                const mRet = prodMatch.marginRetail ?? 10, mWho = prodMatch.marginWholesale ?? 10;
+                prodMatch.retailPrice = r2(costoNuevo * (1 + mRet / 100));
+                prodMatch.wholesalePrice = r2(costoNuevo * (1 + mWho / 100));
+            }
+            await registrarMovimientoKardex(prodMatch.id, 'COMPRA', newItem.cantidad, `Factura ${facturaNum}`);
+            if (costoCambio) {
+                await localDB.products.put(prodMatch);
+                await encolarSincronizacion('UPDATE', 'products', prodMatch);
+                await registrarAuditoria('INVENTARIO', 'ACTUALIZAR_COSTO', `Actualizó costo de "${prodMatch.name}" a ${sysConfig.currency}${costoNuevo.toFixed(2)} (Factura ${facturaNum})`);
+            }
+        }
+        if (tipoCompra === "credito") { let suppMatch = suppliers.find(s => (s.name||"").toLowerCase() === proveedorNombre.toLowerCase()); if(suppMatch) { suppMatch.debt = r2((suppMatch.debt || 0) + totalFactura); await localDB.suppliers.put(suppMatch); await encolarSincronizacion('UPDATE', 'suppliers', suppMatch); } else { const newSupp = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, name: proveedorNombre, contact: "-", phone: "-", debt: totalFactura, address: "", ruc: "", active: true }; suppliers.push(newSupp); await localDB.suppliers.put(newSupp); await encolarSincronizacion('INSERT', 'suppliers', newSupp); } }
+        await registrarAuditoria('COMPRAS', 'NUEVA_COMPRA', `Registró factura de compra ${facturaNum} de "${proveedorNombre}"`);
+    } 
+    await localDB.purchases.put(newPurch); await encolarSincronizacion(pId ? 'UPDATE' : 'INSERT', 'purchases', newPurch); document.getElementById("purchaseModal")?.classList.add("hidden"); actualizarTablaCompras(); actualizarTablaInventario(); actualizarCatalogo(); renderDashboard(); showAlert(`Factura guardada correctamente.`); 
+});
+
+window.cancelarCompraForm = function() { showConfirm("¿Estás seguro de cancelar esta factura de compra?", () => { document.getElementById("purchaseModal").classList.add("hidden"); currentPurchaseCart = []; }); };
+
+function actualizarTablaCompras() { const tb = document.getElementById("purchasesTableBody"); if(!tb) return; if(purchasesHistory.length === 0) { tb.innerHTML = `<tr><td colspan="7" class="text-center">Sin registros.</td></tr>`; } else { tb.innerHTML = [...purchasesHistory].reverse().map(c => { const cantidadTipos = c.items ? c.items.length : 1; let estadoHtml = c.tipo === 'credito' ? `<span style="font-size:11px; font-weight:bold; padding:3px 6px; border-radius:4px; background:#fff3cd; color:#856404;">CRÉDITO<br>Vence: ${c.vencimiento || '-'}</span>` : `<span style="font-size:11px; font-weight:bold; padding:3px 6px; border-radius:4px; background:#d4edda; color:#155724;">CONTADO</span>`; if (c.anulada) estadoHtml += `<br><span style="font-size:11px; font-weight:bold; color:#d32f2f;">❌ ANULADA</span>`; const totalFormat = c.anulada ? `<del>${sysConfig.currency}${(c.total||0).toFixed(2)}</del>` : `${sysConfig.currency}${(c.total||0).toFixed(2)}`; const actionBtns = c.anulada ? `<button class="btn btn-sm btn-primary" onclick="window.verFacturaCompra('${c.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-primary" onclick="window.verFacturaCompra('${c.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.eliminarCompra('${c.id}')">Anular</button>`; const trStyle = c.anulada ? `style="background-color:#fdf5f5; color:#888;"` : ''; return `<tr ${trStyle}><td>${c.fecha}</td><td><strong>${escapeHtml(c.factura)}</strong></td><td>${escapeHtml(c.proveedor)}</td><td>${cantidadTipos} prod(s). dif.</td><td style="color:#d32f2f; font-weight:bold;">${totalFormat}</td><td>${estadoHtml}</td><td>${actionBtns}</td></tr>`; }).join(""); } }
+
+window.eliminarCompra = function(id) {
+    if (!isAdmin()) { showAlert("No tiene permisos para anular compras."); return; }
+    const compra = purchasesHistory.find(p => String(p.id) === String(id)); if (!compra || compra.anulada) return;
+    showAnularRegistro("Anular Factura de Compra", `Factura ${compra.factura} — Proveedor: ${compra.proveedor} — Total: ${sysConfig.currency}${(compra.total||0).toFixed(2)}.`, async (motivo) => {
+        const faltantes = [];
+        (compra.items || []).forEach(item => {
+            const prod = resolverProductoDeItemCompra(item);
+            if (prod && (prod.stock || 0) < item.cantidad) faltantes.push(`${prod.name} (stock ${prod.stock || 0}, factura ${item.cantidad})`);
+        });
+        if (faltantes.length) {
+            showAlert("No se puede anular: ya se vendió parte de esta mercancía.\n" + faltantes.join("\n"));
+            return;
+        }
+        if (compra.items) { for (let item of compra.items) { const prodMatch = resolverProductoDeItemCompra(item); if (prodMatch) { await registrarMovimientoKardex(prodMatch.id, 'ANULACION_COMPRA', -item.cantidad, `Anulación Factura ${compra.factura}: ${motivo}`); } } }
+        if (compra.tipo === 'credito') { const suppMatch = suppliers.find(s => (s.name||"").toLowerCase() === (compra.proveedor||"").toLowerCase()); if (suppMatch) { suppMatch.debt = r2(Math.max(0, (suppMatch.debt || 0) - compra.total)); await localDB.suppliers.put(suppMatch); await encolarSincronizacion('UPDATE', 'suppliers', suppMatch); } }
+        compra.anulada = true; compra.motivoAnulacion = motivo; compra.fechaAnulacion = new Date().toLocaleString(); compra.usuarioAnulacion = currentUser.displayName;
+        await localDB.purchases.put(compra); await encolarSincronizacion('UPDATE', 'purchases', compra);
+        await registrarAuditoria('COMPRAS', 'ANULACION', `Anuló Factura de Compra ${compra.factura}. Motivo: ${motivo}`);
+        actualizarTablaCompras(); actualizarTablaInventario(); actualizarTablaCuentasPorPagar(); renderDashboard(); showAlert("Factura de compra anulada.");
+    });
+};
+
+function actualizarTablaCuentasPorPagar() { const tb = document.getElementById("payablesTableBody"); if(!tb) return; const deudores = suppliers.filter(s => (s.debt||0) > 0); if(deudores.length === 0) { tb.innerHTML = `<tr><td colspan="6" class="text-center">No hay cuentas por pagar pendientes.</td></tr>`; } else { tb.innerHTML = deudores.map(s => { const facturasCredito = purchasesHistory.filter(p => p.proveedor === s.name && p.tipo === "credito" && !p.anulada).sort((a,b) => new Date(a.vencimiento) - new Date(b.vencimiento)); const proxVencimiento = facturasCredito.length > 0 ? facturasCredito[0].vencimiento : 'Ver facturas'; return `<tr><td>${s.id}</td><td><strong>${escapeHtml(s.name)}</strong></td><td>${escapeHtml(s.phone) || '-'}</td><td style="color:#d32f2f; font-weight:bold;">${proxVencimiento}</td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td><td><button class="btn btn-sm btn-secondary" onclick="window.verEstadoCuentaProveedor('${s.id}')">Ver Facturas</button></td></tr>`; }).join(""); } }
+window.abrirAbonoProveedor = function(id) { const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("payableSupplierId").value = s.id; document.getElementById("payableSupplierName").textContent = s.name; document.getElementById("payableDebt").textContent = `${sysConfig.currency}${(s.debt||0).toFixed(2)}`; const pa = document.getElementById("payableAmount"); if(pa) pa.value = ""; document.getElementById("payablePaymentModal")?.classList.remove("hidden"); };
+document.getElementById("payablePaymentForm")?.addEventListener("submit", async (e) => { e.preventDefault(); const id = document.getElementById("payableSupplierId").value; const amount = r2(parseFloat(document.getElementById("payableAmount").value)); const s = suppliers.find(x => String(x.id) === String(id)); if (isNaN(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; } if (amount > r2(s.debt || 0)) { showAlert("El abono no puede ser mayor a la deuda."); return; } s.debt = r2((s.debt || 0) - amount); await localDB.suppliers.put(s); await encolarSincronizacion('UPDATE', 'suppliers', s); const newAbono = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, tipo: 'proveedor', referenciaId: s.id, monto: amount, fecha: new Date().toLocaleDateString(), fechaTS: Date.now(), usuario: currentUser.displayName, anulado: false }; abonosHistory.push(newAbono); await localDB.abonos.put(newAbono); await encolarSincronizacion('INSERT', 'abonos', newAbono); await registrarAuditoria('PROVEEDORES', 'ABONO', `Registró abono de ${sysConfig.currency}${amount.toFixed(2)} al proveedor "${s.name}"`); if (cajaActual) { cajaActual.movimientos.push({ tipo: "salida", monto: amount, concepto: `Pago a proveedor: ${s.name}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); } document.getElementById("payablePaymentModal")?.classList.add("hidden"); actualizarTablaCuentasPorPagar(); renderDashboard(); showAlert(`Abono registrado.`); });
+
+async function initCaja() { const todasCajas = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID }).toArray(); cajaHistorial = todasCajas.sort((a, b) => b.fechaAperturaTS - a.fechaAperturaTS); cajaActual = todasCajas.find(s => s.estado === "abierta") || null; }
+function calcularResumenCaja(session) { const desde = session.fechaAperturaTS; const hasta = session.fechaCierreTS || Date.now(); const ventasContado = salesHistory.filter(v => { const ts = v.fechaTS || v.id; return ts >= desde && ts <= hasta && v.metodo === "Contado" && !v.anulada; }).reduce((sum, v) => sum + v.total, 0); const entradas = session.movimientos.filter(m => m.tipo === "entrada" && !m.anulado).reduce((sum, m) => sum + m.monto, 0); const salidas = session.movimientos.filter(m => m.tipo === "salida" && !m.anulado).reduce((sum, m) => sum + m.monto, 0); const esperado = session.efectivoInicial + ventasContado + entradas - salidas; return { ventasContado: r2(ventasContado), entradas: r2(entradas), salidas: r2(salidas), esperado: r2(esperado) }; }
+async function abrirCaja(efectivoInicial) { if (cajaActual) { showAlert("Ya existe una caja abierta."); return; } if (isNaN(efectivoInicial) || efectivoInicial < 0) { showAlert("Ingrese un monto inicial válido."); return; } const nueva = { business_id: DEFAULT_BUSINESS_ID, estado: "abierta", usuarioApertura: currentUser.displayName, fechaAperturaTS: Date.now(), fechaApertura: new Date().toLocaleString(), efectivoInicial: efectivoInicial, movimientos: [], fechaCierreTS: null, fechaCierre: null, efectivoReal: null, efectivoEsperado: null, diferencia: null, usuarioCierre: null }; const id = await localDB.cajaSessions.add(nueva); nueva.id = id; cajaActual = nueva; cajaHistorial.unshift(nueva); await encolarSincronizacion("INSERT", "cajaSessions", nueva); await registrarAuditoria('CAJA', 'APERTURA', `Abrió caja con ${sysConfig.currency}${efectivoInicial.toFixed(2)}`); renderCajaView(); }
+async function registrarMovimientoCaja(tipo, monto, concepto) { monto = r2(monto); if (!cajaActual) { showAlert("No hay una caja abierta."); return; } if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (!concepto || !concepto.trim()) { showAlert("Ingrese un concepto."); return; } cajaActual.movimientos.push({ tipo, monto, concepto: concepto.trim(), fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, anulado: false }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); }
+window.anularMovimientoCaja = async function(indexOriginal) { if (!isAdmin()) { showAlert("No tiene permisos."); return; } const mov = cajaActual.movimientos[indexOriginal]; if (mov.anulado) return; showAnularRegistro("Anular Movimiento de Caja", `${mov.tipo.toUpperCase()}: ${mov.concepto} (${sysConfig.currency}${mov.monto.toFixed(2)})`, async (motivo) => { mov.anulado = true; mov.motivoAnulacion = motivo; mov.usuarioAnulacion = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); showAlert("Movimiento anulado."); }); };
+async function cerrarCaja(efectivoReal) { if (!cajaActual) return; efectivoReal = r2(efectivoReal); const resumen = calcularResumenCaja(cajaActual); const diferencia = r2(efectivoReal - resumen.esperado); cajaActual.estado = "cerrada"; cajaActual.fechaCierreTS = Date.now(); cajaActual.fechaCierre = new Date().toLocaleString(); cajaActual.efectivoReal = efectivoReal; cajaActual.efectivoEsperado = resumen.esperado; cajaActual.diferencia = diferencia; cajaActual.usuarioCierre = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); cajaActual = null; await initCaja(); renderCajaView(); showAlert(`Caja cerrada exitosamente.`); }
+document.getElementById("abrirCajaBtn")?.addEventListener("click", () => { const inputEl = document.getElementById("cajaEfectivoInicialInput"); const inicial = parseFloat(inputEl?.value); if (isNaN(inicial) || inicial < 0) { showAlert("⚠️ Ingrese el monto de efectivo inicial con el que abre la caja."); inputEl?.focus(); return; } abrirCaja(inicial); if (inputEl) inputEl.value = ""; });
+document.getElementById("registrarEntradaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("entrada", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
+document.getElementById("registrarSalidaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("salida", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
+document.getElementById("cerrarCajaBtn")?.addEventListener("click", () => {
+    if (!cajaActual) { showAlert("No hay ninguna caja abierta en este momento."); return; }
+
+    const resumen = calcularResumenCaja(cajaActual);
+    document.getElementById("cajaEsperadoDisplay").textContent =
+        `${sysConfig.currency}${resumen.esperado.toFixed(2)}`;
+
+    const inputEl = document.getElementById("cajaEfectivoRealInput");
+    if (inputEl) inputEl.value = "";
+
+    document.getElementById("cierreCajaModal")?.classList.remove("hidden");
+});
+
+document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () => {
+    if (!cajaActual) return;
+
+    const inputEl = document.getElementById("cajaEfectivoRealInput");
+    const real = parseFloat(inputEl?.value);
+
+    if (isNaN(real) || real < 0) {
+        showAlert("Ingrese el monto real de efectivo contado.");
+        inputEl?.focus();
+        return;
+    }
+
+    cerrarCaja(real);
+    document.getElementById("cierreCajaModal")?.classList.add("hidden");
+
+    if (inputEl) inputEl.value = "";
+});
+function renderCajaView() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="5" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map((m, index) => { const icon = m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const btnX = m.anulado ? `<span style="color:#d32f2f; font-size:10px; font-weight:bold;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" style="padding: 3px 8px;" onclick="window.anularMovimientoCaja(${index})">X</button>`; const trStyle = m.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : ''; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr ${trStyle}><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td style="font-weight:bold;">${valFmt}</td><td>${btnX}</td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${sysConfig.currency}${(s.efectivoInicial||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(s.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); } }
+
+function renderGastosSelect() { const sel = document.getElementById("gastoCategoria"); if (sel && sel.options.length === 0) sel.innerHTML = GASTOS_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join(""); }
+window.registrarGastoSubmit = async function() { const categoria = document.getElementById("gastoCategoria").value; const metodo = document.getElementById("gastoMetodo").value; const descripcion = document.getElementById("gastoDescripcion").value.trim(); const comprobante = document.getElementById("gastoComprobante").value.trim() || "S/F"; const monto = r2(parseFloat(document.getElementById("gastoMonto").value)); if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (metodo === "caja" && !cajaActual) { showAlert("No hay caja abierta."); return; } const nuevoGasto = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, categoria, metodo, comprobante, monto, descripcion, fecha: new Date().toLocaleString(), fechaTS: Date.now(), usuario: currentUser ? currentUser.displayName : "Sistema", sessionId: cajaActual ? cajaActual.id : null, anulado: false }; gastosHistory.push(nuevoGasto); await localDB.gastos.put(nuevoGasto); await encolarSincronizacion("INSERT", "gastos", nuevoGasto); if (metodo === "caja") { cajaActual.movimientos.push({ tipo: "salida", monto, concepto: `Gasto: ${categoria} - ${descripcion}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); } document.getElementById("formRegistrarGasto")?.reset(); renderGastosView(); actualizarTablaHistorial(); renderDashboard(); showAlert(`Gasto registrado.`); };
+window.eliminarGasto = function(id) { if (!isAdmin()) { showAlert("No tiene permisos."); return; } const gasto = gastosHistory.find(g => String(g.id) === String(id)); if (!gasto || gasto.anulado) return; showAnularRegistro("Anular Gasto", `${gasto.categoria} — ${gasto.descripcion} — Monto: ${sysConfig.currency}${(gasto.monto||0).toFixed(2)}.`, async (motivo) => { if (gasto.metodo === "caja" && cajaActual && gasto.sessionId === cajaActual.id) { cajaActual.movimientos.push({ tipo: "entrada", monto: gasto.monto, concepto: `Anulación Gasto: ${gasto.descripcion} (${motivo})`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); } gasto.anulado = true; gasto.motivoAnulacion = motivo; gasto.fechaAnulacion = new Date().toLocaleString(); gasto.usuarioAnulacion = currentUser.displayName; await localDB.gastos.put(gasto); await encolarSincronizacion('UPDATE', 'gastos', gasto); renderGastosView(); actualizarTablaHistorial(); renderDashboard(); showAlert("Gasto anulado."); }); };
+function renderGastosView() { renderGastosSelect(); const tbody = document.getElementById("gastosTableBody"); if (tbody) { if (gastosHistory.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="text-center">Sin gastos registrados.</td></tr>`; } else { tbody.innerHTML = [...gastosHistory].reverse().map(g => { const metodoHtml = g.metodo === 'caja' ? '💵 Caja' : (g.metodo === 'banco' ? '💳 Banco' : '⏳ Pendiente'); const anuladoTag = g.anulado ? ' <span style="color:#d32f2f; font-weight:bold; font-size:11px;">❌ ANULADO</span>' : ''; const totalFormat = g.anulado ? `<del>${sysConfig.currency}${r2(g.monto).toFixed(2)}</del>` : `${sysConfig.currency}${r2(g.monto).toFixed(2)}`; const actionBtn = g.anulado ? '-' : `<button class="btn btn-sm btn-danger" onclick="window.eliminarGasto('${g.id}')">Anular</button>`; const trStyle = g.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : ''; return `<tr ${trStyle}><td>${escapeHtml(g.fecha)}</td><td><strong>${escapeHtml(g.categoria)}</strong></td><td>${escapeHtml(g.descripcion)}${anuladoTag}</td><td>${metodoHtml}<br><small style="color:#666;">Ref: ${escapeHtml(g.comprobante)}</small></td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${totalFormat}</td><td>${escapeHtml(g.usuario)}</td><td>${actionBtn}</td></tr>`; }).join(""); } } const totalHoy = gastosHistory.filter(g => !g.anulado && esHoyTS(g.fechaTS)).reduce((sum, g) => sum + g.monto, 0); const totalGeneral = gastosHistory.filter(g => !g.anulado).reduce((sum, g) => sum + g.monto, 0); if (document.getElementById("gastosResumenHoy")) document.getElementById("gastosResumenHoy").textContent = `${sysConfig.currency}${r2(totalHoy).toFixed(2)}`; if (document.getElementById("gastosResumenTotal")) document.getElementById("gastosResumenTotal").textContent = `${sysConfig.currency}${r2(totalGeneral).toFixed(2)}`; }
+
+document.querySelectorAll(".rep-subtab").forEach(btn => { btn.addEventListener("click", (e) => { e.stopPropagation(); document.querySelectorAll(".rep-subtab").forEach(b => b.classList.remove("active")); document.querySelectorAll(".rep-subview").forEach(s => s.classList.add("hidden")); btn.classList.add("active"); document.getElementById(btn.dataset.target)?.classList.remove("hidden"); }); });
+function initReportesFiltros() {
+    const desdeInput = document.getElementById("reporteDesdeInput"), hastaInput = document.getElementById("reporteHastaInput");
+    if (!desdeInput || !hastaInput) return;
+    const hoy = new Date();
+    if (!desdeInput.value) desdeInput.value = fechaLocalISO(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+    if (!reporteHastaManual) hastaInput.value = fechaLocalISO(hoy);
+    aplicarFiltroReporte();
+}
+function setRangoFechasReporte(desdeDate, hastaDate) {
+    const desdeInput = document.getElementById("reporteDesdeInput"), hastaInput = document.getElementById("reporteHastaInput");
+    if (desdeInput) desdeInput.value = fechaLocalISO(desdeDate);
+    if (hastaInput) hastaInput.value = fechaLocalISO(hastaDate);
+    reporteHastaManual = false;
+    aplicarFiltroReporte();
+}
+document.getElementById("reporteHastaInput")?.addEventListener("change", () => { reporteHastaManual = true; });
+function aplicarFiltroReporte() { const desdeVal = document.getElementById("reporteDesdeInput")?.value; const hastaVal = document.getElementById("reporteHastaInput")?.value; reporteDesdeTS = desdeVal ? new Date(desdeVal + "T00:00:00").getTime() : 0; reporteHastaTS = hastaVal ? new Date(hastaVal + "T23:59:59").getTime() : Date.now(); const label = document.getElementById("reporteRangoLabel"); if (label) label.textContent = `Mostrando datos desde ${desdeVal || 'el inicio'} hasta ${hastaVal || 'hoy'}.`; renderReportes(); }
+document.getElementById("aplicarFiltroReporteBtn")?.addEventListener("click", aplicarFiltroReporte);
+document.getElementById("filtroHoyBtn")?.addEventListener("click", () => { const hoy = new Date(); setRangoFechasReporte(hoy, hoy); });
+document.getElementById("filtroSemanaBtn")?.addEventListener("click", () => { const hoy = new Date(); const inicio = new Date(hoy); inicio.setDate(hoy.getDate() - hoy.getDay()); setRangoFechasReporte(inicio, hoy); });
+document.getElementById("filtroMesBtn")?.addEventListener("click", () => { const hoy = new Date(); const inicio = new Date(hoy.getFullYear(), hoy.getMonth(), 1); setRangoFechasReporte(inicio, hoy); });
+document.getElementById("filtroTodoBtn")?.addEventListener("click", () => { const inicio = new Date(2000, 0, 1); const hoy = new Date(); setRangoFechasReporte(inicio, hoy); });
+function renderReportes() {
+    if (reporteDesdeTS === null) return;
+    const ventasFiltradas = salesHistory.filter(s => (s.fechaTS || s.id) >= reporteDesdeTS && (s.fechaTS || s.id) <= reporteHastaTS); const ventasValidas = ventasFiltradas.filter(v => !v.anulada); const comprasFiltradas = purchasesHistory.filter(p => (!p.fechaTS || (p.fechaTS >= reporteDesdeTS && p.fechaTS <= reporteHastaTS)) && !p.anulada); const gastosFiltrados = gastosHistory.filter(g => g.fechaTS >= reporteDesdeTS && g.fechaTS <= reporteHastaTS && !g.anulado); const cajasFiltradas = cajaHistorial.filter(c => c.estado === "cerrada" && c.fechaCierreTS >= reporteDesdeTS && c.fechaCierreTS <= reporteHastaTS);
+    const totalVentas = ventasValidas.reduce((s, v) => s + v.total, 0); const totalCompras = comprasFiltradas.reduce((s, p) => s + p.total, 0); const totalGastos = gastosFiltrados.reduce((s, g) => s + g.monto, 0);
+    
+    let costoVentas = 0; ventasValidas.forEach(v => { if (v.items) v.items.forEach(i => { costoVentas += obtenerCostoHistoricoItem(i) * i.cantidad; }); });
+    const utilidad = totalVentas - costoVentas - totalGastos; const totalCxC = clients.reduce((s, c) => s + (c.debt||0), 0); const totalCxP = suppliers.reduce((s, sup) => s + (sup.debt || 0), 0);
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set("repVentas", `${sysConfig.currency}${totalVentas.toFixed(2)}`); set("repCompras", `${sysConfig.currency}${totalCompras.toFixed(2)}`); set("repGastos", `${sysConfig.currency}${totalGastos.toFixed(2)}`); set("repUtilidad", `${sysConfig.currency}${utilidad.toFixed(2)}`); set("repCxC", `${sysConfig.currency}${totalCxC.toFixed(2)}`); set("repCxP", `${sysConfig.currency}${totalCxP.toFixed(2)}`);
+
+    const porMetodo = {}; ventasValidas.forEach(v => { if (!porMetodo[v.metodo]) porMetodo[v.metodo] = { count: 0, total: 0 }; porMetodo[v.metodo].count++; porMetodo[v.metodo].total += v.total; }); const metodoBody = document.getElementById("repVentasMetodoBody"); if (metodoBody) { const entries = Object.entries(porMetodo); metodoBody.innerHTML = entries.length === 0 ? `<tr><td colspan="3" class="text-center">Sin ventas.</td></tr>` : entries.map(([metodo, d]) => `<tr><td>${metodo}</td><td>${d.count}</td><td>${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
+    const contadorProd = {}; ventasValidas.forEach(v => { if (v.items) v.items.forEach(i => { if (!contadorProd[i.name]) contadorProd[i.name] = { cantidad: 0, total: 0 }; const precio = v.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); contadorProd[i.name].cantidad += i.cantidad; contadorProd[i.name].total += precio * i.cantidad; }); }); const topBody = document.getElementById("repTopProductosBody"); if (topBody) { const sorted = Object.entries(contadorProd).sort((a, b) => b[1].cantidad - a[1].cantidad).slice(0, 15); topBody.innerHTML = sorted.length === 0 ? `<tr><td colspan="3" class="text-center">Sin datos.</td></tr>` : sorted.map(([name, d]) => `<tr><td>${escapeHtml(name)}</td><td>${d.cantidad}</td><td>${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
+    const porVendedor = {}; ventasValidas.forEach(v => { if (!porVendedor[v.vendedor]) porVendedor[v.vendedor] = { count: 0, contado: 0, credito: 0, total: 0 }; porVendedor[v.vendedor].count++; if (v.metodo === "Contado") porVendedor[v.vendedor].contado += v.total; else porVendedor[v.vendedor].credito += v.total; porVendedor[v.vendedor].total += v.total; }); const vendBody = document.getElementById("repVendedoresBody"); if (vendBody) { const entries = Object.entries(porVendedor).sort((a, b) => b[1].total - a[1].total); vendBody.innerHTML = entries.length === 0 ? `<tr><td colspan="5" class="text-center">Sin ventas.</td></tr>` : entries.map(([nombre, d]) => `<tr><td><strong>${escapeHtml(nombre)}</strong></td><td>${d.count}</td><td>${sysConfig.currency}${d.contado.toFixed(2)}</td><td>${sysConfig.currency}${d.credito.toFixed(2)}</td><td style="font-weight:bold;">${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
+    const compBody = document.getElementById("repComprasBody"); if (compBody) { compBody.innerHTML = comprasFiltradas.length === 0 ? `<tr><td colspan="5" class="text-center">Sin compras.</td></tr>` : [...comprasFiltradas].reverse().map(c => `<tr><td>${c.fecha}</td><td>${escapeHtml(c.factura)}</td><td>${escapeHtml(c.proveedor)}</td><td>${c.tipo === 'credito' ? 'Crédito' : 'Contado'}</td><td style="font-weight:bold;">${sysConfig.currency}${(c.total||0).toFixed(2)}</td></tr>`).join(""); }
+    
+    const invBody = document.getElementById("repInventarioBody"); 
+    if (invBody) { 
+        const validProds = products.filter(p => !p.deleted);
+        invBody.innerHTML = validProds.length === 0 ? `<tr><td colspan="5" class="text-center">Sin productos.</td></tr>` : validProds.map(p => { 
+            const valor = (p.cost || 0) * (p.stock || 0); 
+            const minLim = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); 
+            const estado = p.active === false ? '<span style="color:#666; font-weight:bold;">Inactivo</span>' : ((p.stock || 0) <= 0 ? '<span style="color:#d32f2f; font-weight:bold;">Agotado</span>' : ((p.stock || 0) <= minLim ? '<span style="color:#ff9800; font-weight:bold;">Bajo Stock</span>' : '<span style="color:#28a745;">Normal</span>')); 
+            return `<tr><td>${escapeHtml(p.name)}</td><td>${p.stock||0}</td><td>${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>${sysConfig.currency}${valor.toFixed(2)}</td><td>${estado}</td></tr>`; 
+        }).join(""); 
+    }
+    
+    const cajaBody = document.getElementById("repCajaBody"); if (cajaBody) { cajaBody.innerHTML = cajasFiltradas.length === 0 ? `<tr><td colspan="6" class="text-center">Sin cierres.</td></tr>` : cajasFiltradas.map(c => { const difColor = c.diferencia === 0 ? '#28a745' : '#d32f2f'; return `<tr><td>${c.fechaApertura}</td><td>${c.fechaCierre}</td><td>${escapeHtml(c.usuarioCierre)}</td><td>${sysConfig.currency}${(c.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(c.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(c.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); }
+    const porCategoria = {}; gastosFiltrados.forEach(g => { if (!porCategoria[g.categoria]) porCategoria[g.categoria] = { count: 0, total: 0 }; porCategoria[g.categoria].count++; porCategoria[g.categoria].total += g.monto; }); const gastCatBody = document.getElementById("repGastosCategoriaBody"); if (gastCatBody) { const entries = Object.entries(porCategoria).sort((a, b) => b[1].total - a[1].total); gastCatBody.innerHTML = entries.length === 0 ? `<tr><td colspan="3" class="text-center">Sin gastos.</td></tr>` : entries.map(([cat, d]) => `<tr><td>${escapeHtml(cat)}</td><td>${d.count}</td><td>${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
+    const cxcBody = document.getElementById("repCxCBody"); if (cxcBody) { const conDeuda = clients.filter(c => (c.debt||0) > 0); cxcBody.innerHTML = conDeuda.length === 0 ? `<tr><td colspan="4" class="text-center">Sin cuentas por cobrar.</td></tr>` : conDeuda.map(c => `<tr><td><strong>${escapeHtml(c.name)}</strong></td><td>${sysConfig.currency}${(c.creditLimit||0).toFixed(2)}</td><td style="color:#d32f2f; font-weight:bold;">${sysConfig.currency}${(c.debt||0).toFixed(2)}</td><td>${(c.debt||0) > (c.creditLimit||0) ? '<span style="color:#d32f2f;">Excedido</span>' : 'Normal'}</td></tr>`).join(""); }
+    const cxpBody = document.getElementById("repCxPBody"); if (cxpBody) { const conDeuda = suppliers.filter(s => (s.debt||0) > 0); cxpBody.innerHTML = conDeuda.length === 0 ? `<tr><td colspan="2" class="text-center">Sin cuentas por pagar.</td></tr>` : conDeuda.map(s => `<tr><td><strong>${escapeHtml(s.name)}</strong></td><td style="color:#d32f2f; font-weight:bold;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td></tr>`).join(""); }
+}
+
+window.imprimirTicket = function() {
+    const elementoTicket = document.getElementById("imprimibleTicket"); if (!elementoTicket) return; const contenido = elementoTicket.outerHTML; const ventana = window.open('', '_blank', 'width=400,height=600');
+    ventana.document.write(`<html><head><title>Ticket de Venta</title><style>body { margin: 0; padding: 0; font-family: monospace; color: #000; width: 58mm; background: #fff; } #imprimibleTicket { width: 100%; max-width: 58mm; padding: 0 !important; margin: 0 !important; border: none !important; } @media print { @page { margin: 0; } body { margin: 0; padding: 0; } }</style></head><body onload="setTimeout(() => { window.print(); window.close(); }, 250);">${contenido}</body></html>`); ventana.document.close();
+};
+
+window.exportarTablaCSV = function(containerId, nombreArchivo) {
+    const subview = document.getElementById(containerId); const tabla = subview ? subview.querySelector('table') : document.querySelector(`#${containerId}`);
+    if (!tabla) { showAlert("No hay datos para exportar en esta vista."); return; }
+    let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; const rows = tabla.querySelectorAll("tr");
+    rows.forEach(row => { const cols = row.querySelectorAll("th, td"); const rowData = Array.from(cols).map(col => `"${col.innerText.replace(/"/g, '""').replace(/\n/g, ' ')}"`); csvContent += rowData.join(",") + "\r\n"; });
+    const encodedUri = encodeURI(csvContent); const link = document.createElement("a"); link.setAttribute("href", encodedUri); link.setAttribute("download", `${nombreArchivo}_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`); document.body.appendChild(link); link.click(); document.body.removeChild(link);
+};
+
+window.exportarExcelReporte = function(containerId, nombreArchivo) {
+    if (typeof XLSX === 'undefined') { showAlert("La librería Excel (XLSX) no está cargada."); return; }
+    const subview = document.getElementById(containerId);
+    const tablas = subview ? subview.querySelectorAll('table') : [];
+    if (!tablas.length) { showAlert("No hay datos para exportar en esta vista."); return; }
+    const wb = XLSX.utils.book_new();
+    tablas.forEach((tabla, index) => XLSX.utils.book_append_sheet(wb, XLSX.utils.table_to_sheet(tabla), `Hoja${index + 1}`));
+    XLSX.writeFile(wb, `${nombreArchivo}_${new Date().toLocaleDateString().replace(/\//g, '-')}.xlsx`);
+};
+
+// FUNCIÓN DE EXPORTACIÓN A EXCEL DEL DASHBOARD FALTANTE (BUG 3)
+window.generarExcelDashboard = function() {
+    if (typeof XLSX === 'undefined') { showAlert("La librería Excel (XLSX) no está cargada."); return; }
+    
+    let wb = XLSX.utils.book_new();
+    let ws_data = [
+        ["Métrica", "Valor"],
+        ["Ventas Hoy", document.getElementById("dashVentasHoy")?.textContent || "0"],
+        ["Ventas Mes", document.getElementById("dashVentasMes")?.textContent || "0"],
+        ["Ganancia Estimada", document.getElementById("dashGanancia")?.textContent || "0"],
+        ["Productos Vendidos", document.getElementById("dashProdsVendidos")?.textContent || "0"],
+        ["Bajo Stock", document.getElementById("dashBajoStock")?.textContent || "0"],
+        ["Crédito Pendiente (CxC)", document.getElementById("dashCxC")?.textContent || "0"],
+        ["Cuentas por Pagar (CxP)", document.getElementById("dashCxP")?.textContent || "0"],
+        ["Gastos Totales", document.getElementById("dashGastos")?.textContent || "0"]
+    ];
+    
+    let ws = XLSX.utils.aoa_to_sheet(ws_data);
+    XLSX.utils.book_append_sheet(wb, ws, "Resumen Dashboard");
+    XLSX.writeFile(wb, `Dashboard_${new Date().toLocaleDateString().replace(/\//g, '-')}.xlsx`);
+};

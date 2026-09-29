@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POS Distribuidora - PRO</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+    <div id="loginScreen" class="login-screen">
+        <div class="login-card">
+            <div class="login-logo"><div class="logo-icon">POS</div></div>
+            <h1>POS Distribuidora</h1>
+            <p class="login-subtitle">Inicia sesión para continuar</p>
+            <form id="loginForm" onsubmit="event.preventDefault();">
+                <div class="form-group"><label for="loginUsername">Usuario</label><input type="text" id="loginUsername" placeholder="Ingresa tu usuario..." required></div>
+                <div class="form-group"><label for="loginPassword">Contraseña</label><input type="password" id="loginPassword" placeholder="******" required></div>
+                <div id="loginError" class="message error hidden">Credenciales incorrectas</div>
+                <button type="submit" class="btn btn-primary btn-full">Iniciar Sesión</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="app" class="app hidden">
+        <header class="topbar">
+            <div class="brand"><div class="brand-icon">D</div><div><h2 id="brandNameDisplay">POS Distribuidora</h2><span id="roleBadge">Usuario</span></div></div>
+            <nav class="nav-tabs">
+                <button id="navSalesBtn" class="nav-btn active">🛒 Venta</button>
+                <button id="navInventoryBtn" class="nav-btn">📦 Productos</button>
+                <button id="navPurchasesBtn" class="nav-btn">📥 Compras</button>
+                <button id="navPayablesBtn" class="nav-btn">💸 Cuentas por Pagar</button>
+                <button id="navClientsBtn" class="nav-btn">👥 Cobros y Créditos</button>
+                <button id="navSuppliersBtn" class="nav-btn">🏢 Proveedores</button>
+                <button id="navHistoryBtn" class="nav-btn">📊 Historial</button>
+                <button id="navCajaBtn" class="nav-btn">💰 Caja</button>
+                <button id="navGastosBtn" class="nav-btn">🧾 Gastos</button>
+                <button id="navReportesBtn" class="nav-btn">📈 Reportes</button>
+                <button id="navDashboardBtn" class="nav-btn">📊 Dashboard</button>
+                <button id="navConfigBtn" class="nav-btn">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: sub; margin-right: 5px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+    Configuración
+</button>
+            </nav>
+            <div class="topbar-right">
+                <div class="seller-info"><div class="seller-avatar" id="sellerAvatar">V</div><div><strong id="sellerName">vendedor1</strong><br><span style="font-size: 11px; color: #28a745;">⚫ Offline First Activo</span></div></div>
+                <button id="logoutBtn" class="logout-btn">Salir</button>
+            </div>
+        </header>
+
+        <main class="main-container">
+            <div id="salesView" class="view-panel">
+                <div class="workspace-layout">
+                    <section class="workspace">
+                        <div class="page-heading"><div><h1>Punto de Venta</h1></div><div class="sale-number">Venta #<strong id="currentSaleNumber">000001</strong></div></div>
+                        <section class="buyer-section">
+                            <div class="form-group" style="margin-bottom: 10px;">
+                                <label for="saleDetailInput" style="font-size: 1rem; color: #000;">Detalle de la venta / Nombre del Cliente (Opcional):</label>
+                                <input type="text" id="saleDetailInput" placeholder="Escriba aquí el nombre, número de mesa o detalle..." style="font-size: 1.1rem; background-color: #fff; color: #000;">
+                            </div>
+                            <div class="buyer-options" style="display: flex; gap: 10px; margin-top: 10px;">
+                                <label class="buyer-option active" style="padding: 8px; flex: 1;"><input type="radio" name="buyerType" value="retail" checked> Precio Menudeo</label>
+                                <label class="buyer-option" style="padding: 8px; flex: 1;"><input type="radio" name="buyerType" value="wholesale"> Precio Mayoreo</label>
+                            </div>
+                        </section>
+
+                        <section class="scanner-section">
+                            <div class="scanner-box">
+                                <div class="scanner-icon" style="font-size: 24px; color: #0066cc;">▣</div>
+                                <div class="scanner-input-wrapper"><label for="barcodeInput">Escáner / Código de Barras</label><input type="text" id="barcodeInput" placeholder="Escanee con pistola o ingrese código..." autocomplete="off" autofocus style="background-color: #fff !important; color: #000 !important;"></div>
+                                <button id="addBarcodeBtn" class="btn btn-primary">Agregar</button><button id="toggleCameraBtn" class="btn btn-secondary">📷 Usar Cámara</button>
+                            </div>
+                            <div id="cameraScannerContainer" class="camera-container hidden" style="margin-top: 15px; text-align: center;"><div id="interactiveReader" style="width: 100%; max-width: 400px; margin: 0 auto; border: 2px dashed #ccc; border-radius: 8px; background: #fff;"></div></div>
+                            <div id="notificationArea"></div>
+                        </section>
+
+                        <section class="catalog-section">
+                            <div class="catalog-heading" style="flex-direction: column; gap: 10px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center;"><h2>Catálogo de productos</h2><div class="product-count"><span id="productCount">0</span> productos</div></div>
+                                <label class="visually-hidden" for="searchProductInput">Buscar producto por nombre o código</label>
+                                <input type="text" id="searchProductInput" placeholder="🔍 Buscar producto por nombre o código..." style="border: 1px solid #999; border-radius: 8px; font-size: 1rem; width: 100%; background-color: #ffffff !important; color: #000000 !important;">
+                            </div>
+                            <div id="productGrid" class="product-grid"></div>
+                        </section>
+                    </section>
+
+                    <aside id="cartPanel" class="cart-panel">
+                        <div class="cart-header"><div><h2>Carrito</h2><span id="cartItemCount" style="font-size: 13px; color: #666;">0 productos</span></div><button id="clearCartBtn" class="btn btn-secondary btn-sm">Vaciar</button></div>
+                        <div id="cartItems" class="cart-items"><div class="empty-cart"><div class="empty-cart-icon">🛒</div><h3>Carrito vacío</h3></div></div>
+                        <div class="cart-footer">
+                            <div class="financial-summary">
+                                <div class="summary-row"><span>Subtotal</span><strong id="subtotal">C$0.00</strong></div>
+                                <div class="summary-row"><span>Tarifa aplicada</span><strong id="appliedRate">Menudeo</strong></div>
+                                <div class="summary-divider"></div>
+                                <div class="summary-row total-row"><span>Total</span><strong id="total">C$0.00</strong></div>
+                            </div>
+                            <div class="payment-section">
+                                <h3>Método de pago</h3>
+                                <div class="payment-options">
+                                    <label class="payment-option active"><input type="radio" name="paymentMethod" value="cash" checked> Contado</label>
+                                    <label class="payment-option"><input type="radio" name="paymentMethod" value="credit"> Crédito</label>
+                                </div>
+                                <div id="creditClientContainer" class="form-group hidden" style="margin-top: 15px; background: #f4f4f4; padding: 10px; border-radius: 8px; border: 1px solid #ddd;">
+                                    <label for="creditClientSelect" style="font-weight: bold; color: #d32f2f;">1. Seleccione el Cliente (Deudor):</label>
+                                    <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                                        <select id="creditClientSelect" style="flex: 1; padding: 8px; background-color: #fff !important; color: #000 !important;"></select>
+                                        <button type="button" id="quickAddClientBtn" class="btn btn-primary" style="padding: 0 15px; font-weight: bold;" title="Crear Nuevo Cliente">➕ Nuevo</button>
+                                    </div>
+                                    <label for="creditDays" style="font-weight: bold; color: #d32f2f;">2. Plazo para pagar (Días):</label>
+                                    <input type="number" id="creditDays" value="30" min="1" style="width: 100%; padding: 8px; font-size: 1.1em; background-color: #fff !important; color: #000 !important;">
+                                </div>
+                            </div>
+                            <button id="processSaleBtn" class="btn btn-success btn-full">Procesar / Cobrar Venta</button>
+                        </div>
+                    </aside>
+                </div>
+                <a class="mobile-cart-link" href="#cartPanel">Ir al carrito y cobrar</a>
+            </div>
+
+            <div id="inventoryView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading">
+                        <div><h1>Inventario y Existencias</h1><p>Control avanzado de Kardex, ajustes y alertas de stock.</p></div>
+                        <div style="display:flex; gap:10px;">
+                            <button id="addNewProductBtn" class="btn btn-primary" style="padding: 10px 20px;">➕ Nuevo Producto</button>
+                        </div>
+                    </div>
+                    <div class="summary-cards" style="margin-bottom: 15px;">
+                        <div class="summary-card" style="border-left:4px solid #28a745;"><span>Productos Activos</span><h3 id="invTotalProducts">0</h3></div>
+                        <div class="summary-card" style="border-left:4px solid #ff9800;"><span>Bajo Stock (Alerta)</span><h3 id="invLowStock" style="color:#ff9800;">0</h3></div>
+                        <div class="summary-card" style="border-left:4px solid #d32f2f;"><span>Agotados (0)</span><h3 id="invOutOfStock" style="color:#d32f2f;">0</h3></div>
+                    </div>
+                    <div class="history-table-container">
+                        <table class="history-table">
+                            <thead><tr><th>Foto</th><th>Código</th><th>Nombre</th><th>Stock Actual</th><th>Costo</th><th>Precios (Men/May)</th><th>Estado</th><th>Acciones</th></tr></thead>
+                            <tbody id="inventoryTableBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
+            <div id="purchasesView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading">
+                        <div><h1>Facturas de Compras</h1></div>
+                        <div style="display:flex; gap:10px;">
+                            <button id="addNewPurchaseBtn" class="btn btn-primary" style="padding: 10px 20px;">➕ Ingresar Nueva Factura</button>
+                        </div>
+                    </div>
+                    <div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Nº Factura</th><th>Proveedor</th><th>Detalle</th><th>Total Factura</th><th>Estado / Plazo</th><th>Acciones</th></tr></thead><tbody id="purchasesTableBody"><tr><td colspan="7" class="text-center">Sin registros.</td></tr></tbody></table></div>
+                </section>
+            </div>
+
+            <div id="payablesView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading"><div><h1>Cuentas por Pagar</h1></div></div>
+                    <div class="history-table-container"><table class="history-table"><thead><tr><th>ID</th><th>Proveedor</th><th>Teléfono</th><th>Próx. Vencimiento</th><th>Deuda Actual</th><th>Acciones</th></tr></thead><tbody id="payablesTableBody"><tr><td colspan="6" class="text-center">No hay cuentas por pagar pendientes.</td></tr></tbody></table></div>
+                </section>
+            </div>
+
+            <div id="clientsView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading">
+                        <div><h1>Cobros y Créditos (Clientes)</h1><p>Control de límites, historial de abonos y créditos vencidos.</p></div>
+                        <div style="display:flex; gap:10px;">
+                            <button id="addNewClientBtn" class="btn btn-primary" style="padding: 10px 20px;">➕ Nuevo Cliente</button>
+                        </div>
+                    </div>
+                    <div class="history-table-container">
+                        <table class="history-table">
+                            <thead><tr><th>ID / Cliente</th><th>Contacto</th><th>Límite de Crédito</th><th>Crédito Disponible</th><th>Deuda Actual</th><th>Estado</th><th>Acciones</th></tr></thead>
+                            <tbody id="clientsTableBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
+            <div id="suppliersView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading">
+                        <div><h1>Proveedores</h1></div>
+                        <div style="display:flex; gap:10px;">
+                            <button id="addNewSupplierBtn" class="btn btn-primary" style="padding: 10px 20px;">➕ Nuevo Proveedor</button>
+                        </div>
+                    </div>
+                    <div class="history-table-container"><table class="history-table"><thead><tr><th>Empresa</th><th>Contacto</th><th>Dirección</th><th>Total Comprado</th><th>Deuda Actual</th><th>Acciones</th></tr></thead><tbody id="suppliersTableBody"></tbody></table></div>
+                </section>
+            </div>
+
+            <div id="historyView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading"><div><h1>Historial Financiero y Ventas</h1></div></div>
+                    <div class="summary-cards" style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 20px;">
+                        <div class="summary-card" style="flex: 1; min-width: 150px; border-left: 4px solid #0066cc;"><span>Ventas del Día</span><h3 id="summaryTodaySales" style="color: #0066cc;">C$0.00</h3></div>
+                        <div class="summary-card" style="flex: 1; min-width: 150px; border-left: 4px solid #28a745;"><span>Ventas Totales</span><h3 id="summaryTotalSales" style="color: #28a745;">C$0.00</h3></div>
+                        <div class="summary-card" style="flex: 1; min-width: 150px;"><span>Ingresos Contado</span><h3 id="summaryCashSales">C$0.00</h3></div>
+                        <div class="summary-card" style="flex: 1; min-width: 150px;"><span>Ventas a Crédito</span><h3 id="summaryCreditSales">C$0.00</h3></div>
+                        <div class="summary-card" style="flex: 1; min-width: 150px; border-left: 4px solid #d32f2f;"><span>Gastos / Compras</span><h3 id="summaryTotalExpenses">C$0.00</h3></div>
+                    </div>
+                    <div style="display: flex; gap: 20px; margin-bottom: 25px; flex-wrap: wrap;">
+                        <div style="flex: 1; background: white; padding: 15px; border-radius: 8px; border: 1px solid #ffcdd2;">
+                            <h3 style="color: #d32f2f; margin-bottom: 10px; font-size: 1.1rem;">⚠️ Alertas de Bajo Stock</h3>
+                            <ul id="lowStockList" style="list-style: none; padding: 0; font-size: 0.9rem;"></ul>
+                        </div>
+                        <div style="flex: 1; background: white; padding: 15px; border-radius: 8px; border: 1px solid #c8e6c9;">
+                            <h3 style="color: #28a745; margin-bottom: 10px; font-size: 1.1rem;">⭐ Productos Más Vendidos</h3>
+                            <ul id="topSellingList" style="list-style: none; padding: 0; font-size: 0.9rem;"></ul>
+                        </div>
+                    </div>
+                    <div class="history-table-container"><table class="history-table"><thead><tr><th># Venta</th><th>Fecha y Hora</th><th>Vendedor</th><th>Detalle/Tarifa</th><th>Pago / Plazo</th><th>Total</th><th>Acciones</th></tr></thead><tbody id="historyTableBody"></tbody></table></div>
+                    <h2 style="margin-top: 40px; margin-bottom: 15px; color: #0066cc; border-bottom: 2px solid #ccc; padding-bottom: 5px;">Auditoría del Sistema</h2>
+                    <div class="history-table-container">
+                        <table class="history-table">
+                            <thead><tr><th>Fecha y Hora</th><th>Usuario / Cajero</th><th>Módulo</th><th>Acción</th><th>Detalle Técnico</th></tr></thead>
+                            <tbody id="auditTableBody"><tr><td colspan="5" class="text-center">Sin registros de auditoría.</td></tr></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
+            <div id="cajaView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading">
+                        <div><h1>Sistema de Caja</h1></div>
+                    </div>
+                    <div id="cajaAbrirBox" class="buyer-section">
+                        <div class="section-title"><h2>Abrir Caja</h2><p>Ingresa el efectivo inicial con el que comienza el turno.</p></div>
+                        <div class="form-group" style="max-width:250px; margin-bottom: 15px;">
+                            <label for="cajaEfectivoInicialInput">Efectivo Inicial (C$)</label>
+                            <input type="number" id="cajaEfectivoInicialInput" placeholder="0.00" min="0" step="0.01">
+                            <small id="cajaEfectivoInicialHint" style="color:#666; font-size:0.75rem; margin-top:4px; display:block;"></small>
+                        </div>
+                        <button id="abrirCajaBtn" class="btn btn-success">Abrir Caja</button>
+                    </div>
+                    <div id="cajaAbiertaBox" class="hidden">
+                        <div class="summary-cards">
+                            <div class="summary-card"><span>Abierta por</span><h3 id="cajaUsuarioApertura" style="font-size:16px;">-</h3></div>
+                            <div class="summary-card"><span>Fecha Apertura</span><h3 id="cajaFechaApertura" style="font-size:16px;">-</h3></div>
+                            <div class="summary-card" style="border-left:4px solid #0066cc;"><span>Efectivo Inicial</span><h3 id="cajaResumenInicial">C$0.00</h3></div>
+                            <div class="summary-card" style="border-left:4px solid #28a745;"><span>Ventas Contado</span><h3 id="cajaResumenVentas">C$0.00</h3></div>
+                            <div class="summary-card"><span>Entradas Manuales</span><h3 id="cajaResumenEntradas">C$0.00</h3></div>
+                            <div class="summary-card" style="border-left:4px solid #d32f2f;"><span>Salidas / Retiros</span><h3 id="cajaResumenSalidas">C$0.00</h3></div>
+                            <div class="summary-card" style="border-left:4px solid #ff9800;"><span>Efectivo Esperado</span><h3 id="cajaResumenEsperado">C$0.00</h3></div>
+                        </div>
+                        <section class="scanner-section">
+                            <div class="section-title"><h2>Registrar Movimiento</h2></div>
+                            <div class="scanner-box">
+                                <div class="scanner-input-wrapper"><label for="cajaMovimientoConcepto">Concepto</label><input type="text" id="cajaMovimientoConcepto" placeholder="Ej. Retiro para bolsas"></div>
+                                <div class="scanner-input-wrapper" style="max-width:150px;"><label for="cajaMovimientoMonto">Monto</label><input type="number" id="cajaMovimientoMonto" placeholder="0.00" min="0" step="0.01"></div>
+                                <button id="registrarEntradaBtn" class="btn btn-success">➕ Entrada</button>
+                                <button id="registrarSalidaBtn" class="btn btn-secondary" style="background:#d32f2f; color:#fff;">➖ Salida</button>
+                            </div>
+                        </section>
+                        <div class="history-table-container" style="margin-bottom:20px;"><table class="history-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Monto</th><th>Acción</th></tr></thead><tbody id="cajaMovimientosBody"></tbody></table></div>
+                        <button id="cerrarCajaBtn" class="btn btn-primary" style="background:#d32f2f;">🔒 Cerrar Caja / Arqueo</button>
+                    </div>
+                    <h2 style="margin:25px 0 10px;">Historial de Cierres</h2>
+                    <div class="history-table-container"><table class="history-table"><thead><tr><th>Apertura</th><th>Cierre</th><th>Cerrado por</th><th>Inicial</th><th>Esperado</th><th>Real</th><th>Diferencia</th></tr></thead><tbody id="cajaHistorialBody"><tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr></tbody></table></div>
+                </section>
+            </div>
+
+            <div id="gastosView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading">
+                        <div><h1>Gastos Operativos</h1></div>
+                    </div>
+                    <div class="summary-cards">
+                        <div class="summary-card" style="border-left:4px solid #d32f2f;"><span>Gastos de Hoy</span><h3 id="gastosResumenHoy" style="color:#d32f2f;">C$0.00</h3></div>
+                        <div class="summary-card" style="border-left:4px solid #0066cc;"><span>Gastos Totales</span><h3 id="gastosResumenTotal">C$0.00</h3></div>
+                    </div>
+                    <section class="scanner-section" style="background: #f8f9fa; border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
+                        <div class="section-title" style="margin-bottom: 10px;"><h2>Registrar Nuevo Gasto</h2></div>
+                        <form id="formRegistrarGasto" onsubmit="event.preventDefault(); window.registrarGastoSubmit();" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+                            <div class="form-group" style="flex: 1; min-width: 150px;"><label for="gastoCategoria">Categoría</label><select id="gastoCategoria" required></select></div>
+                            <div class="form-group" style="flex: 1; min-width: 150px;"><label for="gastoMetodo">Método de Pago</label><select id="gastoMetodo" required><option value="caja">Efectivo (Descuenta de Caja)</option><option value="banco">Transferencia / Tarjeta</option><option value="pendiente">Por Pagar</option></select></div>
+                            <div class="form-group" style="flex: 2; min-width: 200px;"><label for="gastoDescripcion">Descripción</label><input type="text" id="gastoDescripcion" placeholder="Ej. Pago de internet" required></div>
+                            <div class="form-group" style="flex: 1; min-width: 150px;"><label for="gastoComprobante">Comprobante</label><input type="text" id="gastoComprobante" placeholder="Nº Factura (Opcional)"></div>
+                            <div class="form-group" style="flex: 1; min-width: 120px;"><label for="gastoMonto">Monto (C$)</label><input type="number" id="gastoMonto" min="0.01" step="0.01" required></div>
+                            <div class="form-group"><button type="submit" class="btn btn-primary" style="background:#d32f2f; height: 42px;">➕ Guardar</button></div>
+                        </form>
+                    </section>
+                    <div class="history-table-container">
+                        <table class="history-table"><thead><tr><th>Fecha</th><th>Categoría</th><th>Descripción</th><th>Método / Ref</th><th>Monto</th><th>Registrado por</th><th>Acción</th></tr></thead><tbody id="gastosTableBody"><tr><td colspan="7" class="text-center">Sin gastos registrados.</td></tr></tbody></table>
+                    </div>
+                </section>
+            </div>
+
+            <div id="reportesView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading"><div><h1>Reportes</h1></div></div>
+                    <div class="buyer-section">
+                        <div class="section-title"><h2>Filtro de Fecha y Exportación</h2></div>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+                            <div class="form-group" style="max-width: 180px;"><label for="reporteDesdeInput">Desde</label><input type="date" id="reporteDesdeInput"></div>
+                            <div class="form-group" style="max-width: 180px;"><label for="reporteHastaInput">Hasta</label><input type="date" id="reporteHastaInput"></div>
+                            <button id="aplicarFiltroReporteBtn" class="btn btn-primary">Aplicar Filtro</button>
+                            <button id="filtroHoyBtn" class="btn btn-secondary">Hoy</button>
+                            <button id="filtroSemanaBtn" class="btn btn-secondary">Esta Semana</button>
+                            <button id="filtroMesBtn" class="btn btn-secondary">Este Mes</button>
+                            <button id="filtroTodoBtn" class="btn btn-secondary">Todo</button>
+                            <button onclick="window.exportarExcelReporte('repVentasBox', 'Reporte_Ventas')" class="btn btn-secondary" style="background:#107c41; color:white;">📊 Excel (Ventas)</button>
+                            <button onclick="window.exportarExcelReporte('repVendedoresBox', 'Reporte_Vendedores')" class="btn btn-secondary" style="background:#107c41; color:white;">📊 Excel (Vendedores)</button>
+                        </div>
+                        <p id="reporteRangoLabel" style="margin-top: 10px; color: #666; font-size: 0.9rem;"></p>
+                    </div>
+
+                    <div class="summary-cards">
+                        <div class="summary-card" style="border-left:4px solid #28a745;"><span>Ventas</span><h3 id="repVentas">C$0.00</h3></div>
+                        <div class="summary-card" style="border-left:4px solid #d32f2f;"><span>Compras</span><h3 id="repCompras">C$0.00</h3></div>
+                        <div class="summary-card" style="border-left:4px solid #ff9800;"><span>Gastos</span><h3 id="repGastos">C$0.00</h3></div>
+                        <div class="summary-card" style="border-left:4px solid #0066cc;"><span>Utilidad Neta Aprox.</span><h3 id="repUtilidad">C$0.00</h3></div>
+                        <div class="summary-card"><span>Cuentas por Cobrar</span><h3 id="repCxC" style="color:#d32f2f;">C$0.00</h3></div>
+                        <div class="summary-card"><span>Cuentas por Pagar</span><h3 id="repCxP" style="color:#d32f2f;">C$0.00</h3></div>
+                    </div>
+
+                    <div class="nav-tabs" style="background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:5px; margin-bottom:15px; flex-wrap: wrap; position: static;">
+                        <button class="nav-btn rep-subtab active" data-target="repVentasBox">Ventas</button>
+                        <button class="nav-btn rep-subtab" data-target="repVendedoresBox">Vendedores</button>
+                        <button class="nav-btn rep-subtab" data-target="repComprasBox">Compras</button>
+                        <button class="nav-btn rep-subtab" data-target="repInventarioBox">Inventario</button>
+                        <button class="nav-btn rep-subtab" data-target="repCajaBox">Caja</button>
+                        <button class="nav-btn rep-subtab" data-target="repGastosBox">Gastos</button>
+                        <button class="nav-btn rep-subtab" data-target="repCxCBox">Cuentas por Cobrar</button>
+                        <button class="nav-btn rep-subtab" data-target="repCxPBox">Cuentas por Pagar</button>
+                    </div>
+
+                    <div id="repVentasBox" class="rep-subview">
+                        <h2 style="margin-bottom:10px;">Ventas por Método de Pago</h2>
+                        <div class="history-table-container" style="margin-bottom:25px;"><table class="history-table"><thead><tr><th>Método</th><th># Ventas</th><th>Total</th></tr></thead><tbody id="repVentasMetodoBody"></tbody></table></div>
+                        <h2 style="margin-bottom:10px;">Productos Más Vendidos</h2>
+                        <div class="history-table-container"><table class="history-table"><thead><tr><th>Producto</th><th>Cantidad Vendida</th><th>Total Generado</th></tr></thead><tbody id="repTopProductosBody"></tbody></table></div>
+                    </div>
+
+                    <div id="repVendedoresBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Ventas por Vendedor</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Vendedor</th><th># Ventas</th><th>Contado</th><th>Crédito</th><th>Total</th></tr></thead><tbody id="repVendedoresBody"></tbody></table></div></div>
+                    <div id="repComprasBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Compras del Periodo</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Factura</th><th>Proveedor</th><th>Condición</th><th>Total</th></tr></thead><tbody id="repComprasBody"></tbody></table></div></div>
+                    <div id="repInventarioBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Estado de Inventario</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Producto</th><th>Stock</th><th>Costo</th><th>Valor en Costo</th><th>Estado</th></tr></thead><tbody id="repInventarioBody"></tbody></table></div></div>
+                    <div id="repCajaBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cierres de Caja</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Apertura</th><th>Cierre</th><th>Cerrado por</th><th>Esperado</th><th>Real</th><th>Diferencia</th></tr></thead><tbody id="repCajaBody"></tbody></table></div></div>
+                    <div id="repGastosBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Gastos por Categoría</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Categoría</th><th># Gastos</th><th>Total</th></tr></thead><tbody id="repGastosCategoriaBody"></tbody></table></div></div>
+                    <div id="repCxCBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cuentas por Cobrar</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Cliente</th><th>Límite</th><th>Deuda</th><th>Estado</th></tr></thead><tbody id="repCxCBody"></tbody></table></div></div>
+                    <div id="repCxPBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cuentas por Pagar</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Proveedor</th><th>Deuda</th></tr></thead><tbody id="repCxPBody"></tbody></table></div></div>
+                </section>
+            </div>
+
+            <div id="dashboardView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <h1>Dashboard de Gestión</h1>
+                            <p>Indicadores clave del negocio y cálculo de ganancia real en tiempo real.</p>
+                        </div>
+                        <div>
+                            <button onclick="window.generarExcelDashboard()" class="btn btn-secondary" style="background:#107c41; color:#fff; border-color:#107c41;">📊 Exportar Dashboard a Excel</button>
+                        </div>
+                    </div>
+
+                    <div class="buyer-section" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 20px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                        <h2 style="margin-bottom: 15px; color: #0f172a; font-size: 1.15rem; border-bottom: 2px solid #2563eb; padding-bottom: 8px;">💰 Ganancia Real (Análisis del Negocio)</h2>
+                        <div style="max-width: 450px; font-family: monospace; font-size: 1.05rem; background: #f8fafc; padding: 18px; border-radius: 8px; border: 1px solid #e2e8f0;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span>Ventas:</span>
+                                <strong id="dashGananciaVentas" style="color: #2563eb;">C$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span>Costo mercancía:</span>
+                                <strong id="dashGananciaCosto" style="color: #dc2626;">C$0.00</strong>
+                            </div>
+                            <div style="border-top: 2px dashed #94a3b8; margin: 10px 0;"></div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-weight: bold; font-size: 1.15rem;">
+                                <span>Ganancia bruta:</span>
+                                <strong id="dashGananciaBruta" style="color: #16a34a;">C$0.00</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; color: #64748b;">
+                                <span>- Gastos:</span>
+                                <strong id="dashGananciaGastos" style="color: #dc2626;">C$0.00</strong>
+                            </div>
+                            <div style="border-top: 2px double #0f172a; margin: 10px 0; padding-top: 6px;"></div>
+                            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.25rem; background: #e0f2fe; padding: 10px; border-radius: 6px;">
+                                <span>= Ganancia estimada:</span>
+                                <strong id="dashGananciaEstimada" style="color: #0284c7;">C$0.00</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h2 style="margin-bottom: 15px; color: #0f172a;">📊 Indicadores Clave en Tiempo Real</h2>
+                    <div class="summary-cards">
+                        <div class="summary-card" style="border-left: 4px solid #2563eb;">
+                            <span>Ventas de Hoy</span>
+                            <h3 id="dashVentasHoy" style="color: #2563eb;">C$0.00</h3>
+                        </div>
+                        <div class="summary-card" style="border-left: 4px solid #16a34a;">
+                            <span>Ventas del Mes</span>
+                            <h3 id="dashVentasMes" style="color: #16a34a;">C$0.00</h3>
+                        </div>
+                        <div class="summary-card" style="border-left: 4px solid #0284c7;">
+                            <span>Ganancia Estimada</span>
+                            <h3 id="dashGanancia" style="color: #0284c7;">C$0.00</h3>
+                        </div>
+                        <div class="summary-card" style="border-left: 4px solid #8b5cf6;">
+                            <span>Productos Vendidos</span>
+                            <h3 id="dashProdsVendidos">0 uds.</h3>
+                        </div>
+                        <div class="summary-card" style="border-left: 4px solid #d97706;">
+                            <span>Productos con bajo stock</span>
+                            <h3 id="dashBajoStock" style="color: #d97706;">0</h3>
+                        </div>
+                        <div class="summary-card" style="border-left: 4px solid #dc2626;">
+                            <span>Crédito pendiente (CxC)</span>
+                            <h3 id="dashCxC" style="color: #dc2626;">C$0.00</h3>
+                        </div>
+                        <div class="summary-card" style="border-left: 4px solid #e11d48;">
+                            <span>Cuentas por pagar (CxP)</span>
+                            <h3 id="dashCxP" style="color: #e11d48;">C$0.00</h3>
+                        </div>
+                        <div class="summary-card" style="border-left: 4px solid #64748b;">
+                            <span>Gastos Totales</span>
+                            <h3 id="dashGastos" style="color: #64748b;">C$0.00</h3>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 25px;">
+                        <h2 style="margin-bottom: 12px; color: #0f172a;">👥 Ventas por Vendedor</h2>
+                        <div class="history-table-container">
+                            <table class="history-table">
+                                <thead>
+                                    <tr>
+                                        <th>Vendedor</th>
+                                        <th># Ventas Realizadas</th>
+                                        <th>Total Vendido</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dashVendedoresBody">
+                                    <tr><td colspan="3" class="text-center">Cargando datos del equipo...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <div id="configView" class="view-panel hidden">
+                <section class="history-container">
+                    <div class="page-heading">
+                        <div>
+                            <h1>Configuración del Negocio</h1>
+                            <p>Personaliza los datos de tu empresa, moneda y tickets.</p>
+                        </div>
+                        <button id="saveConfigBtn" class="btn btn-primary" onclick="window.guardarConfiguracion()">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: sub; margin-right: 5px;"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+    Guardar Cambios
+</button>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+                        <div class="buyer-section" style="background: white; padding: 20px; border-radius: 8px; border: 1px solid #ddd;">
+                            <h3 style="margin-bottom: 15px; color: #0066cc;">🏢 Datos del Negocio</h3>
+                            <div class="form-group">
+                                <label for="confLogoInput">Logo del Negocio (Opcional)</label>
+                                <input type="file" id="confLogoInput" accept="image/*">
+                                <img id="confLogoPreview" src="" style="max-width: 150px; height: auto; object-fit: contain; display: none; margin-top: 10px; border-radius: 4px; border: 1px dashed #ccc;">
+                            </div>
+                            <div class="form-group"><label for="confName">Nombre del Negocio</label><input type="text" id="confName"></div>
+                            <div class="form-group"><label for="confRuc">RUC</label><input type="text" id="confRuc"></div>
+                            <div class="form-group"><label for="confAddress">Dirección</label><input type="text" id="confAddress"></div>
+                            <div class="form-group"><label for="confPhone">Teléfono</label><input type="text" id="confPhone"></div>
+                            <div class="form-group"><label for="confCurrency">Símbolo de Moneda (Ej. C$, $, €)</label><input type="text" id="confCurrency"></div>
+                        </div>
+                        
+                        <div class="buyer-section" style="background: white; padding: 20px; border-radius: 8px; border: 1px solid #ddd;">
+                            <h3 style="margin-bottom: 15px; color: #0066cc;">🧾 Ventas y Ticket</h3>
+                            <div class="form-group"><label for="confHeader">Encabezado del Ticket</label><input type="text" id="confHeader" placeholder="Ej. Sucursal Centro"></div>
+                            <div class="form-group"><label for="confFooter">Pie de Ticket / Agradecimiento</label><input type="text" id="confFooter" placeholder="¡Gracias por su compra!"></div>
+                        </div>
+
+                        <div class="buyer-section" style="background: white; padding: 20px; border-radius: 8px; border: 1px solid #ddd;">
+                            <h3 style="margin-bottom: 15px; color: #0066cc;">📦 Inventario</h3>
+                            <div class="form-group"><label for="confMinStock">Alerta de Stock Mínimo Global</label><input type="number" id="confMinStock" value="5"></div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- MODALES -->
+    <div id="authModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Autorización Requerida</h2><form id="authForm" onsubmit="event.preventDefault();"><div class="form-group"><label for="gestorPassword">Contraseña de gestor</label><input type="password" id="gestorPassword" placeholder="Contraseña de gestor" required style="background:#fff!important; color:#000!important;"></div><div id="authError" class="message error hidden">Contraseña incorrecta.</div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-primary">Autorizar</button></div></form></div></div>
+    
+    <div id="cashModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Cobro en Efectivo</h2><p style="margin-bottom: 15px;">Total a pagar: <strong id="cashTotalDisplay" style="font-size: 1.3em; color: #0066cc;">C$0.00</strong></p><div class="form-group"><label for="cashReceivedInput">Efectivo recibido (C$)</label><input type="number" id="cashReceivedInput" placeholder="Ej. 500" min="0" step="0.01" style="background:#fff!important; color:#000!important;"></div><div id="cashError" class="message error hidden">Monto insuficiente.</div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="button" id="confirmCashBtn" class="btn btn-primary">Cobrar</button></div></div></div>
+
+    <div id="cierreCajaModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Cierre de Caja</h2><p style="margin-bottom: 15px;">Efectivo esperado según el sistema: <strong id="cajaEsperadoDisplay" style="font-size: 1.3em; color: #0066cc;">C$0.00</strong></p><div class="form-group"><label for="cajaEfectivoRealInput">Efectivo real contado (C$)</label><input type="number" id="cajaEfectivoRealInput" placeholder="0.00" min="0" step="0.01"></div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="button" id="confirmCierreCajaBtn" class="btn btn-primary">Confirmar Cierre</button></div></div></div>
+    
+    <div id="ticketModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="ticket-modal">
+            <div class="ticket-header-actions" style="background: #fff; justify-content: flex-end; padding-bottom: 0;">
+                <button id="closeTicketBtn" class="modal-close" aria-label="Cerrar comprobante" style="background: #f4f4f4; border-radius: 50%; width: 30px; height: 30px;">&times;</button>
+            </div>
+            <div id="ticketContent" class="ticket-content"></div>
+            <div class="ticket-actions">
+                <button id="printTicketBtn" class="btn btn-primary" onclick="window.imprimirTicket()">🖨️ Imprimir</button>
+                <button id="pdfTicketBtn" class="btn btn-secondary" style="background:#ff9800; color:white;">📄 Guardar PDF</button>
+                <button id="newSaleBtn" class="btn btn-secondary">Cerrar</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="statementModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card" style="width: 95%; max-width: 900px; max-height: 90vh; overflow-y: auto; border-top: 5px solid #0066cc;"><h2 id="statementModalTitle">Historial y Estado de Cuenta</h2><p id="statementModalSubtitle" style="color: #444; font-size: 1.1em; margin-bottom: 15px; font-weight: bold; background: #e3f2fd; padding: 10px; border-radius: 6px;"></p><div style="overflow-x: auto; width: 100%; border: 1px solid #eee; margin-bottom: 15px; border-radius: 4px;"><table class="history-table" style="width: 100%; min-width: 700px;"><thead><tr style="background:#f4f4f4;"><th>Fecha / Vence</th><th>Ref.</th><th>Detalle</th><th>Cargo (Crédito)</th><th>Abono (Pago)</th><th>Saldo Restante</th><th>Ticket</th></tr></thead><tbody id="statementTableBody"></tbody></table></div><div class="modal-actions" style="margin-top: 15px;"><button type="button" class="btn btn-secondary close-modal-btn">Cerrar</button></div></div></div>
+
+    <div id="productModal" class="modal hidden" style="z-index: 2100;">
+        <div class="modal-overlay"></div>
+        <div class="modal-card" style="width: 95%; max-width: 550px; max-height: 90vh; overflow-y: auto;">
+            <h2 id="productModalTitle">Nuevo Producto</h2>
+            <form id="productForm" onsubmit="event.preventDefault();">
+                <input type="hidden" id="prodId">
+                <div class="form-group">
+                    <label for="prodImageInput">Foto del Producto (Opcional)</label>
+                    <input type="file" id="prodImageInput" accept="image/*" capture="environment">
+                    <img id="prodImagePreview" src="" style="width: 100px; height: 100px; object-fit: cover; display: none; margin-top: 10px; border-radius: 8px; border: 2px solid #0066cc;">
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <div class="form-group" style="flex: 1; min-width: 250px;">
+                        <label for="prodBarcode">Código de Barras</label>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" id="prodBarcode" placeholder="Escanear o escribir..." style="flex: 1;" required>
+                            <button type="button" class="btn btn-secondary" id="scanProdBarcodeBtn" onclick="window.toggleProdCamera()" style="padding: 0 10px;">📷 Escanear</button>
+                        </div>
+                        <div id="prodCameraScannerContainer" class="hidden" style="margin-top: 10px; border: 2px dashed #ccc; padding: 5px; border-radius: 4px;">
+                            <div id="prodInteractiveReader" style="width: 100%; max-width: 300px; margin: 0 auto;"></div>
+                        </div>
+                    </div>
+                    <div class="form-group" style="flex: 2; min-width: 200px;"><label for="prodName">Nombre del Producto</label><input type="text" id="prodName" required></div>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <div class="form-group" style="flex: 1; min-width: 130px;">
+                        <label for="prodCategory">Categoría</label>
+                        <select id="prodCategory" required>
+                            <option value="Abarrotes">Abarrotes</option>
+                            <option value="Bebidas">Bebidas</option>
+                            <option value="Snacks">Snacks</option>
+                            <option value="Limpieza">Limpieza</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 130px;"><label for="prodSupplier">Proveedor (Opcional)</label><select id="prodSupplier"><option value="">-- Sin especificar --</option></select></div>
+                </div>
+                <div class="form-group" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; margin-bottom:14px;">
+                    <label for="prodCost">Costo (C$)</label><input type="number" id="prodCost" step="0.01" min="0" placeholder="0.00" required>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; background:#eff4ff; border:1px solid #dbeafe; border-radius:8px; padding:10px 12px; margin-bottom:10px;">
+                    <div class="form-group" style="flex: 1; min-width: 110px; margin-bottom:0;"><label for="prodMargenRetail">Margen % (Precio 1 / Menudeo)</label><input type="number" id="prodMargenRetail" step="0.01" value="10"></div>
+                    <div class="form-group" style="flex: 1; min-width: 110px; margin-bottom:0;"><label for="prodRetail">Precio 1 / Menudeo (C$)</label><input type="number" id="prodRetail" step="0.01" min="0" required></div>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; background:#eff4ff; border:1px solid #dbeafe; border-radius:8px; padding:10px 12px; margin-bottom:14px;">
+                    <div class="form-group" style="flex: 1; min-width: 110px; margin-bottom:0;"><label for="prodMargenWholesale">Margen % (Precio 2 / Mayoreo)</label><input type="number" id="prodMargenWholesale" step="0.01" value="10"></div>
+                    <div class="form-group" style="flex: 1; min-width: 110px; margin-bottom:0;"><label for="prodWholesale">Precio 2 / Mayoreo (C$)</label><input type="number" id="prodWholesale" step="0.01" min="0" required></div>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <div class="form-group" style="flex: 1; min-width: 90px;"><label for="prodStock">Stock Inicial</label><input type="number" id="prodStock" value="0" min="0" required></div>
+                    <div class="form-group" style="flex: 1; min-width: 90px;"><label for="prodMinStock">Stock Mínimo (Alerta)</label><input type="number" id="prodMinStock" value="5" min="0" required></div>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
+                    <div class="form-group" style="flex: 1; min-width: 90px;"><label for="prodStatus">Estado</label><select id="prodStatus"><option value="true">Activo</option><option value="false">Inactivo (Desactivado)</option></select></div>
+                </div>
+                <div class="modal-actions" style="margin-top: 15px;">
+                    <button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Guardar Producto</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <div id="clientModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2 id="clientModalTitle">Nuevo Cliente (Cuenta por Cobrar)</h2><form id="clientForm" onsubmit="event.preventDefault();"><input type="hidden" id="clientId"><div class="form-group"><label for="clientName">Nombre</label><input type="text" id="clientName" required></div><div class="form-group"><label for="clientRuc">Identificación / RUC (Opcional)</label><input type="text" id="clientRuc" placeholder="Ej: 001-000000-0000A"></div><div class="form-group"><label for="clientPhone">Teléfono</label><input type="text" id="clientPhone"></div><div class="form-group"><label for="clientAddress">Dirección</label><input type="text" id="clientAddress" placeholder="Dirección completa"></div><div class="form-group"><label for="clientLimit">Límite Autorizado (C$)</label><input type="number" id="clientLimit" step="0.01" value="5000" required></div><div class="form-group"><label for="clientDebt">Deuda Previa Inicial (C$)</label><input type="number" id="clientDebt" step="0.01" value="0" required><small id="clientDebtHint" style="color:#666; font-size:0.75rem;"></small></div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-primary">Guardar Cliente</button></div></form></div></div>
+    
+    <div id="paymentModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Registrar Abono de Cliente</h2><form id="paymentForm" onsubmit="event.preventDefault();"><input type="hidden" id="payClientId"><p>Cliente: <strong id="payClientName"></strong></p><p>Deuda Actual: <strong id="payClientDebt" style="color:red;"></strong></p><div class="form-group"><label for="payAmount">Abono a recibir (C$)</label><input type="number" id="payAmount" step="0.01" required></div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-success">Guardar Abono</button></div></form></div></div>
+
+    <div id="paymentSaleModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Abonar a Venta</h2><form id="paymentSaleForm" onsubmit="event.preventDefault();"><input type="hidden" id="paySaleId"><p>Venta: <strong id="paySaleNumero"></strong></p><p>Cliente: <strong id="paySaleCliente"></strong></p><p>Saldo Pendiente: <strong id="paySaleSaldo" style="color:red;"></strong></p><div class="form-group"><label for="paySaleAmount">Abono a recibir (C$)</label><input type="number" id="paySaleAmount" step="0.01" required></div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-success">Guardar Abono</button></div></form></div></div>
+
+    <div id="paymentInvoiceModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Abonar a Factura</h2><form id="paymentInvoiceForm" onsubmit="event.preventDefault();"><input type="hidden" id="payInvoiceId"><p>Factura: <strong id="payInvoiceNumero"></strong></p><p>Proveedor: <strong id="payInvoiceProveedor"></strong></p><p>Saldo Pendiente: <strong id="payInvoiceSaldo" style="color:#d32f2f;"></strong></p><div class="form-group"><label for="payInvoiceAmount">Monto a Abonar (C$)</label><input type="number" id="payInvoiceAmount" step="0.01" required></div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-success">Guardar Abono</button></div></form></div></div>
+    
+    <div id="supplierModal" class="modal hidden" style="z-index: 10050;">
+        <div class="modal-overlay"></div>
+        <div class="modal-card">
+            <h2 id="supplierModalTitle">Nuevo Proveedor</h2>
+            <form id="supplierForm" onsubmit="event.preventDefault();">
+                <input type="hidden" id="supplierId">
+                <div class="form-group"><label for="suppName">Empresa / Nombre</label><input type="text" id="suppName" required></div>
+                <div class="form-group"><label for="suppContact">Contacto</label><input type="text" id="suppContact" required></div>
+                <div class="form-group"><label for="suppPhone">Teléfono</label><input type="text" id="suppPhone" required></div>
+                <div class="form-group"><label for="suppRuc">RUC (Si aplica)</label><input type="text" id="suppRuc"></div>
+                <div class="form-group"><label for="suppAddress">Dirección</label><input type="text" id="suppAddress"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Guardar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="purchaseModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-card" style="width: 95%; max-width: 750px; max-height: 95vh; overflow-y: auto;">
+            <h2 id="purchaseModalTitle">Registrar Factura de Compra</h2>
+            <form id="purchaseForm" onsubmit="event.preventDefault();">
+                <input type="hidden" id="purchId">
+                <div style="display: flex; gap: 10px; margin-bottom: 15px; background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; flex-wrap: wrap;">
+                    <div class="form-group" style="flex: 2; min-width: 200px; position: relative; z-index: 10;">
+                        <label for="purchSupplier">Proveedor</label>
+                        <div style="display:flex; gap:5px;">
+                            <input type="text" id="purchSupplier" list="supplierDataList" placeholder="Escriba el nombre..." autocomplete="off" required style="flex:1;">
+                            <datalist id="supplierDataList"></datalist>
+                            <button type="button" id="quickAddSupplierFromPurchBtn" class="btn" style="background:#0066cc; color:white; padding:0 12px; font-weight:bold; border-radius:6px; position: relative; z-index: 11;" title="Crear Nuevo Proveedor Rápidamente">➕</button>
+                        </div>
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 120px;"><label for="purchInvoice">Nº Factura</label><input type="text" id="purchInvoice" placeholder="Ej: F-1029" required></div>
+                    <div class="form-group" style="flex: 1; min-width: 150px;"><label for="purchType">Condición</label><select id="purchType" required><option value="contado">Al Contado</option><option value="credito">Al Crédito (Deuda)</option></select></div>
+                    <div class="form-group" id="purchDaysContainer" style="flex: 1; min-width: 100px; display: none;"><label for="purchDays" style="color:#d32f2f; font-weight:bold;">Plazo (Días)</label><input type="number" id="purchDays" value="30" min="1"></div>
+                </div>
+                <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #bbdefb;">
+                    <h4 style="margin-bottom: 10px; color: #0066cc;">Agregar Productos al Inventario</h4>
+                    <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                        <div class="form-group" style="flex: 1; min-width: 200px;"><label for="purchProductTemp">Producto</label><div style="display: flex; gap: 5px;"><input type="text" id="purchProductTemp" list="productDataList" placeholder="Nombre del producto..." style="flex: 1;"><button type="button" id="quickAddProductFromPurchBtn" class="btn" style="background:#ff9800; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Crear Nuevo Producto Rápidamente">➕</button><button type="button" id="quickEditProductFromPurchBtn" class="btn" style="background:#64748b; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Editar el producto escrito arriba">✏️</button></div><datalist id="productDataList"></datalist></div>
+                        <div class="form-group" style="flex: 1; min-width: 70px; max-width: 100px;"><label for="purchQtyTemp">Cant.</label><input type="number" id="purchQtyTemp" min="1" value="1"></div>
+                        <div class="form-group" style="flex: 1; min-width: 100px; max-width: 140px;"><label for="purchCostTemp">Costo c/u</label><input type="number" id="purchCostTemp" step="0.01"></div>
+                        <div style="margin-bottom: 1rem; flex-shrink: 0;"><button type="button" id="btnAddItemToPurch" class="btn btn-secondary" style="height: 44px; padding: 0 15px; font-weight: bold;">➕ Agregar</button></div>
+                    </div>
+                </div>
+                <div style="overflow-x: auto; width: 100%; border: 1px solid #eee; margin-bottom: 15px; border-radius: 4px;">
+                    <table class="history-table" style="width: 100%; min-width: 500px;">
+                        <thead><tr style="background:#f4f4f4;"><th>Producto</th><th>Cant.</th><th>Costo</th><th>Subtotal</th><th>X</th></tr></thead>
+                        <tbody id="purchCartBody"><tr><td colspan="5" class="text-center" style="color:#999;">Aún no hay productos en esta factura.</td></tr></tbody>
+                    </table>
+                </div>
+                <div style="text-align: right; font-size: 1.4rem; margin-bottom: 15px;">Total Factura: <strong id="purchTotalDisplay" style="color: #000;">C$0.00</strong></div>
+                <div class="modal-actions" style="border-top: 1px solid #eee; padding-top: 15px;">
+                    <button type="button" class="btn btn-secondary" onclick="window.cancelarCompraForm()">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Guardar Factura Completa</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <div id="payablePaymentModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Abonar a Proveedor</h2><form id="payablePaymentForm" onsubmit="event.preventDefault();"><input type="hidden" id="payableSupplierId"><p>Proveedor: <strong id="payableSupplierName"></strong></p><p>Deuda Actual: <strong id="payableDebt" style="color:#d32f2f;"></strong></p><div class="form-group"><label for="payableAmount">Monto a Abonar (C$)</label><input type="number" id="payableAmount" step="0.01" required></div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-success">Guardar Abono</button></div></form></div></div>
+    
+    <div id="kardexModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-card" style="width: 95%; max-width: 800px; max-height: 90vh; overflow-y: auto;">
+            <h2 id="kardexModalTitle">Kardex de Producto</h2>
+            <p id="kardexModalSubtitle" style="color: #666; margin-bottom: 15px;"></p>
+            <div class="history-table-container">
+                <table class="history-table">
+                    <thead><tr><th>Fecha</th><th>Tipo</th><th>Cantidad</th><th>Precio Unitario</th><th>Stock Final</th><th>Motivo / Ref</th><th>Usuario</th></tr></thead>
+                    <tbody id="kardexTableBody"></tbody>
+                </table>
+            </div>
+            <div class="modal-actions" style="margin-top: 15px;"><button type="button" class="btn btn-secondary close-modal-btn">Cerrar</button></div>
+        </div>
+    </div>
+
+    <div id="ajusteInventarioModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-card">
+            <h2>Ajuste de Inventario / Merma</h2>
+            <p id="ajusteProductoNombre" style="font-weight: bold; margin-bottom: 15px;"></p>
+            <form id="ajusteInventarioForm" onsubmit="event.preventDefault(); window.guardarAjusteInventario();">
+                <input type="hidden" id="ajusteProductoId">
+                <div class="form-group">
+                    <label for="ajusteTipo">Tipo de Ajuste</label>
+                    <select id="ajusteTipo" required>
+                        <option value="MERMA">Merma (Daño, Pérdida, Vencimiento) [-]</option>
+                        <option value="AJUSTE_POSITIVO">Ajuste Positivo (Sobrante físico) [+]</option>
+                    </select>
+                </div>
+                <div class="form-group"><label for="ajusteCantidad">Cantidad a ajustar</label><input type="number" id="ajusteCantidad" min="1" step="1" required></div>
+                <div class="form-group"><label for="ajusteMotivo">Motivo detallado</label><input type="text" id="ajusteMotivo" placeholder="Ej. 2 botellas rotas en almacén" required></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button>
+                    <button type="submit" class="btn btn-primary" style="background: #ff9800;">Guardar Ajuste</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="anularVentaModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-card">
+            <h2 style="color: #d32f2f;">Anular Venta / Devolución</h2>
+            <p style="margin-bottom: 10px;">Venta: <strong id="anularVentaNumero"></strong></p>
+            <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">Al anular, los productos volverán al stock físico y la caja o crédito se actualizarán automáticamente.</p>
+            <form id="anularVentaForm" onsubmit="event.preventDefault(); window.confirmarAnularVenta();">
+                <input type="hidden" id="anularVentaId">
+                <div class="form-group">
+                    <label for="anularVentaMotivo">Motivo de Anulación</label>
+                    <input type="text" id="anularVentaMotivo" placeholder="Ej. Devolución de cliente..." required>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button>
+                    <button type="submit" class="btn btn-primary" style="background:#d32f2f;">Confirmar Anulación</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="anularRegistroModal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-card">
+            <h2 id="anularRegistroTitulo" style="color: #d32f2f;">Anular Registro</h2>
+            <p id="anularRegistroDescripcion" style="margin-bottom: 10px;"></p>
+            <form id="anularRegistroForm" onsubmit="event.preventDefault(); window.confirmarAnularRegistro();">
+                <div class="form-group">
+                    <label for="anularRegistroMotivo">Motivo de Anulación</label>
+                    <input type="text" id="anularRegistroMotivo" placeholder="Ej. Error de digitación, devolución..." required>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button>
+                    <button type="submit" class="btn btn-primary" style="background:#d32f2f;">Confirmar Anulación</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="strictConfirmModal" class="modal hidden" style="z-index: 9999;">
+        <div class="modal-overlay"></div>
+        <div class="modal-card" style="width: 400px; border-top: 5px solid #d32f2f;">
+            <h2 style="color: #d32f2f; margin-bottom: 10px; font-size: 1.2rem;">⚠️ Acción irreversible</h2>
+            <p id="strictConfirmMessage" style="margin-bottom: 15px; font-size: 0.95rem; color: #444; line-height: 1.4;"></p>
+            <div class="form-group">
+                <label for="strictConfirmInput">Escriba <strong>ELIMINAR</strong> para confirmar:</label>
+                <input type="text" id="strictConfirmInput" autocomplete="off" placeholder="ELIMINAR">
+            </div>
+            <div id="strictConfirmError" class="message error hidden">Debe escribir la palabra exacta para continuar.</div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button>
+                <button type="button" id="strictConfirmBtn" class="btn btn-primary" style="background-color:#d32f2f;">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="customAlertModal" class="modal hidden" style="z-index: 9999;"><div class="modal-overlay"></div><div class="modal-card" style="width: 350px; text-align: center; border-top: 5px solid #0066cc;"><h2 style="color: #0066cc; margin-bottom: 10px; font-size: 1.3rem;">Aviso del Sistema</h2><p id="customAlertMessage" style="margin-bottom: 20px; font-size: 1rem; color: #444; line-height: 1.4;"></p><button type="button" class="btn btn-primary btn-full close-modal-btn">Entendido</button></div></div>
+    <div id="customConfirmModal" class="modal hidden" style="z-index: 9999;"><div class="modal-overlay"></div><div class="modal-card" style="width: 350px; text-align: center; border-top: 5px solid #d32f2f;"><h2 style="color: #d32f2f; margin-bottom: 10px; font-size: 1.3rem;">Confirmar Acción</h2><p id="customConfirmMessage" style="margin-bottom: 20px; font-size: 1rem; color: #444; line-height: 1.4;"></p><div class="modal-actions" style="justify-content: center; gap: 15px;"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="button" id="customConfirmBtn" class="btn btn-primary" style="background-color: #d32f2f;">Sí, confirmar</button></div></div></div>
+
+    <script src="app.js"></script>
+    <script src="icons.js"></script>
+</body>
+</html>
