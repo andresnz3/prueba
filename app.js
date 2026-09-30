@@ -26,7 +26,7 @@ let products = [], clients = [], suppliers = [], purchasesHistory = [], salesHis
 let cajaActual = null, cajaHistorial = [], gastosHistory = [], abonosHistory = [], auditHistory = [];
 let buyerType = "retail", paymentMethod = "cash", currentUser = null;
 let unlockedModuleId = null;
-let saleNumber = 1, totalTemporal = 0, pendingAdminView = null, tempImageBase64 = null, tempConfigLogoBase64 = null;
+let saleNumber = 1, totalTemporal = 0, subtotalTemporal = 0, descuentoPct = 0, descuentoMonto = 0, pendingAdminView = null, tempImageBase64 = null, tempConfigLogoBase64 = null;
 let procesandoVenta = false;
 let ticketEsVentaNueva = false;
 let html5QrCode = null, isCameraActive = false;
@@ -56,6 +56,8 @@ function escapeHtml(str) {
 }
 
 const r2 = value => Math.round((Number(value) || 0) * 100) / 100;
+const mediosPagoVenta = { cash: "Efectivo", card: "Tarjeta", transfer: "Transferencia", credit: "Crédito" };
+function obtenerMedioPagoVenta(venta) { return venta.medioPago || ({ "Contado": "cash", "Tarjeta": "card", "Transferencia": "transfer", "Crédito": "credit" }[venta.metodo] || "cash"); }
 const fechaLocalISO = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const esHoyTS = timestamp => new Date(timestamp).toLocaleDateString() === new Date().toLocaleDateString();
 const MSG_SIN_CAJA = "No hay una caja abierta. Un administrador debe abrir la caja en la sección Caja antes de cobrar en efectivo.";
@@ -93,6 +95,18 @@ async function initApp() {
         abonosHistory = await localDB.abonos.toArray() || [];
         gastosHistory = await localDB.gastos.toArray() || [];
         auditHistory = await localDB.audit_logs.toArray() || [];
+        for (const client of clients) {
+            const deudaMigrada = client.deudaSinFactura === undefined;
+            if (deudaMigrada) {
+                client.deudaSinFactura = r2(Math.max(0, (Number(client.debt) || 0) - calcularSaldoFacturasCliente(client)));
+            }
+            const debt = calcularDeudaFacturasCliente(client);
+            if (deudaMigrada || r2(client.debt || 0) !== debt) {
+                client.debt = debt;
+                await localDB.clients.put(client);
+                await encolarSincronizacion("UPDATE", "clients", client);
+            }
+        }
         if(salesHistory.length > 0) saleNumber = Math.max(...salesHistory.map(s => s.numero || 0)) + 1;
         const saleNumberEl = document.getElementById("currentSaleNumber");
         if (saleNumberEl) saleNumberEl.textContent = String(saleNumber).padStart(6, "0");
@@ -278,7 +292,7 @@ document.getElementById("loginForm")?.addEventListener("submit", (e) => {
 document.getElementById("logoutBtn")?.addEventListener("click", () => {
     detenerCamaraVentas();
     if (currentUser) registrarAuditoria('SESION', 'LOGOUT', `Cierre de sesión`);
-    app?.classList.add("hidden"); loginScreen?.classList.remove("hidden"); document.getElementById("loginForm")?.reset(); cart = []; actualizarCarrito(); unlockedModuleId = null; currentUser = null;
+    app?.classList.add("hidden"); loginScreen?.classList.remove("hidden"); document.getElementById("loginForm")?.reset(); cart = []; resetearDescuentoVenta(); actualizarCarrito(); unlockedModuleId = null; currentUser = null;
 });
 
 const NAV_MAP = { "navSalesBtn": "salesView", "navInventoryBtn": "inventoryView", "navPurchasesBtn": "purchasesView", "navPayablesBtn": "payablesView", "navClientsBtn": "clientsView", "navSuppliersBtn": "suppliersView", "navHistoryBtn": "historyView", "navCajaBtn": "cajaView", "navGastosBtn": "gastosView", "navReportesBtn": "reportesView", "navDashboardBtn": "dashboardView", "navConfigBtn": "configView" };
@@ -412,6 +426,32 @@ function refrescarSelectClientesCredito(seleccionarId) {
 }
 
 document.getElementsByName("paymentMethod").forEach(radio => { radio.addEventListener("change", (e) => { paymentMethod = e.target.value; const clientBox = document.getElementById("creditClientContainer"); if(paymentMethod === "credit") { clientBox?.classList.remove("hidden"); refrescarSelectClientesCredito(); } else { clientBox?.classList.add("hidden"); } }); });
+
+document.getElementsByName("descApplies").forEach(radio => radio.addEventListener("change", e => {
+    const applies = e.target.value === "si";
+    document.getElementById("descuentoBox")?.classList.toggle("hidden", !applies);
+    if (!applies) {
+        descuentoPct = 0;
+        const input = document.getElementById("descuentoPct");
+        if (input) input.value = "";
+    }
+    actualizarCarrito();
+}));
+document.getElementById("descuentoPct")?.addEventListener("input", e => {
+    const value = parseFloat(e.target.value);
+    descuentoPct = Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
+    actualizarCarrito();
+});
+
+function resetearDescuentoVenta() {
+    descuentoPct = 0;
+    descuentoMonto = 0;
+    const input = document.getElementById("descuentoPct");
+    if (input) input.value = "";
+    const noDiscount = document.querySelector('input[name="descApplies"][value="no"]');
+    if (noDiscount) noDiscount.checked = true;
+    document.getElementById("descuentoBox")?.classList.add("hidden");
+}
 document.getElementById("purchType")?.addEventListener("change", (e) => { const pdc = document.getElementById("purchDaysContainer"); if (pdc) pdc.style.display = e.target.value === "credito" ? "block" : "none"; });
 
 barcodeInput?.addEventListener("keypress", (e) => { if (e.key === "Enter") { e.preventDefault(); procesarCodigoBarras(barcodeInput.value); } });
@@ -499,7 +539,7 @@ window.cambiarCantidad = function(index, delta) {
 window.eliminarDelCarrito = function(index) { cart.splice(index, 1); actualizarCarrito(); };
 document.getElementById("clearCartBtn")?.addEventListener("click", () => { 
     if (cart.length === 0) return;
-    showConfirm("¿Desea cancelar esta venta y vaciar el carrito?", () => { cart = []; actualizarCarrito(); });
+    showConfirm("¿Desea cancelar esta venta y vaciar el carrito?", () => { cart = []; resetearDescuentoVenta(); actualizarCarrito(); });
 });
 
 function actualizarCarrito() { 
@@ -507,7 +547,13 @@ function actualizarCarrito() {
     if (cart.length === 0) { if(cartItemsDiv) cartItemsDiv.innerHTML = `<div class="text-center" style="padding:20px; color:#999;">Carrito vacío</div>`; } else { 
         if(cartItemsDiv) cartItemsDiv.innerHTML = cart.map((item, index) => { const retail = item.retailPrice || item.retail || 0; const wholesale = item.wholesalePrice || item.wholesale || 0; const precio = buyerType === "retail" ? retail : wholesale; const itemTotal = r2(precio * item.cantidad); const currentStock = stockReal(item); subtotalSinImpuesto = r2(subtotalSinImpuesto + itemTotal); total = r2(total + itemTotal); return `<div class="cart-item-row" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding:12px 0;"><div style="flex:1;"><strong>${escapeHtml(item.name)}</strong><br><small>${sysConfig.currency}${precio.toFixed(2)} c/u · Stock: ${currentStock}</small></div><div class="qty-control" style="display:flex; align-items:center; gap:8px;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, -1)">-</button><input type="number" value="${item.cantidad}" onchange="window.cambiarCantidadManual(${index}, this.value)" style="width: 45px; text-align: center;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, 1)">+</button></div><div style="text-align:right; margin-left:15px;"><strong>${sysConfig.currency}${itemTotal.toFixed(2)}</strong><br><button onclick="window.eliminarDelCarrito(${index})" style="background:transparent; color:#d32f2f; border:none; cursor:pointer; font-size:12px;">Quitar</button></div></div>`; }).join(""); 
     } 
-    totalTemporal = total; 
+    subtotalTemporal = subtotalSinImpuesto;
+    descuentoMonto = r2(subtotalSinImpuesto * descuentoPct / 100);
+    total = r2(subtotalSinImpuesto - descuentoMonto);
+    totalTemporal = total;
+    document.getElementById("descuentoRow")?.classList.toggle("hidden", descuentoMonto <= 0);
+    const descuentoEl = document.getElementById("descuentoMonto");
+    if (descuentoEl) descuentoEl.textContent = `-${sysConfig.currency}${descuentoMonto.toFixed(2)}`;
     if(document.getElementById("subtotal")) document.getElementById("subtotal").textContent = `${sysConfig.currency}${subtotalSinImpuesto.toFixed(2)}`; 
     if(document.getElementById("total")) document.getElementById("total").textContent = `${sysConfig.currency}${total.toFixed(2)}`; 
     if(document.getElementById("cartItemCount")) document.getElementById("cartItemCount").textContent = `${cart.length} productos`; 
@@ -541,7 +587,7 @@ document.getElementById("processSaleBtn")?.addEventListener("click", () => {
 
         document.getElementById("cashModal")?.classList.remove("hidden");
         setTimeout(() => document.getElementById("cashReceivedInput")?.focus(), 100);
-    } else {
+    } else if (paymentMethod === "credit") {
         const clientSelectId = document.getElementById("creditClientSelect")?.value;
         const client = clients.find(c => String(c.id) === String(clientSelectId));
 
@@ -555,6 +601,9 @@ document.getElementById("processSaleBtn")?.addEventListener("click", () => {
             return;
         }
 
+        procesandoVenta = true;
+        registrarVenta(totalTemporal, totalTemporal, 0);
+    } else {
         procesandoVenta = true;
         registrarVenta(totalTemporal, totalTemporal, 0);
     }
@@ -586,15 +635,28 @@ async function registrarVenta(total, pago, vuelto) {
             return;
         }
     }
-    let detalleFijo = document.getElementById("saleDetailInput")?.value.trim() || "-"; let clienteTicket = "-"; let dueDateStr = null; let termsStr = "-"; let dueTS = null; const fechaObj = new Date(); const fechaSolo = fechaObj.toLocaleDateString(); const horaSolo = fechaObj.toLocaleTimeString();
+    let detalleFijo = document.getElementById("saleDetailInput")?.value.trim() || "-"; let clienteTicket = "-"; let clienteId = null; let clienteCredito = null; let dueDateStr = null; let termsStr = "-"; let dueTS = null; const fechaObj = new Date(); const fechaSolo = fechaObj.toLocaleDateString(); const horaSolo = fechaObj.toLocaleTimeString();
 
     if (paymentMethod === "credit") { 
         const clientSelectId = document.getElementById("creditClientSelect")?.value; const c = clients.find(x => String(x.id) === String(clientSelectId)); 
-        c.debt = r2((c.debt || 0) + total); clienteTicket = c.name; const days = Math.max(1, parseInt(document.getElementById("creditDays").value) || 30); let d = new Date(); d.setDate(d.getDate() + days); dueDateStr = d.toLocaleDateString(); dueTS = d.getTime(); termsStr = `${days} días`; detalleFijo = `(Crédito: ${c.name})`; await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c);
+        clienteId = c.id; clienteCredito = c; clienteTicket = c.name; const days = Math.max(1, parseInt(document.getElementById("creditDays").value) || 30); let d = new Date(); d.setDate(d.getDate() + days); dueDateStr = d.toLocaleDateString(); dueTS = d.getTime(); termsStr = `${days} días`; detalleFijo = `(Crédito: ${c.name})`;
     }
     
-    const newSale = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, numero: saleNumber, fecha: `${fechaSolo} ${horaSolo}`, fechaTS: Date.now(), vendedor: currentUser.displayName, detalle: detalleFijo, metodo: paymentMethod === "cash" ? "Contado" : "Crédito", cliente: clienteTicket, vencimiento: dueDateStr, vencimientoTS: dueTS, total: r2(total), tarifa: buyerType === "retail" ? "Menudeo" : "Mayoreo", items: [...cart], plazo: termsStr, anulada: false };
+    const metodoVenta = paymentMethod === "credit" ? "Crédito" : "Contado";
+    const newSale = {
+        id: Date.now(), business_id: DEFAULT_BUSINESS_ID, numero: saleNumber, fecha: `${fechaSolo} ${horaSolo}`, fechaTS: Date.now(), vendedor: currentUser.displayName,
+        detalle: detalleFijo, metodo: metodoVenta, medioPago: paymentMethod, cliente: clienteTicket, clienteId,
+        cajaSessionId: paymentMethod === "cash" ? cajaActual?.id || null : null,
+        estadoCaja: paymentMethod === "cash" ? "pendiente" : "no_aplica", vencimiento: dueDateStr, vencimientoTS: dueTS,
+        subtotal: r2(subtotalTemporal), descuentoPct, descuentoMonto, total: r2(total), tarifa: buyerType === "retail" ? "Menudeo" : "Mayoreo",
+        items: [...cart], plazo: termsStr, anulada: false
+    };
     salesHistory.push(newSale); await localDB.sales.put(newSale); await encolarSincronizacion('INSERT', 'sales', newSale);
+    if (clienteCredito) {
+        clienteCredito.debt = calcularDeudaFacturasCliente(clienteCredito);
+        await localDB.clients.put(clienteCredito);
+        await encolarSincronizacion("UPDATE", "clients", clienteCredito);
+    }
     
     for (let cItem of cart) { await registrarMovimientoKardex(cItem.id, 'VENTA', -cItem.cantidad, `Venta #${saleNumber}`); }
     actualizarTablaInventario();
@@ -603,7 +665,8 @@ async function registrarVenta(total, pago, vuelto) {
     let detalleProds = cart.map(item => `${item.name} x ${item.cantidad}`).join("\n"); 
     await registrarAuditoria('VENTAS', 'NUEVA_VENTA', `Vendió:\n${detalleProds}\nFactura: #${saleNumber}\nTotal: ${sysConfig.currency}${total.toFixed(2)}`);
     
-    renderDashboard(); 
+    renderDashboard();
+    if (cajaActual) renderCajaView();
     ticketEsVentaNueva = true;
     generarVisualizacionTicket(newSale, pago, vuelto, false);
     } catch (error) {
@@ -621,11 +684,24 @@ function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
     let prods = ""; let subtotalTicket = 0;
     if (sale.items && sale.items.length > 0) { prods = sale.items.map(i => { const precio = sale.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); subtotalTicket += (precio * i.cantidad); return `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${i.cantidad}x ${escapeHtml(i.name)}</span><span>${sysConfig.currency}${(precio * i.cantidad).toFixed(2)}</span></div>`; }).join(""); } else { prods = `<div style="text-align:center; font-size:12px; color:#888;">(Detalle no disponible)</div>`; subtotalTicket = sale.total; }
     let saldoPendienteHtml = "";
-    if (sale.metodo === "Crédito") { const c = clients.find(cl => cl.name === sale.cliente); if (c) { saldoPendienteHtml = `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top:5px; border-top:1px dashed #000; padding-top:5px; color:#d32f2f;"><span>Saldo Pendiente:</span><span>${sysConfig.currency}${(c.debt||0).toFixed(2)}</span></div>`; } }
-    let pagoH = sale.metodo === "Contado" ? `<div style="display:flex; justify-content:space-between; margin-top:10px;"><span>PAGO CONTADO</span>${esCopia ? '' : `<span>Efectivo: ${sysConfig.currency}${(pago||0).toFixed(2)}</span></div><div style="display:flex; justify-content:space-between; font-weight:bold;"><span>CAMBIO:</span><span>${sysConfig.currency}${(vuelto||0).toFixed(2)}</span>`}</div>` : `<div style="border: 2px dashed #000; padding: 10px; margin-top:10px; background:#f9f9f9; font-size:12px;"><div style="text-align:center; font-weight:bold; margin-bottom:5px;">*** FACTURA DE CRÉDITO ***</div><div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>A nombre de:</span><span style="font-weight:bold; text-align:right;">${escapeHtml(sale.cliente)}</span></div>${sale.plazo && sale.plazo !== "-" ? `<div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Plazo a pagar:</span><span>${sale.plazo}</span></div>` : ''}<div style="display:flex; justify-content:space-between; font-weight:bold; border-top:1px solid #ccc; padding-top:2px;"><span>VENCE:</span><span style="color:#d32f2f;">${sale.vencimiento || '-'}</span></div>${saldoPendienteHtml}</div>`;
+    if (sale.metodo === "Crédito") { const c = clients.find(cl => String(cl.id) === String(sale.clienteId)) || clients.find(cl => cl.name === sale.cliente); if (c) { saldoPendienteHtml = `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top:5px; border-top:1px dashed #000; padding-top:5px; color:#d32f2f;"><span>Saldo Pendiente:</span><span>${sysConfig.currency}${obtenerSaldoFactura("cliente", sale).toFixed(2)}</span></div>`; } }
+    let pagoH = "";
+    if (sale.metodo === "Contado") {
+        const medio = obtenerMedioPagoVenta(sale);
+        const recibido = medio === "cash" && !esCopia ? `<span>Recibido: ${sysConfig.currency}${(pago||0).toFixed(2)}</span>` : "";
+        const cambio = medio === "cash" && !esCopia ? `<div style="display:flex; justify-content:space-between; font-weight:bold;"><span>CAMBIO:</span><span>${sysConfig.currency}${(vuelto||0).toFixed(2)}</span></div>` : "";
+        pagoH = `<div style="display:flex; justify-content:space-between; margin-top:10px;"><span>Pago con ${mediosPagoVenta[medio] || "Efectivo"}</span>${recibido}</div>${cambio}`;
+    } else if (sale.metodo === "Crédito") {
+        pagoH = `<div style="border: 2px dashed #000; padding: 10px; margin-top:10px; background:#f9f9f9; font-size:12px;"><div style="text-align:center; font-weight:bold; margin-bottom:5px;">*** FACTURA DE CRÉDITO ***</div><div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>A nombre de:</span><span style="font-weight:bold; text-align:right;">${escapeHtml(sale.cliente)}</span></div>${sale.plazo && sale.plazo !== "-" ? `<div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Plazo a pagar:</span><span>${sale.plazo}</span></div>` : ''}<div style="display:flex; justify-content:space-between; font-weight:bold; border-top:1px solid #ccc; padding-top:2px;"><span>VENCE:</span><span style="color:#d32f2f;">${sale.vencimiento || '-'}</span></div>${saldoPendienteHtml}</div>`;
+    } else {
+        pagoH = `<div style="display:flex; justify-content:space-between; margin-top:10px;"><span>Pago con ${escapeHtml(sale.metodo)}</span><strong>${sysConfig.currency}${r2(sale.total).toFixed(2)}</strong></div>`;
+    }
     const statusAnulada = sale.anulada ? `<div style="text-align:center; color:white; background:#d32f2f; font-weight:bold; padding:5px; margin-bottom:10px;">FACTURA ANULADA</div>` : ``;
     const confLogoImg = sysConfig.logo ? `<div style="text-align:center; margin-bottom: 5px;"><img src="${sysConfig.logo}" style="max-width: 120px; max-height: 80px; object-fit: contain;"></div>` : ''; const confH3 = `<h3 style="text-align:center; margin:0;">${escapeHtml(sysConfig.name)}</h3>`; const confRucInfo = sysConfig.ruc ? `<div style="text-align:center; font-size:12px;">RUC: ${escapeHtml(sysConfig.ruc)}</div>` : ''; const confAddressInfo = sysConfig.address ? `<div style="text-align:center; font-size:12px;">Dir: ${escapeHtml(sysConfig.address)}</div>` : ''; const confPhoneInfo = sysConfig.phone ? `<div style="text-align:center; font-size:12px;">Tel: ${escapeHtml(sysConfig.phone)}</div>` : ''; const confExtraHeader = sysConfig.header ? `<div style="text-align:center; font-size:12px; margin-bottom:5px;">${escapeHtml(sysConfig.header)}</div>` : ''; const confFooterFinal = sysConfig.footer ? `<div style="text-align: center; margin-top: 15px; font-size: 13px;">${escapeHtml(sysConfig.footer)}</div>` : `<div style="text-align: center; margin-top: 15px; font-size: 13px;">¡Gracias por su compra!</div>`;
-    const tkCont = document.getElementById("ticketContent"); if(tkCont) { tkCont.innerHTML = `<div id="imprimibleTicket" style="font-family: monospace; background: #fff; border: 1px dashed #ccc; padding: 25px; width: 100%; max-width: 350px; margin: 0 auto;">${statusAnulada}${confLogoImg}${confH3}${confRucInfo}${confAddressInfo}${confPhoneInfo}${confExtraHeader}<div style="text-align:center; color:#555; font-size:12px; margin-bottom:10px;">${esCopia ? "COPIA DE FACTURA" : "COMPROBANTE DE VENTA"}</div><div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Factura:</span><span>#${String(sale.numero).padStart(6, '0')}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Fecha/Hora:</span><span>${sale.fecha}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Cajero:</span><span>${escapeHtml(sale.vendedor)}</span></div><div style="border-top:1px dashed #000; margin:10px 0;"></div>${prods}<div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:3px;"><span>Subtotal</span><span>${sysConfig.currency}${subtotalTicket.toFixed(2)}</span></div><div style="display:flex; justify-content:space-between; font-weight:bold; font-size:18px; margin-top:5px; border-top:1px solid #000; padding-top:5px;"><span>TOTAL</span><span>${sysConfig.currency}${(sale.total||0).toFixed(2)}</span></div>${pagoH}<div style="border-top:1px dashed #000; margin:10px 0;"></div>${confFooterFinal}${esCopia ? '<div style="text-align: center; color: #333; margin-top: 5px; font-size: 13px;">*** REIMPRESIÓN ***</div>' : ''}</div>`; }
+    const subtotalFinal = Number.isFinite(Number(sale.subtotal)) ? Number(sale.subtotal) : subtotalTicket;
+    const descuentoTicket = r2(sale.descuentoMonto || 0);
+    const resumenDescuento = descuentoTicket > 0 ? `<div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:3px;"><span>Subtotal</span><span>${sysConfig.currency}${subtotalFinal.toFixed(2)}</span></div><div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:3px;"><span>Descuento${sale.descuentoPct ? ` (${sale.descuentoPct}%)` : ""}</span><span>-${sysConfig.currency}${descuentoTicket.toFixed(2)}</span></div>` : "";
+    const tkCont = document.getElementById("ticketContent"); if(tkCont) { tkCont.innerHTML = `<div id="imprimibleTicket" style="font-family: monospace; background: #fff; border: 1px dashed #ccc; padding: 25px; width: 100%; max-width: 350px; margin: 0 auto;">${statusAnulada}${confLogoImg}${confH3}${confRucInfo}${confAddressInfo}${confPhoneInfo}${confExtraHeader}<div style="text-align:center; color:#555; font-size:12px; margin-bottom:10px;">${esCopia ? "COPIA DE FACTURA" : "COMPROBANTE DE VENTA"}</div><div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Factura:</span><span>#${String(sale.numero).padStart(6, '0')}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Fecha/Hora:</span><span>${sale.fecha}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Cajero:</span><span>${escapeHtml(sale.vendedor)}</span></div><div style="border-top:1px dashed #000; margin:10px 0;"></div>${prods}<div style="border-top:1px dashed #000; margin:10px 0;"></div>${resumenDescuento}<div style="display:flex; justify-content:space-between; font-weight:bold; font-size:18px; margin-top:5px; border-top:1px solid #000; padding-top:5px;"><span>TOTAL</span><span>${sysConfig.currency}${(sale.total||0).toFixed(2)}</span></div>${pagoH}<div style="border-top:1px dashed #000; margin:10px 0;"></div>${confFooterFinal}${esCopia ? '<div style="text-align: center; color: #333; margin-top: 5px; font-size: 13px;">*** REIMPRESIÓN ***</div>' : ''}</div>`; }
     document.getElementById("ticketModal")?.classList.remove("hidden"); actualizarTablaClientes();
 }
 
@@ -635,6 +711,7 @@ document.querySelectorAll("#closeTicketBtn, #newSaleBtn").forEach(b => {
         if (!ticketEsVentaNueva) return;
         ticketEsVentaNueva = false;
         cart = [];
+        resetearDescuentoVenta();
         saleNumber = Math.max(1, (salesHistory.length > 0 ? Math.max(...salesHistory.map(s => s.numero || 0)) : 0) + 1);
         const csn = document.getElementById("currentSaleNumber"); if (csn) csn.textContent = String(saleNumber).padStart(6, '0');
         const sdi = document.getElementById("saleDetailInput"); if (sdi) sdi.value = "";
@@ -655,10 +732,11 @@ window.abrirAnularVenta = function(id) { if (!isAdmin()) { showAlert("No tiene p
 window.confirmarAnularVenta = async function() {
     if (!isAdmin()) { showAlert("No tiene permisos para anular ventas."); return; }
     const id = document.getElementById("anularVentaId").value; const motivo = document.getElementById("anularVentaMotivo").value.trim(); const sale = salesHistory.find(x => String(x.id) === String(id)); if (!sale || sale.anulada) return;
+    if ((calcFactura(sale.id)?.abonado || 0) > 0) { showAlert("Anule primero los abonos aplicados a esta factura antes de anular la venta."); return; }
     sale.anulada = true; sale.motivoAnulacion = motivo; sale.fechaAnulacion = new Date().toLocaleString(); sale.usuarioAnulacion = currentUser.displayName;
     
     if (sale.items) { for (let item of sale.items) { let prod = products.find(p => String(p.id) === String(item.id)); if (!prod) prod = products.find(p => (p.name||"").toLowerCase() === (item.name||"").toLowerCase()); if (prod) { await registrarMovimientoKardex(prod.id, 'DEVOLUCION_VENTA', item.cantidad, `Anulación Venta #${sale.numero}: ${motivo}`); } } }
-    if (sale.metodo === "Crédito") { let c = clients.find(cl => cl.name === sale.cliente); if (c) { c.debt = r2(Math.max(0, (c.debt || 0) - sale.total)); await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c); } }
+    if (sale.metodo === "Crédito") { let c = clients.find(cl => String(cl.id) === String(sale.clienteId)) || clients.find(cl => cl.name === sale.cliente); if (c) { c.debt = calcularDeudaFacturasCliente(c); await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c); } }
     
     await localDB.sales.put(sale); await encolarSincronizacion('UPDATE', 'sales', sale); await registrarAuditoria('VENTAS', 'ANULACION', `Anuló Factura #${sale.numero} por C$${sale.total}. Motivo: ${motivo}`);
     document.getElementById("anularVentaModal").classList.add("hidden"); actualizarTablaHistorial(); actualizarTablaInventario(); actualizarCatalogo(); actualizarTablaClientes(); if (cajaActual) renderCajaView(); renderDashboard(); showAlert(`Venta #${sale.numero} anulada exitosamente.`);
@@ -666,7 +744,7 @@ window.confirmarAnularVenta = async function() {
 
 function actualizarTablaHistorial() {
     const tbody = document.getElementById("historyTableBody"); if (!tbody) return; tbody.innerHTML = "";
-    let tV = 0, cV = 0, crV = 0, tG = 0; const productSalesCounter = {};
+    let tV = 0, cV = 0, cardV = 0, transferV = 0, crV = 0, tG = 0; const productSalesCounter = {};
     purchasesHistory.forEach(p => { if (!p.anulada) tG += p.total; });
     gastosHistory.forEach(g => { if (!g.anulado) tG += g.monto; });
     if (salesHistory.length === 0) {
@@ -675,10 +753,14 @@ function actualizarTablaHistorial() {
         [...salesHistory].reverse().forEach(v => {
             if (!v.anulada) {
                 if (esHoyTS(v.fechaTS || v.id)) tV += v.total;
-                if (v.metodo === "Contado") cV += v.total; else crV += v.total;
+                const medioVenta = obtenerMedioPagoVenta(v);
+                if (medioVenta === "cash") cV += v.total;
+                else if (medioVenta === "card") cardV += v.total;
+                else if (medioVenta === "transfer") transferV += v.total;
+                else if (v.metodo === "Crédito") crV += v.total;
                 if (v.items) v.items.forEach(i => { productSalesCounter[i.name] = (productSalesCounter[i.name] || 0) + i.cantidad; });
             }
-            const pagoHtml = v.metodo === "Crédito" ? `<span style="color:#d32f2f; font-weight:bold;">CRÉDITO</span><br><small style="color:#666;">Vence: ${escapeHtml(v.vencimiento)}</small>` : `<span style="color:#28a745; font-weight:bold;">CONTADO</span>`;
+            const pagoHtml = v.metodo === "Crédito" ? `<span style="color:#d32f2f; font-weight:bold;">CRÉDITO</span><br><small style="color:#666;">Vence: ${escapeHtml(v.vencimiento)} · ${obtenerSaldoFactura("cliente", v) > 0 ? "Pendiente" : "Pagada"}</small>` : `<span style="color:#28a745; font-weight:bold;">${escapeHtml(mediosPagoVenta[obtenerMedioPagoVenta(v)] || "Efectivo").toUpperCase()}</span>`;
             const detalleFormat = v.anulada ? `<strong>${escapeHtml(v.detalle)}</strong><br><span style="color:#d32f2f; font-size:10px; font-weight:bold;">❌ ANULADA</span>` : `<strong>${escapeHtml(v.detalle)}</strong> (${escapeHtml(v.tarifa)})`;
             const totalFormat = v.anulada ? `<del>${sysConfig.currency}${r2(v.total).toFixed(2)}</del>` : `${sysConfig.currency}${r2(v.total).toFixed(2)}`;
             const actionBtns = v.anulada ? `<button class="btn btn-sm btn-secondary" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-secondary" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.abrirAnularVenta('${v.id}')">Anular</button>`;
@@ -689,7 +771,7 @@ function actualizarTablaHistorial() {
         });
     }
     const setTotal = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = `${sysConfig.currency}${r2(value).toFixed(2)}`; };
-    setTotal("summaryTodaySales", tV); setTotal("summaryTotalSales", cV + crV); setTotal("summaryCashSales", cV); setTotal("summaryCreditSales", crV); setTotal("summaryTotalExpenses", tG);
+    setTotal("summaryTodaySales", tV); setTotal("summaryTotalSales", salesHistory.filter(sale => !sale.anulada).reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)); setTotal("summaryCashSales", cV); setTotal("summaryCardSales", cardV); setTotal("summaryTransferSales", transferV); setTotal("summaryCreditSales", crV); setTotal("summaryTotalExpenses", tG);
 
     const minGlobal = sysConfig.minStock || 5;
     const bajos = products.filter(p => !p.deleted && p.active !== false && (p.stock || 0) <= (p.minStock ?? minGlobal));
@@ -720,6 +802,19 @@ window.calcularPreciosPorMargen = function() {
     if(pWhoEl) pWhoEl.value = (cost + (cost * (mWho / 100))).toFixed(2);
 };
 ['prodCost', 'prodMargenRetail', 'prodMargenWholesale'].forEach(id => { document.getElementById(id)?.addEventListener('input', window.calcularPreciosPorMargen); });
+
+// Sentido inverso: Precio -> Margen. margen = ((precio / costo) - 1) x 100.
+// Solo escribe el campo de margen (por .value, sin disparar eventos), asi no hay bucles con costo/margen -> precio.
+window.calcularMargenPorPrecio = function(tipo) {
+    const ids = tipo === 'wholesale' ? { precio: 'prodWholesale', margen: 'prodMargenWholesale' } : { precio: 'prodRetail', margen: 'prodMargenRetail' };
+    const cost = parseFloat(document.getElementById('prodCost')?.value);
+    const precio = parseFloat(document.getElementById(ids.precio)?.value);
+    const margenEl = document.getElementById(ids.margen);
+    if (!margenEl || isNaN(precio) || isNaN(cost) || cost <= 0) return;
+    margenEl.value = r2((precio / cost - 1) * 100).toFixed(2);
+};
+document.getElementById('prodRetail')?.addEventListener('input', () => window.calcularMargenPorPrecio('retail'));
+document.getElementById('prodWholesale')?.addEventListener('input', () => window.calcularMargenPorPrecio('wholesale'));
 
 document.getElementById("productForm")?.addEventListener("submit", async (e) => { 
     e.preventDefault(); 
@@ -901,7 +996,7 @@ document.getElementById("clientForm")?.addEventListener("submit", async (e) => {
     const nuevoLimite = r2(parseFloat(document.getElementById("clientLimit").value));
     const nombreCliente = document.getElementById("clientName").value.trim(); if (!nombreCliente) { showAlert("⚠️ El nombre del cliente es obligatorio."); return; }
     if (isNaN(nuevoLimite) || isNaN(nuevaDeuda) || nuevoLimite < 0 || nuevaDeuda < 0) { showAlert("⚠️ El límite de crédito y la deuda deben ser valores válidos y no negativos."); return; }
-    const clientData = { id: existingClient ? existingClient.id : Date.now(), business_id: DEFAULT_BUSINESS_ID, name: nombreCliente, phone: document.getElementById("clientPhone").value.trim(), ruc: document.getElementById("clientRuc").value.trim(), address: document.getElementById("clientAddress").value.trim(), creditLimit: nuevoLimite, debt: nuevaDeuda, active: id ? (existingClient?.active !== false) : true }; 
+    const clientData = { id: existingClient ? existingClient.id : Date.now(), business_id: DEFAULT_BUSINESS_ID, name: nombreCliente, phone: document.getElementById("clientPhone").value.trim(), ruc: document.getElementById("clientRuc").value.trim(), address: document.getElementById("clientAddress").value.trim(), creditLimit: nuevoLimite, debt: nuevaDeuda, deudaSinFactura: existingClient ? (existingClient.deudaSinFactura ?? nuevaDeuda) : nuevaDeuda, active: id ? (existingClient?.active !== false) : true }; 
     if (id) { const idx = clients.findIndex(c => String(c.id) === String(id)); if(idx > -1) { clients[idx] = clientData; } } else { clients.push(clientData); }
     await localDB.clients.put(clientData); await encolarSincronizacion(id ? 'UPDATE' : 'INSERT', 'clients', clientData); document.getElementById("clientModal")?.classList.add("hidden"); actualizarTablaClientes(); renderDashboard(); refrescarSelectClientesCredito(clientData.id);
 });
@@ -935,23 +1030,217 @@ window.toggleEstadoCliente = async function(id) {
 };
 
 window.editarCliente = function(id) { const c = clients.find(x => String(x.id) === String(id)); if(!c) return; document.getElementById("clientId").value = c.id; document.getElementById("clientName").value = c.name; document.getElementById("clientPhone").value = c.phone || ""; document.getElementById("clientRuc").value = c.ruc || ""; document.getElementById("clientAddress").value = c.address || ""; document.getElementById("clientLimit").value = c.creditLimit||0; document.getElementById("clientDebt").value = c.debt||0; prepararCampoDeudaCliente(true); document.getElementById("clientModal")?.classList.remove("hidden"); };
+function obtenerAbonosDeFactura(tipo, facturaId) {
+    return abonosHistory.filter(abono => abono.tipo === tipo && String(abono.facturaId) === String(facturaId) && !abono.anulado);
+}
+
+function saldosFacturasCliente(client) {
+    if (!client) return { facs: [], abonado: {} };
+    const facs = salesHistory
+        .filter(sale => sale.metodo === "Crédito" && !sale.anulada &&
+            (String(sale.clienteId) === String(client.id) || (!sale.clienteId && sale.cliente === client.name)))
+        .sort((a, b) => (a.fechaTS || a.id) - (b.fechaTS || b.id));
+    const abonado = {};
+    facs.forEach(sale => { abonado[String(sale.id)] = 0; });
+    const abonos = abonosHistory.filter(abono =>
+        (abono.tipo === "cliente" || abono.tipo === "factura") &&
+        String(abono.referenciaId) === String(client.id) && !abono.anulado
+    );
+    abonos.filter(abono => abono.facturaId).forEach(abono => {
+        const saleId = String(abono.facturaId);
+        if (abonado[saleId] !== undefined) {
+            abonado[saleId] = r2(abonado[saleId] + (Number(abono.monto) || 0));
+        }
+    });
+    let resto = r2(abonos.filter(abono => !abono.facturaId)
+        .reduce((total, abono) => total + (Number(abono.monto) || 0), 0));
+    for (const sale of facs) {
+        if (resto <= 0) break;
+        const saleId = String(sale.id);
+        const saldo = r2(Math.max(0, (Number(sale.total) || 0) - abonado[saleId]));
+        const aplica = Math.min(saldo, resto);
+        abonado[saleId] = r2(abonado[saleId] + aplica);
+        resto = r2(resto - aplica);
+    }
+    return { facs, abonado, resto };
+}
+
+function calcFactura(saleId) {
+    const sale = salesHistory.find(item => String(item.id) === String(saleId));
+    if (!sale) return null;
+    const client = clients.find(item => String(item.id) === String(sale.clienteId)) ||
+        clients.find(item => item.name === sale.cliente);
+    if (!client) {
+        const abonado = abonosHistory
+            .filter(abono => (abono.tipo === "cliente" || abono.tipo === "factura") && String(abono.facturaId) === String(sale.id) && !abono.anulado)
+            .reduce((total, abono) => total + (Number(abono.monto) || 0), 0);
+        return { s: sale, abonado: r2(abonado), saldo: r2(Math.max(0, (Number(sale.total) || 0) - abonado)) };
+    }
+    const { abonado } = saldosFacturasCliente(client);
+    const totalAbonado = r2(abonado[String(sale.id)] || 0);
+    return { s: sale, abonado: totalAbonado, saldo: r2(Math.max(0, (Number(sale.total) || 0) - totalAbonado)) };
+}
+
+function calcularSaldoFacturasCliente(client) {
+    const { facs, abonado } = saldosFacturasCliente(client);
+    return r2(facs.reduce((total, sale) =>
+        total + Math.max(0, (Number(sale.total) || 0) - (abonado[String(sale.id)] || 0)), 0));
+}
+
+function calcularDeudaFacturasCliente(client) {
+    return r2(calcularSaldoFacturasCliente(client) + (Number(client?.deudaSinFactura) || 0));
+}
+
+function obtenerTotalAbonadoFactura(tipo, facturaId) {
+    if (tipo === "cliente") return calcFactura(facturaId)?.abonado || 0;
+    return r2(obtenerAbonosDeFactura(tipo, facturaId).reduce((total, abono) => total + (Number(abono.monto) || 0), 0));
+}
+
+function obtenerSaldoFactura(tipo, factura) {
+    if (!factura || factura.anulada) return 0;
+    if (tipo === "cliente") return calcFactura(factura.id)?.saldo || 0;
+    return r2(Math.max(0, (Number(factura.total) || 0) - obtenerTotalAbonadoFactura(tipo, factura.id)));
+}
+
+function pintarModalAbonoVenta(sale) {
+    const client = clients.find(item => String(item.id) === String(sale.clienteId)) || clients.find(item => item.name === sale.cliente);
+    const invoice = calcFactura(sale.id);
+    if (!client || !invoice) return;
+    const pending = invoice.saldo;
+    document.getElementById("paySaleNumero").textContent = `#${String(sale.numero).padStart(6, "0")}`;
+    document.getElementById("paySaleCliente").textContent = client.name;
+    document.getElementById("paySaleTotal").textContent = `${sysConfig.currency}${r2(sale.total).toFixed(2)}`;
+    document.getElementById("paySalePaid").textContent = `${sysConfig.currency}${invoice.abonado.toFixed(2)}`;
+    document.getElementById("paySaleSaldo").textContent = `${sysConfig.currency}${pending.toFixed(2)}`;
+    const amountInput = document.getElementById("paySaleAmount");
+    if (amountInput) { amountInput.value = ""; amountInput.min = "0.01"; amountInput.step = "0.01"; amountInput.max = pending.toFixed(2); amountInput.disabled = pending <= 0; }
+    const submitButton = document.querySelector("#paymentSaleForm button[type='submit']");
+    if (submitButton) submitButton.disabled = pending <= 0;
+}
+
+function registrarMovimientoAbonoEnCaja(tipo, monto, concepto, abono) {
+    if (!cajaActual) return false;
+    cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo, monto, concepto, fechaTS: abono.fechaTS, fecha: new Date(abono.fechaTS).toLocaleString(), usuario: abono.usuario, estado: "pendiente", referenciaAbonoId: abono.id, anulado: false });
+    return true;
+}
+
+window.abrirAbonoVenta = function(id) {
+    const sale = salesHistory.find(item => String(item.id) === String(id));
+    if (!sale || sale.anulada || sale.metodo !== "Crédito") return;
+    const client = clients.find(item => String(item.id) === String(sale.clienteId)) || clients.find(item => item.name === sale.cliente);
+    if (!client) { showAlert("No se encontró el cliente de esta factura."); return; }
+    document.getElementById("paySaleId").value = sale.id;
+    const amountInput = document.getElementById("paySaleAmount");
+    if (amountInput) amountInput.value = "";
+    pintarModalAbonoVenta(sale);
+    document.getElementById("paymentSaleModal")?.classList.remove("hidden");
+};
+
+document.getElementById("paymentSaleForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const saleId = document.getElementById("paySaleId").value;
+    const sale = salesHistory.find(item => String(item.id) === String(saleId));
+    const client = sale && (clients.find(item => String(item.id) === String(sale.clienteId)) || clients.find(item => item.name === sale.cliente));
+    const amount = r2(parseFloat(document.getElementById("paySaleAmount").value));
+    const metodoPago = document.getElementById("paySaleMethod")?.value || "efectivo";
+    if (!sale || sale.anulada || !client) { showAlert("La factura o el cliente ya no están disponibles."); return; }
+    const invoice = calcFactura(sale.id);
+    if (!invoice || invoice.saldo <= 0) { showAlert("Esta factura ya está pagada."); return; }
+    if (!Number.isFinite(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; }
+    if (amount > invoice.saldo) { showAlert(`Máximo a abonar: ${sysConfig.currency}${invoice.saldo.toFixed(2)}`); return; }
+    if (metodoPago === "efectivo" && !cajaActual) { showAlert(MSG_SIN_CAJA); return; }
+
+    const fechaTS = Date.now();
+    const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, tipo: "cliente", referenciaId: client.id, facturaId: sale.id, monto: amount, metodoPago, estado: "pendiente", fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
+    abonosHistory.push(newAbono);
+    await localDB.abonos.put(newAbono);
+    await encolarSincronizacion("INSERT", "abonos", newAbono);
+    client.debt = calcularDeudaFacturasCliente(client);
+    await localDB.clients.put(client);
+    await encolarSincronizacion("UPDATE", "clients", client);
+    if (metodoPago === "efectivo" && registrarMovimientoAbonoEnCaja("entrada", amount, `Abono Factura #${sale.numero}: ${client.name}`, newAbono)) {
+        await localDB.cajaSessions.put(cajaActual);
+        await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual);
+        renderCajaView();
+    }
+    pintarModalAbonoVenta(sale);
+    await registrarAuditoria("CLIENTES", "ABONO_FACTURA", `Abonó ${sysConfig.currency}${amount.toFixed(2)} a la factura #${sale.numero} (${metodoPago}) de "${client.name}"`);
+    document.getElementById("paymentSaleModal")?.classList.add("hidden");
+    actualizarTablaClientes();
+    refrescarSelectClientesCredito();
+    renderDashboard();
+    if (document.getElementById("statementModalTitle")?.textContent.includes(client.name)) window.verEstadoCuentaCliente(client.id);
+    showAlert("Abono de factura registrado correctamente.");
+});
+
 window.abrirAbono = function(id) { const c = clients.find(x => String(x.id) === String(id)); if(!c) return; document.getElementById("payClientId").value = c.id; document.getElementById("payClientName").textContent = c.name; document.getElementById("payClientDebt").textContent = `${sysConfig.currency}${(c.debt||0).toFixed(2)}`; const pa = document.getElementById("payAmount"); if(pa) pa.value = ""; document.getElementById("paymentModal")?.classList.remove("hidden"); };
-document.getElementById("paymentForm")?.addEventListener("submit", async (e) => { e.preventDefault(); const id = document.getElementById("payClientId").value; const amount = r2(parseFloat(document.getElementById("payAmount").value)); const c = clients.find(x => String(x.id) === String(id)); if (isNaN(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; } if (amount > r2(c.debt || 0)) { showAlert("El abono no puede ser mayor a la deuda total."); return; } c.debt = r2((c.debt || 0) - amount); await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c); const newAbono = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, tipo: 'cliente', referenciaId: c.id, monto: amount, fecha: new Date().toLocaleDateString(), fechaTS: Date.now(), usuario: currentUser.displayName, anulado: false }; abonosHistory.push(newAbono); await localDB.abonos.put(newAbono); await encolarSincronizacion('INSERT', 'abonos', newAbono); await registrarAuditoria('CLIENTES', 'ABONO', `Registró abono de ${sysConfig.currency}${amount.toFixed(2)} del cliente "${c.name}"`); if (cajaActual) { cajaActual.movimientos.push({ tipo: "entrada", monto: amount, concepto: `Abono de crédito: ${c.name}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); } document.getElementById("paymentModal")?.classList.add("hidden"); actualizarTablaClientes(); renderDashboard(); refrescarSelectClientesCredito(); showAlert(`Abono registrado exitosamente.`); });
+document.getElementById("paymentForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const id = document.getElementById("payClientId").value;
+    const amount = r2(parseFloat(document.getElementById("payAmount").value));
+    const client = clients.find(item => String(item.id) === String(id));
+    const metodoPago = document.getElementById("payMethod")?.value || "efectivo";
+    if (!client) return;
+    if (!Number.isFinite(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; }
+    if (amount > r2(client.debt || 0)) { showAlert("El abono no puede ser mayor a la deuda total."); return; }
+    if (metodoPago === "efectivo" && !cajaActual) { showAlert(MSG_SIN_CAJA); return; }
+    const restoAbonosAnterior = saldosFacturasCliente(client).resto;
+    const fechaTS = Date.now();
+    const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, tipo: "cliente", referenciaId: client.id, monto: amount, metodoPago, fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
+    abonosHistory.push(newAbono);
+    await localDB.abonos.put(newAbono);
+    await encolarSincronizacion("INSERT", "abonos", newAbono);
+    const restoAbonosNuevo = saldosFacturasCliente(client).resto;
+    client.deudaSinFactura = r2(Math.max(0, (Number(client.deudaSinFactura) || 0) - Math.max(0, restoAbonosNuevo - restoAbonosAnterior)));
+    client.debt = calcularDeudaFacturasCliente(client);
+    await localDB.clients.put(client);
+    await encolarSincronizacion("UPDATE", "clients", client);
+    await registrarAuditoria("CLIENTES", "ABONO", `Registró abono de ${sysConfig.currency}${amount.toFixed(2)} del cliente "${client.name}" (${metodoPago})`);
+    if (metodoPago === "efectivo" && registrarMovimientoAbonoEnCaja("entrada", amount, `Abono de crédito: ${client.name}`, newAbono)) {
+        await localDB.cajaSessions.put(cajaActual);
+        await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual);
+        renderCajaView();
+    }
+    document.getElementById("paymentModal")?.classList.add("hidden");
+    actualizarTablaClientes(); renderDashboard(); refrescarSelectClientesCredito();
+    showAlert("Abono registrado exitosamente.");
+});
 
 window.verEstadoCuentaCliente = function(id) { 
     const c = clients.find(x => String(x.id) === String(id)); if(!c) return; 
     document.getElementById("statementModalTitle").textContent = `Historial: ${c.name}`; 
     document.getElementById("statementModalSubtitle").textContent = `Límite: ${sysConfig.currency}${(c.creditLimit||0).toFixed(2)} | Deuda Actual: ${sysConfig.currency}${(c.debt||0).toFixed(2)}`; 
     
-    const clientSales = salesHistory.filter(s => s.cliente === c.name && s.metodo === "Crédito").map(s => ({ type: 'cargo', date: s.fecha, ts: s.fechaTS || s.id, ref: `#${String(s.numero).padStart(6, '0')}`, detail: s.anulada ? 'Factura Anulada' : 'Factura de crédito', amount: s.total, dueDate: s.vencimiento, dueTS: s.vencimientoTS, saleId: s.id, anulado: s.anulada })); 
-    const clientAbonos = abonosHistory.filter(a => a.tipo === 'cliente' && String(a.referenciaId) === String(c.id)).map(a => ({ type: 'abono', date: a.fecha, ts: a.fechaTS, ref: `Abono`, detail: `Pago recibido (${a.usuario})`, amount: a.monto, id: a.id, anulado: a.anulado })); 
+    const clientSales = salesHistory
+        .filter(s => (String(s.clienteId) === String(c.id) || (!s.clienteId && s.cliente === c.name)) && s.metodo === "Crédito")
+        .map(s => {
+            const invoice = calcFactura(s.id);
+            const abonado = invoice?.abonado || 0;
+            const saldoFactura = s.anulada ? 0 : (invoice?.saldo || 0);
+            return {
+                type: 'cargo', date: s.fecha, ts: s.fechaTS || s.id,
+                ref: `#${String(s.numero).padStart(6, '0')}`,
+                detail: s.anulada ? 'Factura Anulada' : `Factura de crédito · Total ${sysConfig.currency}${r2(s.total).toFixed(2)} · Abonado ${sysConfig.currency}${abonado.toFixed(2)} · Pendiente ${sysConfig.currency}${saldoFactura.toFixed(2)}`,
+                amount: s.total, dueDate: s.vencimiento, dueTS: s.vencimientoTS,
+                saleId: s.id, saldoFactura, anulado: s.anulada
+            };
+        });
+    const clientAbonos = abonosHistory
+        .filter(a => (a.tipo === 'cliente' || a.tipo === 'factura') && String(a.referenciaId) === String(c.id))
+        .map(a => {
+            const invoice = salesHistory.find(s => String(s.id) === String(a.facturaId));
+            return { type: 'abono', date: new Date(a.fechaTS || a.id).toLocaleString(), ts: a.fechaTS || a.id, ref: invoice ? `Abono #${String(invoice.numero).padStart(6, '0')}` : `Abono`, detail: `Pago recibido por ${a.metodoPago || "medio no indicado"} (${a.usuario})`, amount: Number(a.monto) || 0, id: a.id, anulado: a.anulado };
+        });
     const ledger = [...clientSales, ...clientAbonos].sort((a,b) => a.ts - b.ts); 
     const tbody = document.getElementById("statementTableBody"); if(!tbody) return; 
     
     if(ledger.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="text-center">No hay movimientos registrados.</td></tr>`; } else { 
         let saldo = 0; const hoy = Date.now(); 
         tbody.innerHTML = ledger.map(mov => { 
-            if (!mov.anulado) { if (mov.type === 'cargo') saldo += mov.amount; else saldo -= mov.amount; }
+            if (!mov.anulado) {
+                if (mov.type === 'cargo') saldo = r2(saldo + mov.amount);
+                else if (mov.type === 'abono') saldo = r2(saldo - mov.amount);
+            }
             const isOverdue = mov.type === 'cargo' && mov.dueTS && mov.dueTS < hoy && !mov.anulado; 
             const dateHtml = mov.type === 'cargo' ? `${mov.date}<br><small style="color:${isOverdue?'#d32f2f':'#666'}; font-weight:${isOverdue?'bold':'normal'}">Vence: ${mov.dueDate||'-'}</small>` : mov.date; 
             const cargoHtml = mov.type === 'cargo' ? (mov.anulado ? `<del>${sysConfig.currency}${mov.amount.toFixed(2)}</del>` : `${sysConfig.currency}${mov.amount.toFixed(2)}`) : ''; 
@@ -960,7 +1249,7 @@ window.verEstadoCuentaCliente = function(id) {
             let btnHtml = '';
             if (mov.type === 'cargo') { 
                 btnHtml = `<button class="btn btn-sm btn-secondary" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.reimprimirTicket('${mov.saleId}'), 100);">Ver Factura</button> ` +
-                          (mov.anulado ? '' : `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbono('${c.id}'), 100);">Abonar</button>`); 
+                          (!mov.anulado && mov.saldoFactura > 0 ? `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoVenta('${mov.saleId}'), 100);">Abonar</button>` : '');
             } 
             else if (mov.type === 'abono') { btnHtml = mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoCliente('${mov.id}'), 100);">Anular</button>`; }
             
@@ -976,10 +1265,19 @@ window.anularAbonoCliente = async function(abonoId) {
     const abono = abonosHistory.find(a => String(a.id) === String(abonoId)); if(!abono || abono.anulado) return;
     const cliente = clients.find(c => String(c.id) === String(abono.referenciaId));
     showAnularRegistro("Anular Abono", `Cliente: ${cliente ? cliente.name : 'Desconocido'} - Monto: ${sysConfig.currency}${abono.monto.toFixed(2)}`, async (motivo) => {
+        const restoAbonosAnterior = cliente ? saldosFacturasCliente(cliente).resto : 0;
         abono.anulado = true; abono.motivoAnulacion = motivo; abono.fechaAnulacion = new Date().toLocaleString(); abono.usuarioAnulacion = currentUser.displayName;
-        if (cliente) { cliente.debt = r2((cliente.debt || 0) + abono.monto); await localDB.clients.put(cliente); await encolarSincronizacion('UPDATE', 'clients', cliente); }
-        if (cajaActual) { cajaActual.movimientos.push({ tipo: "salida", monto: abono.monto, concepto: `Anulación Abono Cliente: ${cliente ? cliente.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion('UPDATE', 'cajaSessions', cajaActual); }
+        if (cliente) {
+            const restoAbonosNuevo = saldosFacturasCliente(cliente).resto;
+            cliente.deudaSinFactura = r2((Number(cliente.deudaSinFactura) || 0) + Math.max(0, restoAbonosAnterior - restoAbonosNuevo));
+            cliente.debt = calcularDeudaFacturasCliente(cliente);
+            await localDB.clients.put(cliente);
+            await encolarSincronizacion('UPDATE', 'clients', cliente);
+        }
+        if (cajaActual && (!abono.metodoPago || abono.metodoPago === "efectivo")) { cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo: "salida", monto: abono.monto, concepto: `Anulación Abono Cliente: ${cliente ? cliente.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", referenciaAbonoId: abono.id }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion('UPDATE', 'cajaSessions', cajaActual); }
         await localDB.abonos.put(abono); await encolarSincronizacion('UPDATE', 'abonos', abono); await registrarAuditoria('CLIENTES', 'ANULAR_ABONO', `Anuló abono de ${sysConfig.currency}${abono.monto.toFixed(2)} del cliente ${cliente ? cliente.name : ''}. Motivo: ${motivo}`);
+        const factura = abono.facturaId && salesHistory.find(sale => String(sale.id) === String(abono.facturaId));
+        if (factura && !document.getElementById("paymentSaleModal")?.classList.contains("hidden")) pintarModalAbonoVenta(factura);
         actualizarTablaClientes(); refrescarSelectClientesCredito(); if(cajaActual) renderCajaView(); renderDashboard(); showAlert("Abono anulado exitosamente.");
         if(cliente) setTimeout(() => window.verEstadoCuentaCliente(cliente.id), 500);
     });
@@ -1065,8 +1363,8 @@ window.verEstadoCuentaProveedor = function(id) {
     const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; 
     document.getElementById("statementModalTitle").textContent = `Cuentas por Pagar: ${s.name}`; document.getElementById("statementModalSubtitle").textContent = `Deuda Total: ${sysConfig.currency}${(s.debt||0).toFixed(2)}`; 
     
-    const suppPurch = purchasesHistory.filter(p => p.proveedor === s.name && p.tipo === "credito").map(p => ({ type: 'cargo', date: p.fecha, ts: p.fechaTS||p.id, ref: p.factura, detail: p.anulada ? 'Factura Anulada' : 'Factura de Compra', amount: p.total, id: p.id, anulado: p.anulada }));
-    const suppAbonos = abonosHistory.filter(a => a.tipo === 'proveedor' && String(a.referenciaId) === String(s.id)).map(a => ({ type: 'abono', date: a.fecha, ts: a.fechaTS, ref: 'Abono', detail: `Pago a proveedor (${a.usuario})`, amount: a.monto, id: a.id, anulado: a.anulado }));
+    const suppPurch = purchasesHistory.filter(p => p.proveedor === s.name && p.tipo === "credito").map(p => ({ type: 'cargo', date: p.fecha, ts: p.fechaTS||p.id, ref: p.factura, detail: p.anulada ? 'Factura Anulada' : `Factura de compra · Total ${sysConfig.currency}${r2(p.total).toFixed(2)} · Abonado ${sysConfig.currency}${obtenerTotalAbonadoFactura("proveedor", p.id).toFixed(2)} · Pendiente ${sysConfig.currency}${obtenerSaldoFactura("proveedor", p).toFixed(2)}`, amount: p.total, id: p.id, anulado: p.anulada }));
+    const suppAbonos = abonosHistory.filter(a => a.tipo === 'proveedor' && String(a.referenciaId) === String(s.id)).map(a => { const invoice = purchasesHistory.find(p => String(p.id) === String(a.facturaId)); return { type: 'abono', date: new Date(a.fechaTS || a.id).toLocaleString(), ts: a.fechaTS, ref: invoice ? `Pago ${invoice.factura}` : 'Abono', detail: `Pago a proveedor por ${a.metodoPago || "medio no indicado"} (${a.usuario})`, amount: a.monto, id: a.id, anulado: a.anulado }; });
     const ledger = [...suppPurch, ...suppAbonos].sort((a,b) => a.ts - b.ts);
     
     const tbody = document.getElementById("statementTableBody"); if(!tbody) return; 
@@ -1080,7 +1378,7 @@ window.verEstadoCuentaProveedor = function(id) {
             let btnHtml = '';
             if (mov.type === 'cargo') { 
                 btnHtml = `<button class="btn btn-sm btn-secondary" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.verFacturaCompra('${mov.id}'), 100);">Ver Factura</button> ` +
-                          (mov.anulado ? '' : `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoProveedor('${s.id}'), 100);">Abonar</button>`); 
+                          (mov.anulado || obtenerSaldoFactura("proveedor", purchasesHistory.find(p => String(p.id) === String(mov.id))) <= 0 ? '' : `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoFacturaProveedor('${mov.id}'), 100);">Abonar</button>`);
             }
             else if (mov.type === 'abono') { btnHtml = mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoProveedor('${mov.id}'), 100);">Anular</button>`; }
             
@@ -1098,7 +1396,7 @@ window.anularAbonoProveedor = async function(abonoId) {
     showAnularRegistro("Anular Pago a Proveedor", `Proveedor: ${proveedor ? proveedor.name : 'Desconocido'} - Monto: ${sysConfig.currency}${abono.monto.toFixed(2)}`, async (motivo) => {
         abono.anulado = true; abono.motivoAnulacion = motivo; abono.fechaAnulacion = new Date().toLocaleString(); abono.usuarioAnulacion = currentUser.displayName;
         if (proveedor) { proveedor.debt = r2((proveedor.debt || 0) + abono.monto); await localDB.suppliers.put(proveedor); await encolarSincronizacion('UPDATE', 'suppliers', proveedor); }
-        if (cajaActual) { cajaActual.movimientos.push({ tipo: "entrada", monto: abono.monto, concepto: `Anulación Pago Proveedor: ${proveedor ? proveedor.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion('UPDATE', 'cajaSessions', cajaActual); }
+        if (cajaActual && (!abono.metodoPago || abono.metodoPago === "efectivo")) { cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo: "entrada", monto: abono.monto, concepto: `Anulación Pago Proveedor: ${proveedor ? proveedor.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", referenciaAbonoId: abono.id }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion('UPDATE', 'cajaSessions', cajaActual); }
         await localDB.abonos.put(abono); await encolarSincronizacion('UPDATE', 'abonos', abono); await registrarAuditoria('PROVEEDORES', 'ANULAR_PAGO', `Anuló pago de ${sysConfig.currency}${abono.monto.toFixed(2)} al proveedor ${proveedor ? proveedor.name : ''}. Motivo: ${motivo}`);
         actualizarTablaCuentasPorPagar(); if(cajaActual) renderCajaView(); renderDashboard(); showAlert("Pago anulado exitosamente.");
         if(proveedor) setTimeout(() => window.verEstadoCuentaProveedor(proveedor.id), 500);
@@ -1177,12 +1475,36 @@ document.getElementById("purchaseForm")?.addEventListener("submit", async (e) =>
 
 window.cancelarCompraForm = function() { showConfirm("¿Estás seguro de cancelar esta factura de compra?", () => { document.getElementById("purchaseModal").classList.add("hidden"); currentPurchaseCart = []; }); };
 
-function actualizarTablaCompras() { const tb = document.getElementById("purchasesTableBody"); if(!tb) return; if(purchasesHistory.length === 0) { tb.innerHTML = `<tr><td colspan="7" class="text-center">Sin registros.</td></tr>`; } else { tb.innerHTML = [...purchasesHistory].reverse().map(c => { const cantidadTipos = c.items ? c.items.length : 1; let estadoHtml = c.tipo === 'credito' ? `<span style="font-size:11px; font-weight:bold; padding:3px 6px; border-radius:4px; background:#fff3cd; color:#856404;">CRÉDITO<br>Vence: ${c.vencimiento || '-'}</span>` : `<span style="font-size:11px; font-weight:bold; padding:3px 6px; border-radius:4px; background:#d4edda; color:#155724;">CONTADO</span>`; if (c.anulada) estadoHtml += `<br><span style="font-size:11px; font-weight:bold; color:#d32f2f;">❌ ANULADA</span>`; const totalFormat = c.anulada ? `<del>${sysConfig.currency}${(c.total||0).toFixed(2)}</del>` : `${sysConfig.currency}${(c.total||0).toFixed(2)}`; const actionBtns = c.anulada ? `<button class="btn btn-sm btn-primary" onclick="window.verFacturaCompra('${c.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-primary" onclick="window.verFacturaCompra('${c.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.eliminarCompra('${c.id}')">Anular</button>`; const trStyle = c.anulada ? `style="background-color:#fdf5f5; color:#888;"` : ''; return `<tr ${trStyle}><td>${c.fecha}</td><td><strong>${escapeHtml(c.factura)}</strong></td><td>${escapeHtml(c.proveedor)}</td><td>${cantidadTipos} prod(s). dif.</td><td style="color:#d32f2f; font-weight:bold;">${totalFormat}</td><td>${estadoHtml}</td><td>${actionBtns}</td></tr>`; }).join(""); } }
+function actualizarTablaCompras() {
+    const tbody = document.getElementById("purchasesTableBody");
+    if (!tbody) return;
+    if (purchasesHistory.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center">Sin registros.</td></tr>`;
+        return;
+    }
+    tbody.innerHTML = [...purchasesHistory].reverse().map(purchase => {
+        const itemCount = purchase.items ? purchase.items.length : 1;
+        const pending = obtenerSaldoFactura("proveedor", purchase);
+        const paymentStatus = purchase.tipo === "credito"
+            ? pending > 0 ? `CRÉDITO · Pendiente ${sysConfig.currency}${pending.toFixed(2)}<br>Vence: ${purchase.vencimiento || "-"}` : "PAGADA"
+            : "CONTADO";
+        const statusColor = purchase.tipo === "credito" && pending > 0 ? "#856404" : "#155724";
+        let statusHtml = `<span style="font-size:11px; font-weight:bold; color:${statusColor};">${paymentStatus}</span>`;
+        if (purchase.anulada) statusHtml += `<br><span style="font-size:11px; font-weight:bold; color:#d32f2f;">ANULADA</span>`;
+        const totalFormat = purchase.anulada ? `<del>${sysConfig.currency}${r2(purchase.total).toFixed(2)}</del>` : `${sysConfig.currency}${r2(purchase.total).toFixed(2)}`;
+        const actionButtons = purchase.anulada
+            ? `<button class="btn btn-sm btn-primary" onclick="window.verFacturaCompra('${purchase.id}')">Ver Factura</button>`
+            : `<button class="btn btn-sm btn-primary" onclick="window.verFacturaCompra('${purchase.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.eliminarCompra('${purchase.id}')">Anular</button>`;
+        const rowStyle = purchase.anulada ? `style="background-color:#fdf5f5; color:#888;"` : "";
+        return `<tr ${rowStyle}><td>${escapeHtml(purchase.fecha)}</td><td><strong>${escapeHtml(purchase.factura)}</strong></td><td>${escapeHtml(purchase.proveedor)}</td><td>${itemCount} prod(s).</td><td style="color:#d32f2f; font-weight:bold;">${totalFormat}</td><td>${statusHtml}</td><td>${actionButtons}</td></tr>`;
+    }).join("");
+}
 
 window.eliminarCompra = function(id) {
     if (!isAdmin()) { showAlert("No tiene permisos para anular compras."); return; }
     const compra = purchasesHistory.find(p => String(p.id) === String(id)); if (!compra || compra.anulada) return;
     showAnularRegistro("Anular Factura de Compra", `Factura ${compra.factura} — Proveedor: ${compra.proveedor} — Total: ${sysConfig.currency}${(compra.total||0).toFixed(2)}.`, async (motivo) => {
+        if (obtenerTotalAbonadoFactura("proveedor", compra.id) > 0) { showAlert("Anule primero los pagos de esta factura antes de anular la compra."); return; }
         const faltantes = [];
         (compra.items || []).forEach(item => {
             const prod = resolverProductoDeItemCompra(item);
@@ -1203,13 +1525,140 @@ window.eliminarCompra = function(id) {
 
 function actualizarTablaCuentasPorPagar() { const tb = document.getElementById("payablesTableBody"); if(!tb) return; const deudores = suppliers.filter(s => (s.debt||0) > 0); if(deudores.length === 0) { tb.innerHTML = `<tr><td colspan="6" class="text-center">No hay cuentas por pagar pendientes.</td></tr>`; } else { tb.innerHTML = deudores.map(s => { const facturasCredito = purchasesHistory.filter(p => p.proveedor === s.name && p.tipo === "credito" && !p.anulada).sort((a,b) => new Date(a.vencimiento) - new Date(b.vencimiento)); const proxVencimiento = facturasCredito.length > 0 ? facturasCredito[0].vencimiento : 'Ver facturas'; return `<tr><td>${s.id}</td><td><strong>${escapeHtml(s.name)}</strong></td><td>${escapeHtml(s.phone) || '-'}</td><td style="color:#d32f2f; font-weight:bold;">${proxVencimiento}</td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td><td><button class="btn btn-sm btn-secondary" onclick="window.verEstadoCuentaProveedor('${s.id}')">Ver Facturas</button></td></tr>`; }).join(""); } }
 window.abrirAbonoProveedor = function(id) { const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("payableSupplierId").value = s.id; document.getElementById("payableSupplierName").textContent = s.name; document.getElementById("payableDebt").textContent = `${sysConfig.currency}${(s.debt||0).toFixed(2)}`; const pa = document.getElementById("payableAmount"); if(pa) pa.value = ""; document.getElementById("payablePaymentModal")?.classList.remove("hidden"); };
-document.getElementById("payablePaymentForm")?.addEventListener("submit", async (e) => { e.preventDefault(); const id = document.getElementById("payableSupplierId").value; const amount = r2(parseFloat(document.getElementById("payableAmount").value)); const s = suppliers.find(x => String(x.id) === String(id)); if (isNaN(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; } if (amount > r2(s.debt || 0)) { showAlert("El abono no puede ser mayor a la deuda."); return; } s.debt = r2((s.debt || 0) - amount); await localDB.suppliers.put(s); await encolarSincronizacion('UPDATE', 'suppliers', s); const newAbono = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, tipo: 'proveedor', referenciaId: s.id, monto: amount, fecha: new Date().toLocaleDateString(), fechaTS: Date.now(), usuario: currentUser.displayName, anulado: false }; abonosHistory.push(newAbono); await localDB.abonos.put(newAbono); await encolarSincronizacion('INSERT', 'abonos', newAbono); await registrarAuditoria('PROVEEDORES', 'ABONO', `Registró abono de ${sysConfig.currency}${amount.toFixed(2)} al proveedor "${s.name}"`); if (cajaActual) { cajaActual.movimientos.push({ tipo: "salida", monto: amount, concepto: `Pago a proveedor: ${s.name}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); } document.getElementById("payablePaymentModal")?.classList.add("hidden"); actualizarTablaCuentasPorPagar(); renderDashboard(); showAlert(`Abono registrado.`); });
+window.abrirAbonoFacturaProveedor = function(id) {
+    const purchase = purchasesHistory.find(item => String(item.id) === String(id));
+    if (!purchase || purchase.anulada || purchase.tipo !== "credito") return;
+    const supplier = suppliers.find(item => (item.name || "").toLowerCase() === (purchase.proveedor || "").toLowerCase());
+    if (!supplier) { showAlert("No se encontró el proveedor de esta factura."); return; }
+    const pending = obtenerSaldoFactura("proveedor", purchase);
+    document.getElementById("payInvoiceId").value = purchase.id;
+    document.getElementById("payInvoiceNumero").textContent = purchase.factura || String(purchase.id);
+    document.getElementById("payInvoiceProveedor").textContent = supplier.name;
+    document.getElementById("payInvoiceTotal").textContent = `${sysConfig.currency}${r2(purchase.total).toFixed(2)}`;
+    document.getElementById("payInvoicePaid").textContent = `${sysConfig.currency}${obtenerTotalAbonadoFactura("proveedor", purchase.id).toFixed(2)}`;
+    document.getElementById("payInvoiceSaldo").textContent = `${sysConfig.currency}${pending.toFixed(2)}`;
+    const amountInput = document.getElementById("payInvoiceAmount");
+    if (amountInput) { amountInput.value = ""; amountInput.max = String(Math.min(pending, r2(supplier.debt || 0))); amountInput.disabled = pending <= 0 || r2(supplier.debt || 0) <= 0; }
+    const submitButton = document.querySelector("#paymentInvoiceForm button[type='submit']");
+    if (submitButton) submitButton.disabled = pending <= 0 || r2(supplier.debt || 0) <= 0;
+    document.getElementById("paymentInvoiceModal")?.classList.remove("hidden");
+};
+
+document.getElementById("paymentInvoiceForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const purchaseId = document.getElementById("payInvoiceId").value;
+    const purchase = purchasesHistory.find(item => String(item.id) === String(purchaseId));
+    const supplier = purchase && suppliers.find(item => (item.name || "").toLowerCase() === (purchase.proveedor || "").toLowerCase());
+    const amount = r2(parseFloat(document.getElementById("payInvoiceAmount").value));
+    const metodoPago = document.getElementById("payInvoiceMethod")?.value || "efectivo";
+    if (!purchase || purchase.anulada || !supplier) { showAlert("La factura o el proveedor ya no están disponibles."); return; }
+    const pending = obtenerSaldoFactura("proveedor", purchase);
+    if (!Number.isFinite(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; }
+    if (amount > pending || amount > r2(supplier.debt || 0)) { showAlert("El pago no puede ser mayor al saldo pendiente de la factura ni a la deuda del proveedor."); return; }
+    if (metodoPago === "efectivo" && !cajaActual) { showAlert(MSG_SIN_CAJA); return; }
+
+    const fechaTS = Date.now();
+    const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, tipo: "proveedor", referenciaId: supplier.id, facturaId: purchase.id, monto: amount, metodoPago, estado: "pendiente", fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
+    supplier.debt = r2((supplier.debt || 0) - amount);
+    await localDB.suppliers.put(supplier);
+    await encolarSincronizacion("UPDATE", "suppliers", supplier);
+    abonosHistory.push(newAbono);
+    await localDB.abonos.put(newAbono);
+    await encolarSincronizacion("INSERT", "abonos", newAbono);
+    if (metodoPago === "efectivo" && registrarMovimientoAbonoEnCaja("salida", amount, `Pago Factura ${purchase.factura}: ${supplier.name}`, newAbono)) {
+        await localDB.cajaSessions.put(cajaActual);
+        await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual);
+        renderCajaView();
+    }
+    await registrarAuditoria("PROVEEDORES", "PAGO_FACTURA", `Pagó ${sysConfig.currency}${amount.toFixed(2)} a la factura ${purchase.factura} (${metodoPago}) de "${supplier.name}"`);
+    document.getElementById("paymentInvoiceModal")?.classList.add("hidden");
+    actualizarTablaCuentasPorPagar();
+    actualizarTablaProveedores();
+    renderDashboard();
+    if (document.getElementById("statementModalTitle")?.textContent.includes(supplier.name)) window.verEstadoCuentaProveedor(supplier.id);
+    showAlert("Pago de factura registrado correctamente.");
+});
+
+document.getElementById("payablePaymentForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const id = document.getElementById("payableSupplierId").value;
+    const amount = r2(parseFloat(document.getElementById("payableAmount").value));
+    const supplier = suppliers.find(item => String(item.id) === String(id));
+    const metodoPago = document.getElementById("payableMethod")?.value || "efectivo";
+    if (!supplier) return;
+    if (!Number.isFinite(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; }
+    if (amount > r2(supplier.debt || 0)) { showAlert("El abono no puede ser mayor a la deuda."); return; }
+    if (metodoPago === "efectivo" && !cajaActual) { showAlert(MSG_SIN_CAJA); return; }
+    const fechaTS = Date.now();
+    supplier.debt = r2((supplier.debt || 0) - amount);
+    await localDB.suppliers.put(supplier);
+    await encolarSincronizacion("UPDATE", "suppliers", supplier);
+    const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, tipo: "proveedor", referenciaId: supplier.id, monto: amount, metodoPago, fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
+    abonosHistory.push(newAbono);
+    await localDB.abonos.put(newAbono);
+    await encolarSincronizacion("INSERT", "abonos", newAbono);
+    await registrarAuditoria("PROVEEDORES", "ABONO", `Registró abono de ${sysConfig.currency}${amount.toFixed(2)} al proveedor "${supplier.name}" (${metodoPago})`);
+    if (metodoPago === "efectivo" && registrarMovimientoAbonoEnCaja("salida", amount, `Pago a proveedor: ${supplier.name}`, newAbono)) {
+        await localDB.cajaSessions.put(cajaActual);
+        await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual);
+        renderCajaView();
+    }
+    document.getElementById("payablePaymentModal")?.classList.add("hidden");
+    actualizarTablaCuentasPorPagar(); renderDashboard();
+    showAlert("Abono registrado.");
+});
 
 async function initCaja() { const todasCajas = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID }).toArray(); cajaHistorial = todasCajas.sort((a, b) => b.fechaAperturaTS - a.fechaAperturaTS); cajaActual = todasCajas.find(s => s.estado === "abierta") || null; }
-function calcularResumenCaja(session) { const desde = session.fechaAperturaTS; const hasta = session.fechaCierreTS || Date.now(); const ventasContado = salesHistory.filter(v => { const ts = v.fechaTS || v.id; return ts >= desde && ts <= hasta && v.metodo === "Contado" && !v.anulada; }).reduce((sum, v) => sum + v.total, 0); const entradas = session.movimientos.filter(m => m.tipo === "entrada" && !m.anulado).reduce((sum, m) => sum + m.monto, 0); const salidas = session.movimientos.filter(m => m.tipo === "salida" && !m.anulado).reduce((sum, m) => sum + m.monto, 0); const esperado = session.efectivoInicial + ventasContado + entradas - salidas; return { ventasContado: r2(ventasContado), entradas: r2(entradas), salidas: r2(salidas), esperado: r2(esperado) }; }
+function calcularResumenCaja(session) {
+    const desde = session.fechaAperturaTS;
+    const hasta = session.fechaCierreTS || Date.now();
+    const ventasContado = salesHistory.filter(venta => {
+        const ts = venta.fechaTS || venta.id;
+        return ts >= desde && ts <= hasta && venta.metodo === "Contado" && obtenerMedioPagoVenta(venta) === "cash" && !venta.anulada;
+    }).reduce((sum, venta) => sum + venta.total, 0);
+    const entradas = session.movimientos.filter(mov => mov.tipo === "entrada" && !mov.anulado).reduce((sum, mov) => sum + mov.monto, 0);
+    const salidas = session.movimientos.filter(mov => mov.tipo === "salida" && !mov.anulado).reduce((sum, mov) => sum + mov.monto, 0);
+    const esperado = session.efectivoInicial + ventasContado + entradas - salidas;
+    return { ventasContado: r2(ventasContado), entradas: r2(entradas), salidas: r2(salidas), esperado: r2(esperado) };
+}
 async function abrirCaja(efectivoInicial) { if (cajaActual) { showAlert("Ya existe una caja abierta."); return; } if (isNaN(efectivoInicial) || efectivoInicial < 0) { showAlert("Ingrese un monto inicial válido."); return; } const nueva = { business_id: DEFAULT_BUSINESS_ID, estado: "abierta", usuarioApertura: currentUser.displayName, fechaAperturaTS: Date.now(), fechaApertura: new Date().toLocaleString(), efectivoInicial: efectivoInicial, movimientos: [], fechaCierreTS: null, fechaCierre: null, efectivoReal: null, efectivoEsperado: null, diferencia: null, usuarioCierre: null }; const id = await localDB.cajaSessions.add(nueva); nueva.id = id; cajaActual = nueva; cajaHistorial.unshift(nueva); await encolarSincronizacion("INSERT", "cajaSessions", nueva); await registrarAuditoria('CAJA', 'APERTURA', `Abrió caja con ${sysConfig.currency}${efectivoInicial.toFixed(2)}`); renderCajaView(); }
-async function registrarMovimientoCaja(tipo, monto, concepto) { monto = r2(monto); if (!cajaActual) { showAlert("No hay una caja abierta."); return; } if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (!concepto || !concepto.trim()) { showAlert("Ingrese un concepto."); return; } cajaActual.movimientos.push({ tipo, monto, concepto: concepto.trim(), fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, anulado: false }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); }
-window.anularMovimientoCaja = async function(indexOriginal) { if (!isAdmin()) { showAlert("No tiene permisos."); return; } const mov = cajaActual.movimientos[indexOriginal]; if (mov.anulado) return; showAnularRegistro("Anular Movimiento de Caja", `${mov.tipo.toUpperCase()}: ${mov.concepto} (${sysConfig.currency}${mov.monto.toFixed(2)})`, async (motivo) => { mov.anulado = true; mov.motivoAnulacion = motivo; mov.usuarioAnulacion = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); showAlert("Movimiento anulado."); }); };
+async function registrarMovimientoCaja(tipo, monto, concepto) { monto = r2(monto); if (!cajaActual) { showAlert("No hay una caja abierta."); return; } if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (!concepto || !concepto.trim()) { showAlert("Ingrese un concepto."); return; } cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo, monto, concepto: concepto.trim(), fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", anulado: false }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); }
+window.anularMovimientoCaja = async function(indexOriginal, sessionId) { if (!isAdmin()) { showAlert("No tiene permisos."); return; } const session = sessionId ? cajaHistorial.find(item => String(item.id) === String(sessionId)) : cajaActual; const mov = session?.movimientos[indexOriginal]; if (!mov || mov.anulado) return; showAnularRegistro("Anular Movimiento de Caja", `${mov.tipo.toUpperCase()}: ${mov.concepto} (${sysConfig.currency}${mov.monto.toFixed(2)})`, async (motivo) => { mov.anulado = true; mov.motivoAnulacion = motivo; mov.usuarioAnulacion = currentUser.displayName; mov.fechaAnulacion = new Date().toLocaleString(); await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); renderCajaView(); showAlert("Movimiento anulado."); }); };
+window.confirmarMovimientoCaja = async function(sessionId, index) { if (!isAdmin()) { showAlert("No tiene permisos para confirmar movimientos."); return; } const session = cajaHistorial.find(item => String(item.id) === String(sessionId)); const mov = session?.movimientos[index]; if (!mov || mov.anulado || mov.estado !== "pendiente") return; mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = new Date().toLocaleString(); await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); await registrarAuditoria("CAJA", "CONFIRMAR_MOVIMIENTO", `Confirmó ${mov.tipo} de ${sysConfig.currency}${r2(mov.monto).toFixed(2)}: ${mov.concepto}`); renderCajaView(); };
+window.confirmarVentaCaja = async function(id) { if (!isAdmin()) { showAlert("No tiene permisos para confirmar operaciones."); return; } const sale = salesHistory.find(item => String(item.id) === String(id)); if (!sale || sale.anulada || sale.estadoCaja !== "pendiente") return; sale.estadoCaja = "confirmado"; sale.usuarioConfirmacionCaja = currentUser.displayName; sale.fechaConfirmacionCaja = new Date().toLocaleString(); await localDB.sales.put(sale); await encolarSincronizacion("UPDATE", "sales", sale); await registrarAuditoria("CAJA", "CONFIRMAR_VENTA", `Confirmó venta #${sale.numero} (${sale.metodo}) por ${sysConfig.currency}${r2(sale.total).toFixed(2)}`); renderCajaView(); };
+window.abrirCorreccionCaja = function(sessionId, index) { if (!isAdmin()) { showAlert("Solo el administrador puede corregir movimientos."); return; } const session = cajaHistorial.find(item => String(item.id) === String(sessionId)); const mov = session?.movimientos[index]; if (!mov || mov.tipo !== "entrada" || mov.anulado) return; document.getElementById("cashCorrectionSessionId").value = session.id; document.getElementById("cashCorrectionMovementIndex").value = index; document.getElementById("cashCorrectionOldAmount").textContent = `${sysConfig.currency}${r2(mov.monto).toFixed(2)}`; document.getElementById("cashCorrectionNewAmount").value = r2(mov.monto).toFixed(2); document.getElementById("cashCorrectionReason").value = ""; document.getElementById("cashCorrectionModal")?.classList.remove("hidden"); };
+document.getElementById("confirmCashCorrectionBtn")?.addEventListener("click", async () => {
+    if (!isAdmin()) { showAlert("Solo el administrador puede corregir movimientos."); return; }
+    const sessionId = document.getElementById("cashCorrectionSessionId").value;
+    const index = Number(document.getElementById("cashCorrectionMovementIndex").value);
+    const newAmount = r2(parseFloat(document.getElementById("cashCorrectionNewAmount").value));
+    const reason = document.getElementById("cashCorrectionReason").value.trim();
+    const session = cajaHistorial.find(item => String(item.id) === String(sessionId));
+    const mov = session?.movimientos[index];
+    if (!mov || mov.tipo !== "entrada" || mov.anulado) return;
+    if (!Number.isFinite(newAmount) || newAmount <= 0) { showAlert("Ingrese un nuevo monto válido, mayor que cero."); return; }
+    if (!reason) { showAlert("Indique el motivo de la corrección."); return; }
+
+    const previousAmount = r2(mov.monto);
+    const fechaTS = Date.now();
+    if (mov.montoOriginal === undefined) mov.montoOriginal = previousAmount;
+    if (!Array.isArray(mov.correcciones)) mov.correcciones = [];
+    const correction = { montoAnterior: previousAmount, montoNuevo: newAmount, diferencia: r2(newAmount - previousAmount), usuario: currentUser.displayName, fecha: new Date(fechaTS).toLocaleString(), fechaTS, motivo: reason, estado: "confirmado" };
+    mov.correcciones.push(correction);
+    mov.monto = newAmount;
+    mov.estadoCorreccion = correction.estado;
+    if (session.estado === "cerrada") {
+        const summary = calcularResumenCaja(session);
+        session.efectivoEsperado = summary.esperado;
+        session.diferencia = r2((session.efectivoReal || 0) - summary.esperado);
+    }
+    await localDB.cajaSessions.put(session);
+    await encolarSincronizacion("UPDATE", "cajaSessions", session);
+    await registrarAuditoria("CAJA", "CORRECCION_MOVIMIENTO", `Corrigió entrada de ${sysConfig.currency}${previousAmount.toFixed(2)} a ${sysConfig.currency}${newAmount.toFixed(2)} (diferencia ${sysConfig.currency}${correction.diferencia.toFixed(2)}). Motivo: ${reason}`);
+    document.getElementById("cashCorrectionModal")?.classList.add("hidden");
+    renderCajaView();
+    showAlert("Corrección registrada; el valor original quedó en el historial.");
+});
 async function cerrarCaja(efectivoReal) { if (!cajaActual) return; efectivoReal = r2(efectivoReal); const resumen = calcularResumenCaja(cajaActual); const diferencia = r2(efectivoReal - resumen.esperado); cajaActual.estado = "cerrada"; cajaActual.fechaCierreTS = Date.now(); cajaActual.fechaCierre = new Date().toLocaleString(); cajaActual.efectivoReal = efectivoReal; cajaActual.efectivoEsperado = resumen.esperado; cajaActual.diferencia = diferencia; cajaActual.usuarioCierre = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); cajaActual = null; await initCaja(); renderCajaView(); showAlert(`Caja cerrada exitosamente.`); }
 document.getElementById("abrirCajaBtn")?.addEventListener("click", () => { const inputEl = document.getElementById("cajaEfectivoInicialInput"); const inicial = parseFloat(inputEl?.value); if (isNaN(inicial) || inicial < 0) { showAlert("⚠️ Ingrese el monto de efectivo inicial con el que abre la caja."); inputEl?.focus(); return; } abrirCaja(inicial); if (inputEl) inputEl.value = ""; });
 document.getElementById("registrarEntradaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("entrada", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
@@ -1244,7 +1693,79 @@ document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () =>
 
     if (inputEl) inputEl.value = "";
 });
-function renderCajaView() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="5" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map((m, index) => { const icon = m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const btnX = m.anulado ? `<span style="color:#d32f2f; font-size:10px; font-weight:bold;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" style="padding: 3px 8px;" onclick="window.anularMovimientoCaja(${index})">X</button>`; const trStyle = m.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : ''; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr ${trStyle}><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td style="font-weight:bold;">${valFmt}</td><td>${btnX}</td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${sysConfig.currency}${(s.efectivoInicial||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(s.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); } }
+function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map((m, index) => { const icon = m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${sysConfig.currency}${(s.efectivoInicial||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(s.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); } }
+
+window.confirmarAbonoCaja = async function(id) { if (!isAdmin()) { showAlert("No tiene permisos para confirmar pagos."); return; } const abono = abonosHistory.find(item => String(item.id) === String(id)); if (!abono || abono.anulado || abono.estado !== "pendiente") return; abono.estado = "confirmado"; abono.usuarioConfirmacion = currentUser.displayName; abono.fechaConfirmacion = new Date().toLocaleString(); await localDB.abonos.put(abono); await encolarSincronizacion("UPDATE", "abonos", abono); for (const session of cajaHistorial) { let changed = false; (session.movimientos || []).forEach(mov => { if (String(mov.referenciaAbonoId) === String(abono.id) && mov.estado === "pendiente") { mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = abono.fechaConfirmacion; changed = true; } }); if (changed) { await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); } } await registrarAuditoria("CAJA", "CONFIRMAR_ABONO", `Confirmó ${abono.tipo === "cliente" ? "cobro" : "pago"} de ${sysConfig.currency}${r2(abono.monto).toFixed(2)} (${abono.metodoPago || "medio no registrado"})`); renderCajaView(); };
+
+function renderCajaCentral() {
+    const validSales = salesHistory.filter(sale => !sale.anulada);
+    const validClientPayments = abonosHistory.filter(abono => abono.tipo === "cliente" && !abono.anulado);
+    const lastClosed = cajaHistorial.find(session => session.estado === "cerrada");
+    const activeSummary = cajaActual ? calcularResumenCaja(cajaActual) : null;
+    const set = (id, value) => { const element = document.getElementById(id); if (element) element.textContent = value; };
+    const money = value => `${sysConfig.currency}${r2(value).toFixed(2)}`;
+    set("cajaCentralVentas", money(validSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)));
+    set("cajaCentralCobros", money(validClientPayments.reduce((sum, abono) => sum + (Number(abono.monto) || 0), 0)));
+    set("cajaCentralEsperado", money(activeSummary ? activeSummary.esperado : (lastClosed?.efectivoEsperado || 0)));
+    set("cajaCentralDiferencia", money(lastClosed?.diferencia || 0));
+
+    const userTotals = new Map();
+    validSales.forEach(sale => {
+        const name = sale.vendedor || "Desconocido";
+        if (!userTotals.has(name)) userTotals.set(name, { count: 0, total: 0, cash: 0, card: 0, transfer: 0, credit: 0, collections: 0 });
+        const totals = userTotals.get(name);
+        totals.count++;
+        totals.total += Number(sale.total) || 0;
+        const methodKey = obtenerMedioPagoVenta(sale);
+        if (methodKey) totals[methodKey] += Number(sale.total) || 0;
+    });
+    validClientPayments.forEach(abono => {
+        const name = abono.usuario || "Desconocido";
+        if (!userTotals.has(name)) userTotals.set(name, { count: 0, total: 0, cash: 0, card: 0, transfer: 0, credit: 0, collections: 0 });
+        userTotals.get(name).collections += Number(abono.monto) || 0;
+    });
+    const userBody = document.getElementById("cajaVentasUsuarioBody");
+    if (userBody) {
+        const rows = [...userTotals.entries()].sort((a, b) => b[1].total - a[1].total);
+        userBody.innerHTML = rows.length ? rows.map(([name, totals]) => `<tr><td><strong>${escapeHtml(name)}</strong></td><td>${totals.count}</td><td>${money(totals.cash)}</td><td>${money(totals.card)}</td><td>${money(totals.transfer)}</td><td>${money(totals.credit)}</td><td>${money(totals.collections)}</td><td><strong>${money(totals.total)}</strong></td></tr>`).join("") : `<tr><td colspan="8" class="text-center">Sin operaciones registradas.</td></tr>`;
+    }
+
+    const operations = [
+        ...validSales.filter(sale => sale.metodo !== "Crédito").map(sale => ({ type: "Venta", reference: `Factura #${sale.numero}`, date: sale.fecha, ts: sale.fechaTS || sale.id, user: sale.vendedor, method: mediosPagoVenta[obtenerMedioPagoVenta(sale)] || sale.metodo, amount: sale.total, status: sale.estadoCaja || "registrada", id: sale.id, kind: "sale" })),
+        ...abonosHistory.filter(abono => !abono.anulado).map(abono => {
+            const isClientPayment = abono.tipo === "cliente";
+            const invoice = isClientPayment
+                ? salesHistory.find(sale => String(sale.id) === String(abono.facturaId))
+                : purchasesHistory.find(purchase => String(purchase.id) === String(abono.facturaId));
+            const account = isClientPayment
+                ? clients.find(client => String(client.id) === String(abono.referenciaId))
+                : suppliers.find(supplier => String(supplier.id) === String(abono.referenciaId));
+            return { type: isClientPayment ? "Cobro" : "Pago a proveedor", reference: invoice ? `Factura ${isClientPayment ? `#${invoice.numero}` : invoice.factura}` : account?.name || "Sin referencia", date: new Date(abono.fechaTS || abono.id).toLocaleString(), ts: abono.fechaTS || abono.id, user: abono.usuario, method: abono.metodoPago || "No indicado", amount: abono.monto, status: abono.estado || "registrado", id: abono.id, kind: "abono" };
+        })
+    ].sort((a, b) => Number(b.ts) - Number(a.ts));
+    const operationBody = document.getElementById("cajaOperacionesBody");
+    if (operationBody) operationBody.innerHTML = operations.length ? operations.map(operation => {
+        const pending = operation.status === "pendiente";
+        const action = pending && isAdmin() ? `<button class="btn btn-sm btn-success" onclick="window.${operation.kind === "sale" ? "confirmarVentaCaja" : "confirmarAbonoCaja"}('${escapeHtml(operation.id)}')">Confirmar</button>` : "-";
+        const status = pending ? "Pendiente" : operation.status === "confirmado" ? "Confirmado" : "Registrado";
+        return `<tr><td>${escapeHtml(operation.date)}</td><td>${operation.type}<br><small>${escapeHtml(operation.reference)}</small></td><td>${escapeHtml(operation.user)}</td><td>${escapeHtml(operation.method)}</td><td>${money(operation.amount)}</td><td>${status}</td><td>${action}</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="text-center">Sin operaciones por revisar.</td></tr>`;
+
+    const movementBody = document.getElementById("cajaMovimientosBody");
+    if (!movementBody) return;
+    const movements = cajaHistorial.flatMap(session => (session.movimientos || []).map((movement, index) => ({ session, movement, index }))).sort((a, b) => (b.movement.fechaTS || 0) - (a.movement.fechaTS || 0));
+    movementBody.innerHTML = movements.length ? movements.map(({ session, movement, index }) => {
+        const status = movement.anulado ? "Anulado" : movement.estado === "pendiente" ? "Pendiente" : movement.estado === "confirmado" ? "Confirmado" : "Registrado";
+        const value = movement.anulado ? `<del>${money(movement.monto)}</del>` : money(movement.monto);
+        const correctionDetails = (movement.correcciones || []).map(correction => `<small>Original: ${money(movement.montoOriginal)}; nuevo: ${money(correction.montoNuevo)}; diferencia: ${money(correction.diferencia)}; ${escapeHtml(correction.motivo)}; ${escapeHtml(correction.usuario)} · ${escapeHtml(correction.fecha)} · ${escapeHtml(correction.estado)}</small>`).join("<br>");
+        const confirmButton = !movement.anulado && movement.estado === "pendiente" && isAdmin() ? `<button class="btn btn-sm btn-success" onclick="window.confirmarMovimientoCaja('${session.id}', ${index})">Confirmar</button>` : "";
+        const correctButton = !movement.anulado && movement.tipo === "entrada" && isAdmin() ? `<button class="btn btn-sm btn-secondary" onclick="window.abrirCorreccionCaja('${session.id}', ${index})">Corregir</button>` : "";
+        const cancelButton = !movement.anulado && isAdmin() ? `<button class="btn btn-sm btn-danger" onclick="window.anularMovimientoCaja(${index}, '${session.id}')">Anular</button>` : "";
+        return `<tr style="${movement.anulado ? "background-color:#fdf5f5;color:#888;" : ""}"><td>${escapeHtml(movement.fecha)}</td><td>${movement.tipo === "entrada" ? "Entrada" : "Salida"}</td><td>${escapeHtml(movement.concepto)}${correctionDetails ? `<br>${correctionDetails}` : ""}</td><td style="font-weight:bold;">${value}${movement.montoOriginal !== undefined ? `<br><small>Original: ${money(movement.montoOriginal)}</small>` : ""}</td><td>${escapeHtml(movement.usuario)}</td><td>${status}${movement.estadoCorreccion ? `<br>Corrección ${escapeHtml(movement.estadoCorreccion)}` : ""}</td><td>${confirmButton} ${correctButton} ${cancelButton}</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`;
+}
+
+function renderCajaView() { renderCajaViewBase(); renderCajaCentral(); }
 
 function renderGastosSelect() { const sel = document.getElementById("gastoCategoria"); if (sel && sel.options.length === 0) sel.innerHTML = GASTOS_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join(""); }
 window.registrarGastoSubmit = async function() { const categoria = document.getElementById("gastoCategoria").value; const metodo = document.getElementById("gastoMetodo").value; const descripcion = document.getElementById("gastoDescripcion").value.trim(); const comprobante = document.getElementById("gastoComprobante").value.trim() || "S/F"; const monto = r2(parseFloat(document.getElementById("gastoMonto").value)); if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (metodo === "caja" && !cajaActual) { showAlert("No hay caja abierta."); return; } const nuevoGasto = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, categoria, metodo, comprobante, monto, descripcion, fecha: new Date().toLocaleString(), fechaTS: Date.now(), usuario: currentUser ? currentUser.displayName : "Sistema", sessionId: cajaActual ? cajaActual.id : null, anulado: false }; gastosHistory.push(nuevoGasto); await localDB.gastos.put(nuevoGasto); await encolarSincronizacion("INSERT", "gastos", nuevoGasto); if (metodo === "caja") { cajaActual.movimientos.push({ tipo: "salida", monto, concepto: `Gasto: ${categoria} - ${descripcion}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); } document.getElementById("formRegistrarGasto")?.reset(); renderGastosView(); actualizarTablaHistorial(); renderDashboard(); showAlert(`Gasto registrado.`); };
@@ -1284,9 +1805,25 @@ function renderReportes() {
     const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
     set("repVentas", `${sysConfig.currency}${totalVentas.toFixed(2)}`); set("repCompras", `${sysConfig.currency}${totalCompras.toFixed(2)}`); set("repGastos", `${sysConfig.currency}${totalGastos.toFixed(2)}`); set("repUtilidad", `${sysConfig.currency}${utilidad.toFixed(2)}`); set("repCxC", `${sysConfig.currency}${totalCxC.toFixed(2)}`); set("repCxP", `${sysConfig.currency}${totalCxP.toFixed(2)}`);
 
-    const porMetodo = {}; ventasValidas.forEach(v => { if (!porMetodo[v.metodo]) porMetodo[v.metodo] = { count: 0, total: 0 }; porMetodo[v.metodo].count++; porMetodo[v.metodo].total += v.total; }); const metodoBody = document.getElementById("repVentasMetodoBody"); if (metodoBody) { const entries = Object.entries(porMetodo); metodoBody.innerHTML = entries.length === 0 ? `<tr><td colspan="3" class="text-center">Sin ventas.</td></tr>` : entries.map(([metodo, d]) => `<tr><td>${metodo}</td><td>${d.count}</td><td>${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
+    const porMetodo = {}; ventasValidas.forEach(venta => { const metodo = mediosPagoVenta[obtenerMedioPagoVenta(venta)] || venta.metodo; if (!porMetodo[metodo]) porMetodo[metodo] = { count: 0, total: 0 }; porMetodo[metodo].count++; porMetodo[metodo].total += venta.total; }); const metodoBody = document.getElementById("repVentasMetodoBody"); if (metodoBody) { const entries = Object.entries(porMetodo); metodoBody.innerHTML = entries.length === 0 ? `<tr><td colspan="3" class="text-center">Sin ventas.</td></tr>` : entries.map(([metodo, d]) => `<tr><td>${metodo}</td><td>${d.count}</td><td>${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
     const contadorProd = {}; ventasValidas.forEach(v => { if (v.items) v.items.forEach(i => { if (!contadorProd[i.name]) contadorProd[i.name] = { cantidad: 0, total: 0 }; const precio = v.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); contadorProd[i.name].cantidad += i.cantidad; contadorProd[i.name].total += precio * i.cantidad; }); }); const topBody = document.getElementById("repTopProductosBody"); if (topBody) { const sorted = Object.entries(contadorProd).sort((a, b) => b[1].cantidad - a[1].cantidad).slice(0, 15); topBody.innerHTML = sorted.length === 0 ? `<tr><td colspan="3" class="text-center">Sin datos.</td></tr>` : sorted.map(([name, d]) => `<tr><td>${escapeHtml(name)}</td><td>${d.cantidad}</td><td>${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
-    const porVendedor = {}; ventasValidas.forEach(v => { if (!porVendedor[v.vendedor]) porVendedor[v.vendedor] = { count: 0, contado: 0, credito: 0, total: 0 }; porVendedor[v.vendedor].count++; if (v.metodo === "Contado") porVendedor[v.vendedor].contado += v.total; else porVendedor[v.vendedor].credito += v.total; porVendedor[v.vendedor].total += v.total; }); const vendBody = document.getElementById("repVendedoresBody"); if (vendBody) { const entries = Object.entries(porVendedor).sort((a, b) => b[1].total - a[1].total); vendBody.innerHTML = entries.length === 0 ? `<tr><td colspan="5" class="text-center">Sin ventas.</td></tr>` : entries.map(([nombre, d]) => `<tr><td><strong>${escapeHtml(nombre)}</strong></td><td>${d.count}</td><td>${sysConfig.currency}${d.contado.toFixed(2)}</td><td>${sysConfig.currency}${d.credito.toFixed(2)}</td><td style="font-weight:bold;">${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
+    const porVendedor = {};
+    ventasValidas.forEach(venta => {
+        if (!porVendedor[venta.vendedor]) porVendedor[venta.vendedor] = { count: 0, contado: 0, tarjeta: 0, transferencia: 0, credito: 0, total: 0 };
+        const resumen = porVendedor[venta.vendedor];
+        resumen.count++;
+        const medio = obtenerMedioPagoVenta(venta);
+        if (medio === "cash") resumen.contado += venta.total;
+        else if (medio === "card") resumen.tarjeta += venta.total;
+        else if (medio === "transfer") resumen.transferencia += venta.total;
+        else if (medio === "credit") resumen.credito += venta.total;
+        resumen.total += venta.total;
+    });
+    const vendBody = document.getElementById("repVendedoresBody");
+    if (vendBody) {
+        const entries = Object.entries(porVendedor).sort((a, b) => b[1].total - a[1].total);
+        vendBody.innerHTML = entries.length === 0 ? `<tr><td colspan="7" class="text-center">Sin ventas.</td></tr>` : entries.map(([nombre, d]) => `<tr><td><strong>${escapeHtml(nombre)}</strong></td><td>${d.count}</td><td>${sysConfig.currency}${d.contado.toFixed(2)}</td><td>${sysConfig.currency}${d.tarjeta.toFixed(2)}</td><td>${sysConfig.currency}${d.transferencia.toFixed(2)}</td><td>${sysConfig.currency}${d.credito.toFixed(2)}</td><td style="font-weight:bold;">${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join("");
+    }
     const compBody = document.getElementById("repComprasBody"); if (compBody) { compBody.innerHTML = comprasFiltradas.length === 0 ? `<tr><td colspan="5" class="text-center">Sin compras.</td></tr>` : [...comprasFiltradas].reverse().map(c => `<tr><td>${c.fecha}</td><td>${escapeHtml(c.factura)}</td><td>${escapeHtml(c.proveedor)}</td><td>${c.tipo === 'credito' ? 'Crédito' : 'Contado'}</td><td style="font-weight:bold;">${sysConfig.currency}${(c.total||0).toFixed(2)}</td></tr>`).join(""); }
     
     const invBody = document.getElementById("repInventarioBody"); 
