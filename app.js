@@ -1,7 +1,7 @@
-/* global Dexie, window, Html5Qrcode, html2pdf, XLSX */
+/* global Dexie, Html5Qrcode, html2pdf, XLSX */
 "use strict";
 
-window.onerror = function(msg, url, lineNo, columnNo, error) { console.error("Error detectado:", msg, "en línea:", lineNo); return false; };
+window.onerror = function(msg, url, lineNo) { console.error("Error detectado:", msg, "en línea:", lineNo); return false; };
 
 const DEFAULT_BUSINESS_ID = '00000000-0000-0000-0000-000000000000';
 const localDB = new Dexie("POS_OfflineDB");
@@ -39,7 +39,7 @@ let sysConfig = JSON.parse(localStorage.getItem('posSystemConfig')) || {
 
 let reporteDesdeTS = null, reporteHastaTS = null;
 
-const loginScreen = document.getElementById("loginScreen"), app = document.getElementById("app"), barcodeInput = document.getElementById("barcodeInput"), searchProductInput = document.getElementById("searchProductInput"), toggleCameraBtn = document.getElementById("toggleCameraBtn"), cameraScannerContainer = document.getElementById("cameraScannerContainer"), notificationArea = document.getElementById("notificationArea");
+const loginScreen = document.getElementById("loginScreen"), app = document.getElementById("app"), barcodeInput = document.getElementById("barcodeInput"), searchProductInput = document.getElementById("searchProductInput"), cameraScannerContainer = document.getElementById("cameraScannerContainer");
 
 function isAdmin() { return !!currentUser && (currentUser.role === "gestor" || unlockedModuleId !== null); }
 
@@ -238,21 +238,6 @@ document.querySelectorAll(".close-modal-btn").forEach(btn => {
             });
         }
     }); 
-});
-
-let strictConfirmCallback = null;
-function showStrictConfirm(mensaje, callback) {
-    const msgEl = document.getElementById("strictConfirmMessage"); const modalEl = document.getElementById("strictConfirmModal");
-    const inputEl = document.getElementById("strictConfirmInput"); const errEl = document.getElementById("strictConfirmError");
-    if (!msgEl || !modalEl || !inputEl) return;
-    msgEl.textContent = mensaje; inputEl.value = ""; errEl?.classList.add("hidden"); strictConfirmCallback = callback; modalEl.classList.remove("hidden");
-    setTimeout(() => inputEl.focus(), 100);
-}
-document.getElementById("strictConfirmBtn")?.addEventListener("click", () => {
-    const inputEl = document.getElementById("strictConfirmInput"); const errEl = document.getElementById("strictConfirmError");
-    if (!inputEl || inputEl.value.trim().toUpperCase() !== "ELIMINAR") { errEl?.classList.remove("hidden"); return; }
-    document.getElementById("strictConfirmModal")?.classList.add("hidden");
-    if (strictConfirmCallback) strictConfirmCallback();
 });
 
 let anularRegistroCallback = null;
@@ -483,7 +468,7 @@ document.getElementById("toggleCameraBtn")?.addEventListener("click", async () =
             procesarCodigoBarras(texto);
         });
         isCameraActive = true;
-    } catch (err) {
+    } catch {
         cameraScannerContainer?.classList.add("hidden"); isCameraActive = false;
         showAlert("No se pudo iniciar la cámara.");
     } finally { camaraVentasBusy = false; }
@@ -681,11 +666,11 @@ async function registrarVenta(total, pago, vuelto) {
 window.reimprimirTicket = function(id) { ticketEsVentaNueva = false; const sale = salesHistory.find(s => String(s.id) === String(id)); if(!sale) return; generarVisualizacionTicket(sale, sale.total, 0, true); };
 
 function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
-    let prods = ""; let subtotalTicket = 0;
+    let prods; let subtotalTicket = 0;
     if (sale.items && sale.items.length > 0) { prods = sale.items.map(i => { const precio = sale.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); subtotalTicket += (precio * i.cantidad); return `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${i.cantidad}x ${escapeHtml(i.name)}</span><span>${sysConfig.currency}${(precio * i.cantidad).toFixed(2)}</span></div>`; }).join(""); } else { prods = `<div style="text-align:center; font-size:12px; color:#888;">(Detalle no disponible)</div>`; subtotalTicket = sale.total; }
     let saldoPendienteHtml = "";
     if (sale.metodo === "Crédito") { const c = clients.find(cl => String(cl.id) === String(sale.clienteId)) || clients.find(cl => cl.name === sale.cliente); if (c) { saldoPendienteHtml = `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top:5px; border-top:1px dashed #000; padding-top:5px; color:#d32f2f;"><span>Saldo Pendiente:</span><span>${sysConfig.currency}${obtenerSaldoFactura("cliente", sale).toFixed(2)}</span></div>`; } }
-    let pagoH = "";
+    let pagoH;
     if (sale.metodo === "Contado") {
         const medio = obtenerMedioPagoVenta(sale);
         const recibido = medio === "cash" && !esCopia ? `<span>Recibido: ${sysConfig.currency}${(pago||0).toFixed(2)}</span>` : "";
@@ -853,7 +838,7 @@ function actualizarTablaInventario() {
     let bajoStock = 0; let agotados = 0;
     
     tb.innerHTML = prodActivosReales.map(p => {
-        let rowStyle = ""; let stockHtml = p.stock || 0; const minStockLimit = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); const isActive = p.active !== false; let estadoHtml = '';
+        let rowStyle = ""; let stockHtml = p.stock || 0; const minStockLimit = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); const isActive = p.active !== false; let estadoHtml;
         if (!isActive) { rowStyle = "background-color: #f4f4f4; color: #888;"; estadoHtml = '<span style="color:#666; font-weight:bold;">Inactivo</span>'; } else if ((p.stock||0) <= 0) { agotados++; rowStyle = "background-color: #ffebee;"; stockHtml = `<span style="color:#d32f2f; font-weight:bold;">${p.stock||0} (Agotado)</span>`; estadoHtml = 'Agotado'; } else if ((p.stock||0) <= minStockLimit) { bajoStock++; stockHtml = `<span style="color:#ff9800; font-weight:bold;">${p.stock} (Bajo)</span>`; estadoHtml = 'Activo'; } else { estadoHtml = 'Activo'; }
         const retail = p.retailPrice || p.retail || 0; const wholesale = p.wholesalePrice || p.wholesale || 0;
         
@@ -867,7 +852,7 @@ function actualizarTablaInventario() {
         return `<tr style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(p.barcode)}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}${btnEliminar}</div></td></tr>`; 
     }).join(""); 
     
-    if(document.getElementById("invTotalProducts")) document.getElementById("invTotalProducts").textContent = prodActivosReales.length; 
+    if(document.getElementById("invTotalProducts")) document.getElementById("invTotalProducts").textContent = products.filter(p => !p.deleted && p.active !== false).length; 
     if(document.getElementById("invLowStock")) document.getElementById("invLowStock").textContent = bajoStock; 
     if(document.getElementById("invOutOfStock")) document.getElementById("invOutOfStock").textContent = agotados;
 }
@@ -1006,7 +991,7 @@ function actualizarTablaClientes() {
     tb.innerHTML = clients.map(c => { 
         const disponible = (c.creditLimit||0) - (c.debt||0); const facturasCliente = salesHistory.filter(s => s.cliente === c.name && s.metodo === "Crédito" && !s.anulada); const tieneVencido = facturasCliente.some(s => s.vencimientoTS && s.vencimientoTS < hoyTS && (c.debt||0) > 0); 
         const isActive = c.active !== false;
-        let estadoHtml = '';
+        let estadoHtml;
         if (!isActive) { estadoHtml = `Inactivo`; }
         else if (tieneVencido) { estadoHtml = `⚠️ Vencido`; }
         else if ((c.debt||0) > 0) { estadoHtml = `Activo`; }
@@ -1693,7 +1678,7 @@ document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () =>
 
     if (inputEl) inputEl.value = "";
 });
-function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map((m, index) => { const icon = m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${sysConfig.currency}${(s.efectivoInicial||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(s.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); } }
+function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map(m => { const icon = m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${sysConfig.currency}${(s.efectivoInicial||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(s.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); } }
 
 window.confirmarAbonoCaja = async function(id) { if (!isAdmin()) { showAlert("No tiene permisos para confirmar pagos."); return; } const abono = abonosHistory.find(item => String(item.id) === String(id)); if (!abono || abono.anulado || abono.estado !== "pendiente") return; abono.estado = "confirmado"; abono.usuarioConfirmacion = currentUser.displayName; abono.fechaConfirmacion = new Date().toLocaleString(); await localDB.abonos.put(abono); await encolarSincronizacion("UPDATE", "abonos", abono); for (const session of cajaHistorial) { let changed = false; (session.movimientos || []).forEach(mov => { if (String(mov.referenciaAbonoId) === String(abono.id) && mov.estado === "pendiente") { mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = abono.fechaConfirmacion; changed = true; } }); if (changed) { await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); } } await registrarAuditoria("CAJA", "CONFIRMAR_ABONO", `Confirmó ${abono.tipo === "cliente" ? "cobro" : "pago"} de ${sysConfig.currency}${r2(abono.monto).toFixed(2)} (${abono.metodoPago || "medio no registrado"})`); renderCajaView(); };
 
