@@ -48,3 +48,12 @@ test('rate limit cuenta intentos concurrentes y vence ventana', () => {
   assert.equal(errors[3].publicStatus, 429);
   now = 60001; middleware(req, res, e => assert.equal(e, undefined));
 });
+
+test('texto rechaza todos los controles C0 y conserva Unicode y limites', () => {
+  for (let code = 0; code <= 0x1f; code++) {
+    assert.throws(() => v.text('Nombre' + String.fromCharCode(code) + 'Apellido', 100), { publicStatus: 400, publicCode: 'INVALID_INPUT' });
+  }
+  assert.equal(v.text('  Jos\u00e9 \ud83d\udce6  ', 100), 'Jos\u00e9 \ud83d\udce6');
+  assert.equal(v.text('A' + String.fromCharCode(0x7f) + 'B', 100), 'A' + String.fromCharCode(0x7f) + 'B');
+  for (const value of [null, 123, '', '   ', 'a'.repeat(101)]) assert.throws(() => v.text(value, 100));
+});

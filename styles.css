@@ -246,3 +246,22 @@ input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
   .topbar .nav-tabs { gap: 4px; }
   .cart-footer .btn-full { height: 46px; font-size: 1rem; }
 }
+/* Autenticacion conectada y administracion de usuarios */
+.user-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
+#usersView button { margin: 4px; }
+#usersView form { margin-block: 18px; }
+#businessContext { font-size: 12px; }
+#connectedNotice { margin-bottom: 12px; }
+#authMode { width: 100%; padding: 10px; }
+#usersTableBody select { padding: 6px; }
+
+#usersView { padding: 24px; }
+#usersView h2 { margin-bottom: 12px; }
+#usersView > p { margin-bottom: 12px; }
+#usersView form, #usersView .table-container { background: #fff; border: 1px solid #dce3ed; border-radius: 12px; padding: 16px; }
+#usersView .table-container { overflow-x: auto; }
+#usersView table { width: 100%; border-collapse: collapse; }
+#usersView th, #usersView td { padding: 12px 8px; text-align: left; border-bottom: 1px solid #e7ecf2; }
+#usersView td:last-child { min-width: 270px; }
+#connectedNotice { padding: 12px 24px; border-bottom: 1px solid #dce3ed; background: #fff; color: #334155; }
+@media (max-width: 600px) { #usersView { padding: 16px; } #usersView .table-container { padding: 8px; } #usersView table { min-width: 730px; } }

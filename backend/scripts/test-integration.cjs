@@ -4,6 +4,7 @@ const { resolve } = require('node:path');
 const { spawn } = require('node:child_process');
 const mysql = require('mysql2/promise');
 const { randomBytes } = require('node:crypto');
+const { runBrowserTests } = require('./test-connected.cjs');
 const { readConfig } = require('../src/config/environment');
 async function main() {
   const config = readConfig();
@@ -22,6 +23,10 @@ async function main() {
     const migration = readFileSync(resolve(__dirname, '../../database/migrations/001_authorization_grantor.sql'), 'utf8');
     await connection.query(migration);
     console.log('Integracion: base temporal ' + name);
+    if (process.argv[2] === '--browser') {
+      process.exitCode = await runBrowserTests({ config, database: name });
+      return;
+    }
     const child = spawn(process.execPath, ['--test', 'tests/integration/auth.test.cjs'], { cwd: resolve(__dirname, '..'), stdio: 'inherit', windowsHide: true, env: { ...process.env, NODE_ENV: 'test', POS_INTEGRATION_DATABASE: name } });
     process.exitCode = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('exit', code => resolveExit(code ?? 1)); });
   } finally {

@@ -4,3 +4,5 @@ node_modules/
 !.env.example
 /dist/
 !backend/package-lock.json
+
+/test-results-connected/

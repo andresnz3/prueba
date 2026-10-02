@@ -17,7 +17,10 @@
             <div class="login-logo"><div class="logo-icon">POS</div></div>
             <h1>POS Distribuidora</h1>
             <p class="login-subtitle">Inicia sesión para continuar</p>
+            <div class="form-group"><label for="authMode">Modalidad</label><select id="authMode"><option value="local">Modo local</option><option value="connected">Modo conectado</option></select></div>
+            <p id="modeDescription" class="login-subtitle">Datos y acceso locales en este navegador.</p>
             <form id="loginForm" onsubmit="event.preventDefault();">
+                <div id="businessLoginGroup" class="form-group hidden"><label for="loginBusinessId">Identificador del negocio</label><input id="loginBusinessId" type="text" inputmode="numeric" pattern="[1-9][0-9]{0,19}" autocomplete="off" disabled></div>
                 <div class="form-group"><label for="loginUsername">Usuario</label><input type="text" id="loginUsername" placeholder="Ingresa tu usuario..." required></div>
                 <div class="form-group"><label for="loginPassword">Contraseña</label><input type="password" id="loginPassword" placeholder="******" required></div>
                 <div id="loginError" class="message error hidden">Credenciales incorrectas</div>
@@ -30,6 +33,7 @@
         <header class="topbar">
             <div class="brand"><div class="brand-icon">D</div><div><h2 id="brandNameDisplay">POS Distribuidora</h2><span id="roleBadge">Usuario</span></div></div>
             <nav class="nav-tabs">
+                <button id="navUsersBtn" class="nav-btn hidden">Usuarios</button>
                 <button id="navSalesBtn" class="nav-btn active">🛒 Venta</button>
                 <button id="navInventoryBtn" class="nav-btn">📦 Productos</button>
                 <button id="navPurchasesBtn" class="nav-btn">📥 Compras</button>
@@ -48,11 +52,14 @@
             </nav>
             <div class="topbar-right">
                 <div class="seller-info"><div class="seller-avatar" id="sellerAvatar">V</div><div><strong id="sellerName">vendedor1</strong><br><span style="font-size: 11px; color: #28a745;">⚫ Offline First Activo</span></div></div>
+                <span id="businessContext" class="hidden"></span><button id="renewSessionBtn" class="btn btn-secondary hidden" type="button">Renovar sesión</button>
                 <button id="logoutBtn" class="logout-btn">Salir</button>
             </div>
         </header>
 
         <main class="main-container">
+            <p id="connectedNotice" class="message hidden" role="status"></p>
+            <div id="usersView" class="view-panel hidden"><h2>Usuarios del negocio</h2><p>Solo los administradores pueden gestionar estas cuentas.</p><p id="usersMessage" role="status"></p><button id="refreshUsersBtn" class="btn btn-secondary" type="button">Actualizar lista</button><div class="users-pagination"><button id="previousUsersBtn" class="btn btn-secondary" type="button" disabled>Anterior</button><span>Página <span id="usersPage">1</span></span><button id="nextUsersBtn" class="btn btn-secondary" type="button" disabled>Siguiente</button></div><form id="createUserForm"><div class="user-fields"><div class="form-group"><label for="newUsername">Usuario</label><input id="newUsername" required pattern="[A-Za-z0-9_.-]{3,100}" maxlength="100" autocomplete="off"></div><div class="form-group"><label for="newFullName">Nombre completo</label><input id="newFullName" required maxlength="160" autocomplete="off"></div><div class="form-group"><label for="newUserPassword">Contraseña inicial</label><input id="newUserPassword" type="password" minlength="12" required autocomplete="new-password"></div><div class="form-group"><label for="newUserRole">Rol</label><select id="newUserRole"><option value="VENDEDOR">VENDEDOR</option><option value="ADMIN">ADMIN</option></select></div></div><button class="btn btn-primary" type="submit">Crear usuario</button></form><div class="table-container"><table><thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="usersTableBody"></tbody></table></div><form id="userPasswordForm" class="hidden"><h3 id="passwordUserLabel">Cambiar contraseña</h3><label for="changedUserPassword">Nueva contraseña (mínimo 12 caracteres)</label><input id="changedUserPassword" type="password" required minlength="12" autocomplete="new-password"><button class="btn btn-primary" type="submit">Guardar contraseña</button><button id="cancelPasswordBtn" class="btn btn-secondary" type="button">Cancelar</button></form></div>
             <div id="salesView" class="view-panel">
                 <div class="workspace-layout">
                     <section class="workspace">
@@ -510,7 +517,7 @@
     </div>
 
     <!-- MODALES -->
-    <div id="authModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Autorización Requerida</h2><form id="authForm" onsubmit="event.preventDefault();"><div class="form-group"><label for="gestorPassword">Contraseña de gestor</label><input type="password" id="gestorPassword" placeholder="Contraseña de gestor" required style="background:#fff!important; color:#000!important;"></div><div id="authError" class="message error hidden">Contraseña incorrecta.</div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-primary">Autorizar</button></div></form></div></div>
+    <div id="authModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Autorización Requerida</h2><form id="authForm" onsubmit="event.preventDefault();"><div class="form-group"><label id="adminUsernameGroup" class="hidden" for="grantAdminUsername">Usuario administrador<input id="grantAdminUsername" autocomplete="off" disabled></label><label for="gestorPassword">Contraseña de gestor</label><input type="password" id="gestorPassword" placeholder="Contraseña de gestor" required style="background:#fff!important; color:#000!important;"></div><div id="authError" class="message error hidden">Contraseña incorrecta.</div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-primary">Autorizar</button></div></form></div></div>
     
     <div id="cashModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Cobro en Efectivo</h2><p style="margin-bottom: 15px;">Total a pagar: <strong id="cashTotalDisplay" style="font-size: 1.3em; color: #0066cc;">C$0.00</strong></p><div class="form-group"><label for="cashReceivedInput">Efectivo recibido (C$)</label><input type="number" id="cashReceivedInput" placeholder="Ej. 500" min="0" step="0.01" style="background:#fff!important; color:#000!important;"></div><div id="cashError" class="message error hidden">Monto insuficiente.</div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="button" id="confirmCashBtn" class="btn btn-primary">Cobrar</button></div></div></div>
 
@@ -766,7 +773,10 @@
     <div id="customAlertModal" class="modal hidden" style="z-index: 9999;"><div class="modal-overlay"></div><div class="modal-card" style="width: 350px; text-align: center; border-top: 5px solid #0066cc;"><h2 style="color: #0066cc; margin-bottom: 10px; font-size: 1.3rem;">Aviso del Sistema</h2><p id="customAlertMessage" style="margin-bottom: 20px; font-size: 1rem; color: #444; line-height: 1.4;"></p><button type="button" class="btn btn-primary btn-full close-modal-btn">Entendido</button></div></div>
     <div id="customConfirmModal" class="modal hidden" style="z-index: 9999;"><div class="modal-overlay"></div><div class="modal-card" style="width: 350px; text-align: center; border-top: 5px solid #d32f2f;"><h2 style="color: #d32f2f; margin-bottom: 10px; font-size: 1.3rem;">Confirmar Acción</h2><p id="customConfirmMessage" style="margin-bottom: 20px; font-size: 1rem; color: #444; line-height: 1.4;"></p><div class="modal-actions" style="justify-content: center; gap: 15px;"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="button" id="customConfirmBtn" class="btn btn-primary" style="background-color: #d32f2f;">Sí, confirmar</button></div></div></div>
 
+    <script src="api-config.js"></script>
+    <script src="api-client.js"></script>
     <script src="app.js"></script>
+    <script src="connected-auth.js"></script>
     <script src="icons.js"></script>
 </body>
 </html>

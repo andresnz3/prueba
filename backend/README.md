@@ -1,6 +1,6 @@
 # Backend POS: autenticacion y multiusuario
 
-Node.js >=22. Express 5, mysql2/promise, Helmet, CORS y Argon2 son las dependencias de ejecucion. Las pruebas usan node:test y fetch nativos. El frontend Dexie sigue separado y no llama a este backend.
+Node.js >=22. Express 5, mysql2/promise, Helmet, CORS y Argon2 son las dependencias de ejecucion. Las pruebas usan node:test y fetch nativos. El frontend conserva el modo local y ofrece autenticacion conectada opcional; los datos operativos siguen en Dexie sin sincronizacion.
 
 ## Instalacion desde VS Code / PowerShell
 
@@ -47,3 +47,7 @@ Resultados de esta etapa: 35 pruebas sin DB y 29 escenarios MySQL aprobados (nod
 netlify.toml mantiene command=node scripts/build-static.cjs y publish=dist. Se copian solo index.html, app.js, styles.css, icons.js y 404.html. Backend, SQL, .env, pruebas y dependencias quedan fuera. No se publico ningun servicio. Para despliegues manuales generar dist y subir solamente esa carpeta. Nuevos assets publicos deben agregarse expresamente a la lista.
 
 Esta etapa entrega autenticacion y permisos, no integracion del frontend. El backend no puede observar una navegacion que el cliente no comunica: la futura integracion debe invocar el endpoint de salida/entrada. El vencimiento de cinco minutos limita permisos abandonados por desconexion. El limitador de intentos vive en memoria de UN proceso y reinicia con el servicio; antes de usar varios procesos/instancias se necesita un almacen compartido. No se confia en X-Forwarded-For sin configurar un proxy conocido; actualmente se usa la IP del socket.
+
+## Frontend fase 5.1
+
+La integracion opcional de autenticacion esta descrita en ../FRONTEND_AUTH.md. Modo local conserva Dexie y login local; modo conectado usa cookies/CSRF y cuentas MySQL, con caches Dexie por negocio. No sincroniza operaciones. Desde la raiz: npm.cmd run test:frontend --prefix backend ejecuta Playwright contra una base temporal aislada.

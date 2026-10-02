@@ -45,7 +45,6 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
   const authConfig = readAuthConfig({ CSRF_SECRET: randomBytes(32).toString('hex'), AUTH_RATE_MAX: '100' });
   const pool = createDatabasePool({ ...config.database, database, connectionLimit: 10 });
   t.after(() => pool.end());
-  const repo = createAuthRepository(pool, authConfig);
   async function serve(authOptions = authConfig) {
     const r = createAuthRepository(pool, authOptions);
     const server = createApp({ config, checkDatabase: async () => {}, authentication: { repo: r, config: authOptions, auth: createAuthService(r, authOptions), users: createUsersService(r) } }).listen(0, '127.0.0.1');
