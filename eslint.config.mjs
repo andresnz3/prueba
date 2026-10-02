@@ -3,10 +3,11 @@ import js from "@eslint/js";
 
 export default [
   {
-    files: ["**/*.js"],
+    files: ["**/*.js", "**/*.cjs"],
     languageOptions: {
       globals: {
-        ...globals.browser
+        ...globals.browser,
+        indexedDB: "readonly"
       }
     }
   },
