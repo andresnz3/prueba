@@ -1,4 +1,17 @@
 const { test, expect } = require("@playwright/test");
+const { monitorRequests } = require("./browser-diagnostics.cjs");
+
+const frontendErrors = new WeakMap();
+
+test.beforeEach(async ({ page }) => {
+  const errors = [];
+  frontendErrors.set(page, errors);
+  monitorRequests(page, errors);
+});
+
+test.afterEach(async ({ page }) => {
+  expect(frontendErrors.get(page)).toEqual([]);
+});
 
 test("la pantalla de login carga correctamente", async ({ page }) => {
   await page.goto("/");
@@ -91,6 +104,16 @@ async function abrirInventario(page) {
 async function abrirCompras(page) {
   await page.locator("#navPurchasesBtn").click();
   await expect(page.locator("#purchasesView")).toBeVisible();
+}
+
+async function abrirClientes(page) {
+  await page.locator("#navClientsBtn").click();
+  await expect(page.locator("#clientsView")).toBeVisible();
+}
+
+async function abrirProveedores(page) {
+  await page.locator("#navSuppliersBtn").click();
+  await expect(page.locator("#suppliersView")).toBeVisible();
 }
 
 test("un producto se puede agregar al carrito", async ({ page }) => {
@@ -2129,4 +2152,1552 @@ test("no permite anular una compra si el stock ya no cubre la factura", async ({
   await expect(page.locator("#customAlertMessage")).toContainText("No se puede anular");
   await expect(page.locator("#customAlertMessage")).toContainText("stock 2, factura 5");
   await expect(purchaseRow).not.toContainText("ANULADA");
+});
+
+test("CLIENTES: crear cliente guarda sus datos y crédito inicial en la tabla", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirClientes(page);
+  await page.locator("#addNewClientBtn").click();
+
+  await page.locator("#clientName").fill("Cliente nuevo UI");
+  await page.locator("#clientRuc").fill("RUC-CLIENTE-001");
+  await page.locator("#clientPhone").fill("88881234");
+  await page.locator("#clientAddress").fill("Dirección de prueba");
+  await page.locator("#clientLimit").fill("1000");
+  await page.locator("#clientDebt").fill("125.50");
+  await page.locator("#clientForm button[type='submit']").click();
+
+  await expect(page.locator("#clientModal")).toBeHidden();
+  const clientRow = page.locator("#clientsTableBody tr").filter({
+    hasText: "Cliente nuevo UI"
+  });
+  await expect(clientRow).toContainText("88881234");
+  await expect(clientRow).toContainText("C$1000.00");
+  await expect(clientRow).toContainText("C$874.50");
+  await expect(clientRow).toContainText("C$125.50");
+  await expect(clientRow).toContainText("Activo");
+  await clientRow.getByRole("button", { name: "Editar" }).click();
+  await expect(page.locator("#clientRuc")).toHaveValue("RUC-CLIENTE-001");
+  await expect(page.locator("#clientAddress")).toHaveValue("Dirección de prueba");
+});
+
+test("CLIENTES: editar cliente actualiza datos y mantiene la deuda protegida", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirClientes(page);
+  await page.locator("#addNewClientBtn").click();
+  await page.locator("#clientName").fill("Cliente antes de editar");
+  await page.locator("#clientPhone").fill("11112222");
+  await page.locator("#clientLimit").fill("500");
+  await page.locator("#clientDebt").fill("100");
+  await page.locator("#clientForm button[type='submit']").click();
+
+  const clientRow = page.locator("#clientsTableBody tr").filter({
+    hasText: "Cliente antes de editar"
+  });
+  const clientId = (await clientRow.locator("td").first().innerText()).split("\n")[0];
+  await clientRow.getByRole("button", { name: "Editar" }).click();
+  await expect(page.locator("#clientDebt")).toHaveAttribute("readonly", "");
+  await expect(page.locator("#clientDebtHint")).toContainText("La deuda solo cambia");
+
+  await page.locator("#clientName").fill("Cliente después de editar");
+  await page.locator("#clientPhone").fill("33334444");
+  await page.locator("#clientLimit").fill("700");
+  await page.locator("#clientForm button[type='submit']").click();
+
+  const editedRow = page.locator("#clientsTableBody tr").filter({
+    hasText: "Cliente después de editar"
+  });
+  await expect(editedRow.locator("td").first()).toContainText(clientId);
+  await expect(editedRow).toContainText("33334444");
+  await expect(editedRow).toContainText("C$700.00");
+  await expect(editedRow).toContainText("C$600.00");
+  await expect(editedRow).toContainText("C$100.00");
+});
+
+test("CLIENTES: el formulario exige nombre, límite y deuda", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirClientes(page);
+  await page.locator("#addNewClientBtn").click();
+  await page.locator("#clientLimit").fill("");
+  await page.locator("#clientDebt").fill("");
+  await page.locator("#clientForm button[type='submit']").click();
+
+  const invalidRequiredFields = await page.locator("#clientForm").evaluate(form =>
+    [...form.querySelectorAll("[required]")]
+      .filter(field => !field.checkValidity())
+      .map(field => field.id)
+  );
+  expect(invalidRequiredFields).toEqual(["clientName", "clientLimit", "clientDebt"]);
+  await expect(page.locator("#clientModal")).toBeVisible();
+  await expect(page.locator("#clientsTableBody tr")).toHaveCount(0);
+});
+
+test("CLIENTES: rechaza nombre en blanco y montos negativos", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirClientes(page);
+  await page.locator("#addNewClientBtn").click();
+  await page.locator("#clientName").fill("   ");
+  await page.locator("#clientForm button[type='submit']").click();
+
+  await expect(page.locator("#customAlertMessage")).toContainText("nombre del cliente es obligatorio");
+  await expect(page.locator("#clientModal")).toBeVisible();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.locator("#clientName").fill("Cliente con datos inválidos");
+  await page.locator("#clientLimit").fill("-1");
+  await page.locator("#clientForm button[type='submit']").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("no negativos");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await expect(page.locator("#clientsTableBody tr")).toHaveCount(0);
+
+  await page.locator("#clientLimit").fill("100");
+  await page.locator("#clientDebt").fill("-0.01");
+  await page.locator("#clientForm button[type='submit']").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("no negativos");
+  await expect(page.locator("#clientsTableBody tr")).toHaveCount(0);
+});
+
+test("CLIENTES: el alta rápida asocia cliente con venta a crédito y actualiza su deuda", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-client-sale-001", "CLIENT-SALE-001", "Producto para venta del cliente");
+  await page.reload();
+  await iniciarSesion(page);
+
+  await page.locator('input[name="paymentMethod"][value="credit"]').check();
+  await expect(page.locator("#creditClientContainer")).toBeVisible();
+  await page.locator("#quickAddClientBtn").click();
+  await page.locator("#clientName").fill("Cliente venta a crédito");
+  await page.locator("#clientLimit").fill("1000");
+  await page.locator("#clientDebt").fill("0");
+  await page.locator("#clientForm button[type='submit']").click();
+  await expect(page.locator("#clientModal")).toBeHidden();
+  await expect(page.locator("#creditClientSelect")).toHaveValue(/.+/);
+
+  await page.locator("#barcodeInput").fill("CLIENT-SALE-001");
+  await page.locator("#addBarcodeBtn").click();
+  await page.locator("#processSaleBtn").click();
+
+  await expect(page.locator("#ticketModal")).toBeVisible();
+  await expect(page.locator("#ticketContent")).toContainText("Cliente venta a crédito");
+  await expect(page.locator("#ticketContent")).toContainText("Saldo Pendiente");
+  await page.locator("#newSaleBtn").click();
+
+  await abrirClientes(page);
+  const clientRow = page.locator("#clientsTableBody tr").filter({
+    hasText: "Cliente venta a crédito"
+  });
+  await expect(clientRow).toContainText("C$985.00");
+  await expect(clientRow).toContainText("C$15.00");
+  await expect(clientRow).toContainText("Activo");
+});
+
+test("CLIENTES: no permite una venta a crédito superior al límite disponible", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-client-limit-001", "CLIENT-LIMIT-001", "Producto sobre límite de crédito");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirClientes(page);
+  await page.locator("#addNewClientBtn").click();
+  await page.locator("#clientName").fill("Cliente con límite bajo");
+  await page.locator("#clientLimit").fill("10");
+  await page.locator("#clientDebt").fill("0");
+  await page.locator("#clientForm button[type='submit']").click();
+
+  const clientRow = page.locator("#clientsTableBody tr").filter({
+    hasText: "Cliente con límite bajo"
+  });
+  const clientId = (await clientRow.locator("td").first().innerText()).split("\n")[0];
+  await page.locator("#navSalesBtn").click();
+  await expect(page.locator("#salesView")).toBeVisible();
+  await page.locator('input[name="paymentMethod"][value="credit"]').check();
+  await page.locator("#creditClientSelect").selectOption(clientId);
+  await page.locator("#barcodeInput").fill("CLIENT-LIMIT-001");
+  await page.locator("#addBarcodeBtn").click();
+  await page.locator("#processSaleBtn").click();
+
+  await expect(page.locator("#customAlertMessage")).toContainText("Crédito Excedido");
+  await expect(page.locator("#ticketModal")).toBeHidden();
+  await expect(clientRow).toContainText("C$10.00");
+  await expect(clientRow).toContainText("C$0.00");
+});
+
+test("CLIENTES: inactivar y reactivar controla disponibilidad para crédito", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirClientes(page);
+  await page.locator("#addNewClientBtn").click();
+  await page.locator("#clientName").fill("Cliente para activar");
+  await page.locator("#clientLimit").fill("500");
+  await page.locator("#clientDebt").fill("0");
+  await page.locator("#clientForm button[type='submit']").click();
+
+  const clientRow = page.locator("#clientsTableBody tr").filter({
+    hasText: "Cliente para activar"
+  });
+  await expect(clientRow.getByRole("button", { name: "Historial" })).toBeVisible();
+  await expect(clientRow.getByRole("button", { name: "Editar" })).toBeVisible();
+  await expect(clientRow.getByRole("button", { name: "Borrar" })).toHaveCount(0);
+
+  await page.locator("#navSalesBtn").click();
+  await page.locator('input[name="paymentMethod"][value="credit"]').check();
+  await expect(page.locator("#creditClientSelect option")).toHaveCount(1);
+  await page.locator("#navClientsBtn").click();
+
+  await clientRow.getByRole("button", { name: "Inactivar" }).click();
+  await page.locator("#customConfirmBtn").click();
+  await expect(clientRow).toContainText("Inactivo");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.locator("#navSalesBtn").click();
+  await expect(page.locator("#creditClientSelect option")).toHaveCount(0);
+
+  await page.locator("#navClientsBtn").click();
+  await expect(page.locator("#clientsView")).toBeVisible();
+  await clientRow.getByRole("button", { name: "Activar" }).click();
+  await page.locator("#customConfirmBtn").click();
+  await expect(clientRow).toContainText("Al día");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.locator("#navSalesBtn").click();
+  await expect(page.locator("#creditClientSelect option")).toHaveCount(1);
+  await expect(page.locator("#creditClientSelect")).toContainText("Cliente para activar");
+});
+
+test("CLIENTES: historial muestra venta a crédito y permite abonar a su factura", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-client-ledger-001", "CLIENT-LEDGER-001", "Producto estado de cuenta");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirClientes(page);
+  await page.locator("#addNewClientBtn").click();
+  await page.locator("#clientName").fill("Cliente con historial");
+  await page.locator("#clientLimit").fill("500");
+  await page.locator("#clientDebt").fill("0");
+  await page.locator("#clientForm button[type='submit']").click();
+  const clientRow = page.locator("#clientsTableBody tr").filter({
+    hasText: "Cliente con historial"
+  });
+  const clientId = (await clientRow.locator("td").first().innerText()).split("\n")[0];
+
+  await page.locator("#navSalesBtn").click();
+  await page.locator('input[name="paymentMethod"][value="credit"]').check();
+  await page.locator("#creditClientSelect").selectOption(clientId);
+  await page.locator("#barcodeInput").fill("CLIENT-LEDGER-001");
+  await page.locator("#addBarcodeBtn").click();
+  await page.locator("#processSaleBtn").click();
+  await expect(page.locator("#ticketModal")).toBeVisible();
+  await page.locator("#newSaleBtn").click();
+
+  await abrirClientes(page);
+  await clientRow.getByRole("button", { name: "Historial" }).click();
+  await expect(page.locator("#statementModal")).toBeVisible();
+  await expect(page.locator("#statementModalTitle")).toContainText("Cliente con historial");
+  await expect(page.locator("#statementTableBody")).toContainText("Factura de crédito");
+  await expect(page.locator("#statementTableBody")).toContainText("Pendiente C$15.00");
+  await expect(page.locator("#statementTableBody").getByRole("button", { name: "Borrar" })).toHaveCount(0);
+  await page.locator("#statementTableBody").getByRole("button", { name: "Abonar" }).click();
+
+  await expect(page.locator("#paymentSaleModal")).toBeVisible();
+  await expect(page.locator("#paySaleSaldo")).toHaveText("C$15.00");
+  await page.locator("#paySaleAmount").fill("5");
+  await page.locator("#paySaleMethod").selectOption("tarjeta");
+  await page.locator("#paymentSaleForm button[type='submit']").click();
+
+  await expect(page.locator("#paymentSaleModal")).toBeHidden();
+  await expect(page.locator("#customAlertMessage")).toContainText("Abono de factura registrado");
+  await expect(clientRow).toContainText("C$10.00");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await expect(page.locator("#statementTableBody")).toContainText("Pago recibido por tarjeta");
+  await expect(page.locator("#statementTableBody")).toContainText("C$10.00");
+
+  const paymentRow = page.locator("#statementTableBody tr").filter({
+    hasText: "Pago recibido por tarjeta"
+  });
+  await paymentRow.getByRole("button", { name: "Anular" }).click();
+  await expect(page.locator("#anularRegistroModal")).toBeVisible();
+  await page.locator("#anularRegistroMotivo").fill("Pago aplicado por error");
+  await page.locator("#anularRegistroForm button[type='submit']").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("Abono anulado");
+  await expect(clientRow).toContainText("C$15.00");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await expect(page.locator("#statementTableBody")).toContainText("ANULADO");
+});
+
+test("CLIENTES: persiste después de recargar y permite teléfono opcional", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirClientes(page);
+  await page.locator("#addNewClientBtn").click();
+  await page.locator("#clientName").fill("Cliente persistente sin teléfono");
+  await page.locator("#clientLimit").fill("250");
+  await page.locator("#clientDebt").fill("0");
+  await page.locator("#clientForm button[type='submit']").click();
+  await expect(page.locator("#clientsTableBody")).toContainText("Cliente persistente sin teléfono");
+
+  await page.reload();
+  await iniciarSesion(page);
+  await page.locator('input[name="paymentMethod"][value="credit"]').check();
+  await expect(page.locator("#creditClientSelect")).toContainText("Cliente persistente sin teléfono");
+  await page.locator("#navClientsBtn").click();
+  await expect(page.locator("#clientsView")).toBeVisible();
+  await abrirClientes(page);
+  const clientRow = page.locator("#clientsTableBody tr").filter({
+    hasText: "Cliente persistente sin teléfono"
+  });
+  await expect(clientRow).toBeVisible();
+  await expect(clientRow).toContainText("C$250.00");
+  await expect(clientRow).toContainText("C$0.00");
+  await clientRow.getByRole("button", { name: "Editar" }).click();
+  await expect(page.locator("#clientPhone")).toHaveValue("");
+  await expect(page.locator("#clientRuc")).toHaveValue("");
+  await expect(page.locator("#clientAddress")).toHaveValue("");
+});
+
+test("PROVEEDORES: crear proveedor guarda contacto y datos opcionales", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirProveedores(page);
+  await page.locator("#addNewSupplierBtn").click();
+
+  await page.locator("#suppName").fill("Proveedor nuevo UI");
+  await page.locator("#suppContact").fill("Contacto de prueba");
+  await page.locator("#suppPhone").fill("505-8888-1234 ext. 2");
+  await page.locator("#suppRuc").fill("RUC-PROV-001");
+  await page.locator("#suppAddress").fill("Bodega central");
+  await page.locator("#supplierForm button[type='submit']").click();
+
+  await expect(page.locator("#supplierModal")).toBeHidden();
+  const supplierRow = page.locator("#suppliersTableBody tr").filter({
+    hasText: "Proveedor nuevo UI"
+  });
+  await expect(supplierRow).toContainText("Contacto de prueba");
+  await expect(supplierRow).toContainText("505-8888-1234 ext. 2");
+  await expect(supplierRow).toContainText("Bodega central");
+  await expect(supplierRow).toContainText("C$0.00");
+  await expect(supplierRow).toContainText("0 compras");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await supplierRow.getByRole("button", { name: "Editar" }).click();
+  await expect(page.locator("#suppRuc")).toHaveValue("RUC-PROV-001");
+  await expect(page.locator("#suppAddress")).toHaveValue("Bodega central");
+});
+
+test("PROVEEDORES: editar proveedor actualiza sus datos y conserva identidad", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirProveedores(page);
+  await page.locator("#addNewSupplierBtn").click();
+  await page.locator("#suppName").fill("Proveedor antes de editar");
+  await page.locator("#suppContact").fill("Contacto anterior");
+  await page.locator("#suppPhone").fill("22223333");
+  await page.locator("#supplierForm button[type='submit']").click();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  const supplierRow = page.locator("#suppliersTableBody tr").filter({
+    hasText: "Proveedor antes de editar"
+  });
+  await supplierRow.getByRole("button", { name: "Editar" }).click();
+  await expect(page.locator("#suppName")).toHaveValue("Proveedor antes de editar");
+  await expect(page.locator("#suppContact")).toHaveValue("Contacto anterior");
+  await expect(page.locator("#suppPhone")).toHaveValue("22223333");
+  const supplierId = await page.locator("#supplierId").inputValue();
+
+  await page.locator("#suppName").fill("Proveedor después de editar");
+  await page.locator("#suppContact").fill("Contacto actualizado");
+  await page.locator("#suppPhone").fill("+505 8888-9999");
+  await page.locator("#suppRuc").fill("RUC-EDITADO-002");
+  await page.locator("#suppAddress").fill("Sucursal norte");
+  await page.locator("#supplierForm button[type='submit']").click();
+
+  const editedRow = page.locator("#suppliersTableBody tr").filter({
+    hasText: "Proveedor después de editar"
+  });
+  await expect(page.locator("#supplierId")).toHaveValue(supplierId);
+  await expect(editedRow).toContainText("Contacto actualizado");
+  await expect(editedRow).toContainText("+505 8888-9999");
+  await expect(editedRow).toContainText("RUC-EDITADO-002");
+  await expect(editedRow).toContainText("Sucursal norte");
+});
+
+test("PROVEEDORES: exige nombre, contacto y teléfono", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirProveedores(page);
+  await page.locator("#addNewSupplierBtn").click();
+  await page.locator("#supplierForm button[type='submit']").click();
+
+  const invalidRequiredFields = await page.locator("#supplierForm").evaluate(form =>
+    [...form.querySelectorAll("[required]")]
+      .filter(field => !field.checkValidity())
+      .map(field => field.id)
+  );
+  expect(invalidRequiredFields).toEqual(["suppName", "suppContact", "suppPhone"]);
+  await expect(page.locator("#supplierModal")).toBeVisible();
+  await expect(page.locator("#suppliersTableBody tr")).toHaveCount(0);
+});
+
+test("PROVEEDORES: no guarda campos obligatorios compuestos solo por espacios", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirProveedores(page);
+  await page.locator("#addNewSupplierBtn").click();
+  for (const field of ["#suppName", "#suppContact", "#suppPhone"]) {
+    await page.locator("#suppName").fill("Proveedor válido");
+    await page.locator("#suppContact").fill("Contacto válido");
+    await page.locator("#suppPhone").fill("123");
+    await page.locator(field).fill("   ");
+    await expect(page.locator(field)).toHaveValue("   ");
+    expect(await page.locator(field).evaluate(input => input.checkValidity())).toBe(true);
+    await page.locator("#supplierForm button[type='submit']").click();
+
+    await expect(page.locator("#customAlertMessage")).toHaveText("Complete nombre, contacto y teléfono.");
+    await expect(page.locator("#suppliersTableBody tr")).toHaveCount(0);
+    if (field !== "#suppPhone") {
+      await page.locator("#customAlertModal .close-modal-btn").click();
+    }
+  }
+  await expect(page.locator("#supplierModal")).toBeVisible();
+});
+
+test("PROVEEDORES: inactivar y reactivar controla su disponibilidad en Compras", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirProveedores(page);
+  await page.locator("#addNewSupplierBtn").click();
+  await page.locator("#suppName").fill("Proveedor estado UI");
+  await page.locator("#suppContact").fill("Contacto estado");
+  await page.locator("#suppPhone").fill("88889999");
+  await page.locator("#supplierForm button[type='submit']").click();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  let supplierRow = page.locator("#suppliersTableBody tr").filter({
+    hasText: "Proveedor estado UI"
+  });
+  await supplierRow.getByRole("button", { name: "Inactivar" }).click();
+  await page.locator("#customConfirmBtn").click();
+  await expect(supplierRow.getByRole("button", { name: "Activar" })).toBeVisible();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await expect(page.locator("#supplierDataList option[value='Proveedor estado UI']")).toHaveCount(0);
+
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirProveedores(page);
+  supplierRow = page.locator("#suppliersTableBody tr").filter({
+    hasText: "Proveedor estado UI"
+  });
+  await supplierRow.getByRole("button", { name: "Activar" }).click();
+  await page.locator("#customConfirmBtn").click();
+  await expect(supplierRow.getByRole("button", { name: "Inactivar" })).toBeVisible();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await expect(page.locator("#supplierDataList option[value='Proveedor estado UI']")).toHaveCount(1);
+});
+
+test("PROVEEDORES: compra a crédito actualiza historial, deuda y pagos persistentes", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+
+  await page.locator("#quickAddProductFromPurchBtn").click();
+  await page.locator("#prodBarcode").fill("PROV-LEDGER-001");
+  await page.locator("#prodName").fill("Producto historial proveedor");
+  await page.locator("#prodCost").fill("10");
+  await page.locator("#prodStock").fill("0");
+  await page.locator("#prodMinStock").fill("1");
+  await page.locator("#productForm button[type='submit']").click();
+  await expect(page.locator("#productModal")).toBeHidden();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.locator("#quickAddSupplierFromPurchBtn").click();
+  await page.locator("#suppName").fill("Proveedor historial UI");
+  await page.locator("#suppContact").fill("Contacto historial");
+  await page.locator("#suppPhone").fill("87776655");
+  await page.locator("#supplierForm button[type='submit']").click();
+  await expect(page.locator("#supplierModal")).toBeHidden();
+  await expect(page.locator("#purchSupplier")).toHaveValue("Proveedor historial UI");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.locator("#purchInvoice").fill("FACT-PROV-LEDGER-001");
+  await page.locator("#purchType").selectOption("credito");
+  await page.locator("#purchProductTemp").fill("Producto historial proveedor");
+  await page.locator("#purchQtyTemp").fill("2");
+  await page.locator("#purchCostTemp").fill("12");
+  await page.locator("#btnAddItemToPurch").click();
+  await page.locator("#purchaseForm button[type='submit']").click();
+
+  const purchaseRow = page.locator("#purchasesTableBody tr").filter({
+    hasText: "FACT-PROV-LEDGER-001"
+  });
+  await expect(purchaseRow).toContainText("Proveedor historial UI");
+  await expect(purchaseRow).toContainText("C$24.00");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await abrirProveedores(page);
+  const supplierRow = page.locator("#suppliersTableBody tr").filter({
+    hasText: "Proveedor historial UI"
+  });
+  await expect(supplierRow).toContainText("C$24.00");
+  await expect(supplierRow).toContainText("1 compras");
+  await supplierRow.getByRole("button", { name: "Edo. Cuenta" }).click();
+  await expect(page.locator("#statementModalTitle")).toContainText("Proveedor historial UI");
+  await expect(page.locator("#statementTableBody")).toContainText("FACT-PROV-LEDGER-001");
+  await expect(page.locator("#statementTableBody")).toContainText("Pendiente C$24.00");
+  await page.locator("#statementTableBody").getByRole("button", { name: "Abonar" }).click();
+
+  await expect(page.locator("#paymentInvoiceModal")).toBeVisible();
+  await expect(page.locator("#payInvoiceSaldo")).toHaveText("C$24.00");
+  await page.locator("#payInvoiceAmount").fill("5");
+  await page.locator("#payInvoiceMethod").selectOption("transferencia");
+  await page.locator("#paymentInvoiceForm button[type='submit']").click();
+  await expect(supplierRow).toContainText("C$19.00");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await expect(page.locator("#statementTableBody")).toContainText("Pago a proveedor por transferencia");
+
+  const paymentRow = page.locator("#statementTableBody tr").filter({
+    hasText: "Pago a proveedor por transferencia"
+  });
+  await paymentRow.getByRole("button", { name: "Anular" }).click();
+  await expect(page.locator("#anularRegistroModal")).toBeVisible();
+  await page.locator("#anularRegistroMotivo").fill("Pago aplicado por error");
+  await page.locator("#anularRegistroForm button[type='submit']").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("Pago anulado exitosamente");
+  await expect(supplierRow).toContainText("C$24.00");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await expect(page.locator("#statementTableBody")).toContainText("ANULADO");
+
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirProveedores(page);
+  const persistedSupplierRow = page.locator("#suppliersTableBody tr").filter({
+    hasText: "Proveedor historial UI"
+  });
+  await expect(persistedSupplierRow).toContainText("C$24.00");
+  await expect(persistedSupplierRow).toContainText("1 compras");
+  await persistedSupplierRow.getByRole("button", { name: "Edo. Cuenta" }).click();
+  await expect(page.locator("#statementTableBody")).toContainText("FACT-PROV-LEDGER-001");
+  await expect(page.locator("#statementTableBody")).toContainText("ANULADO");
+});
+
+async function abrirCajaDesdeUI(page, efectivoInicial) {
+  await page.locator("#navCajaBtn").click();
+  await expect(page.locator("#cajaView")).toBeVisible();
+  await page.locator("#cajaEfectivoInicialInput").fill(String(efectivoInicial));
+  await page.locator("#abrirCajaBtn").click();
+  await expect(page.locator("#cajaAbrirBox")).toBeHidden();
+  await expect(page.locator("#cajaAbiertaBox")).toBeVisible();
+}
+
+async function crearProductoParaCaja(page, barcode, name) {
+  await abrirInventario(page);
+  await page.locator("#addNewProductBtn").click();
+  await page.locator("#prodBarcode").fill(barcode);
+  await page.locator("#prodName").fill(name);
+  await page.locator("#prodCost").fill("10");
+  await page.locator("#prodRetail").fill("15");
+  await page.locator("#prodWholesale").fill("13");
+  await page.locator("#prodStock").fill("10");
+  await page.locator("#prodMinStock").fill("1");
+  await page.locator("#productForm button[type='submit']").click();
+  await expect(page.locator("#productModal")).toBeHidden();
+  await expect(page.locator("#customAlertModal")).toBeVisible();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await expect(page.locator("#inventoryTableBody")).toContainText(barcode);
+}
+
+async function venderProductoDesdeUI(page, barcode) {
+  await page.locator("#navSalesBtn").click();
+  await page.locator("#barcodeInput").fill(barcode);
+  await page.locator("#addBarcodeBtn").click();
+  await expect(page.locator("#cartItems")).not.toContainText("Carrito vacío");
+  await page.locator("#processSaleBtn").click();
+}
+
+const cajaConsoleErrors = new WeakMap();
+
+test.describe("CAJA:", () => {
+  test.beforeEach(async ({ page }) => {
+    const errors = [];
+    cajaConsoleErrors.set(page, errors);
+    monitorRequests(page, errors);
+  });
+
+  async function crearProductoParaPayables(page, barcode, name) {
+    await abrirInventario(page);
+    await page.locator("#addNewProductBtn").click();
+    await page.locator("#prodBarcode").fill(barcode);
+    await page.locator("#prodName").fill(name);
+    await page.locator("#prodCost").fill("10");
+    await page.locator("#prodRetail").fill("15");
+    await page.locator("#prodWholesale").fill("13");
+    await page.locator("#prodStock").fill("0");
+    await page.locator("#prodMinStock").fill("1");
+    await page.locator("#productForm button[type='submit']").click();
+    await expect(page.locator("#productModal")).toBeHidden();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+  }
+
+  async function registrarCompraPayables(page, { supplier, invoice, type = "credito", quantity = "1", cost = "10", days = "30", product }) {
+    await abrirCompras(page);
+    await page.locator("#addNewPurchaseBtn").click();
+    await page.locator("#purchSupplier").fill(supplier);
+    await page.locator("#purchInvoice").fill(invoice);
+    await page.locator("#purchType").selectOption(type);
+    if (type === "credito") await page.locator("#purchDays").fill(days);
+    await page.locator("#purchProductTemp").fill(product);
+    await page.locator("#purchQtyTemp").fill(quantity);
+    await page.locator("#purchCostTemp").fill(cost);
+    await page.locator("#btnAddItemToPurch").click();
+    await page.locator("#purchaseForm button[type='submit']").click();
+    await expect(page.locator("#purchaseModal")).toBeHidden();
+    await expect(page.locator("#customAlertModal")).toBeVisible();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+  }
+
+  async function abrirEstadoCuentaDesdePayables(page, supplier) {
+    await page.locator("#navPayablesBtn").click();
+    await expect(page.locator("#payablesView")).toBeVisible();
+    const payableRow = page.locator("#payablesTableBody tr").filter({ hasText: supplier });
+    await expect(payableRow).toBeVisible();
+    await payableRow.getByRole("button", { name: "Ver Facturas" }).click();
+    await expect(page.locator("#statementModalTitle")).toContainText(supplier);
+    return payableRow;
+  }
+
+  function filaFacturaEstadoCuenta(page, invoice) {
+    return page.locator("#statementTableBody tr").filter({
+      has: page.getByText(invoice, { exact: true })
+    });
+  }
+
+  function filaPagoEstadoCuenta(page, invoice) {
+    return page.locator("#statementTableBody tr").filter({
+      has: page.getByText(`Pago ${invoice}`, { exact: true })
+    });
+  }
+
+  const payablesConsoleErrors = new WeakMap();
+
+  test.describe("PAYABLES:", () => {
+    test.beforeEach(async ({ page }) => {
+      const errors = [];
+      payablesConsoleErrors.set(page, errors);
+      monitorRequests(page, errors);
+    });
+
+    test.afterEach(async ({ page }) => {
+      expect(payablesConsoleErrors.get(page)).toEqual([]);
+    });
+
+    test("crédito crea deuda pendiente por proveedor; contado no crea cuenta y el vencimiento pasa a la siguiente factura abierta", async ({ page }) => {
+      await iniciarSesion(page);
+      await crearProductoParaPayables(page, "PAYABLES-BILL-001", "Producto para cuenta por pagar");
+
+      await registrarCompraPayables(page, {
+        supplier: "Proveedor payables A",
+        invoice: "PAY-OPEN-001",
+        quantity: "3",
+        cost: "10",
+        days: "30",
+        product: "Producto para cuenta por pagar"
+      });
+      await registrarCompraPayables(page, {
+        supplier: "Proveedor payables A",
+        invoice: "PAY-OPEN-002",
+        quantity: "2",
+        cost: "10",
+        days: "15",
+        product: "Producto para cuenta por pagar"
+      });
+      await registrarCompraPayables(page, {
+        supplier: "Proveedor payables contado",
+        invoice: "PAY-CASH-001",
+        type: "contado",
+        quantity: "1",
+        cost: "10",
+        product: "Producto para cuenta por pagar"
+      });
+
+      await page.locator("#navPayablesBtn").click();
+      await expect(page.locator("#payablesView")).toBeVisible();
+      const supplierRow = page.locator("#payablesTableBody tr").filter({
+        hasText: "Proveedor payables A"
+      });
+      await expect(supplierRow).toContainText("C$50.00");
+      const expectedNearestDueDate = await page.evaluate(() => {
+        const due = new Date();
+        due.setDate(due.getDate() + 15);
+        return due.toLocaleDateString();
+      });
+      await expect(supplierRow).toContainText(expectedNearestDueDate);
+      await expect(page.locator("#payablesTableBody")).not.toContainText("Proveedor payables contado");
+
+      await supplierRow.getByRole("button", { name: "Ver Facturas" }).click();
+      const secondInvoice = filaFacturaEstadoCuenta(page, "PAY-OPEN-002");
+      await expect(secondInvoice).toContainText("C$20.00");
+      await expect(secondInvoice).toContainText("Pendiente C$20.00");
+      await secondInvoice.getByRole("button", { name: "Abonar" }).click();
+      await page.locator("#payInvoiceAmount").fill("20");
+      await page.locator("#payInvoiceMethod").selectOption("transferencia");
+      await page.locator("#paymentInvoiceForm button[type='submit']").click();
+      await expect(page.locator("#customAlertMessage")).toContainText("Pago de factura registrado");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await expect(page.locator("#payablesTableBody tr").filter({
+        hasText: "Proveedor payables A"
+      })).toContainText("C$30.00");
+      await expect(page.locator("#payablesTableBody tr").filter({
+        hasText: "Proveedor payables A"
+      })).toContainText(await page.evaluate(() => {
+        const due = new Date();
+        due.setDate(due.getDate() + 30);
+        return due.toLocaleDateString();
+      }));
+      const paidInvoice = filaFacturaEstadoCuenta(page, "PAY-OPEN-002");
+      await expect(paidInvoice).toContainText("Pendiente C$0.00");
+      await expect(paidInvoice.getByRole("button", { name: "Abonar" })).toHaveCount(0);
+
+      await page.reload();
+      await iniciarSesion(page);
+      await page.locator("#navPayablesBtn").click();
+      await expect(page.locator("#payablesTableBody tr").filter({
+        hasText: "Proveedor payables A"
+      })).toContainText("C$30.00");
+      await expect(page.locator("#payablesTableBody")).not.toContainText("Proveedor payables contado");
+    });
+
+    test("valida pagos, permite abonos parciales y exactos, muestra pagada y persiste", async ({ page }) => {
+      await iniciarSesion(page);
+      await crearProductoParaPayables(page, "PAYABLES-PAY-001", "Producto para pago de cuenta");
+      await registrarCompraPayables(page, {
+        supplier: "Proveedor pagos límite",
+        invoice: "PAY-LIMIT-001",
+        quantity: "2",
+        cost: "10.25",
+        days: "21",
+        product: "Producto para pago de cuenta"
+      });
+
+      const payableRow = await abrirEstadoCuentaDesdePayables(page, "Proveedor pagos límite");
+      await expect(payableRow).toContainText("C$20.50");
+      const invoiceRow = filaFacturaEstadoCuenta(page, "PAY-LIMIT-001");
+      await expect(invoiceRow).toContainText("Pendiente C$20.50");
+      await expect(invoiceRow).toContainText("Abonado C$0.00");
+      await invoiceRow.getByRole("button", { name: "Abonar" }).click();
+
+      await expect(page.locator("#payInvoiceTotal")).toHaveText("C$20.50");
+      await expect(page.locator("#payInvoiceSaldo")).toHaveText("C$20.50");
+      expect(await page.locator("#payInvoiceAmount").evaluate(input => input.checkValidity())).toBe(false);
+
+      for (const amount of ["0", "-1", "20.51"]) {
+        await page.locator("#payInvoiceAmount").fill(amount);
+        expect(await page.locator("#payInvoiceAmount").evaluate(input => input.checkValidity())).toBe(false);
+        await page.locator("#paymentInvoiceForm button[type='submit']").click();
+        await expect(page.locator("#paymentInvoiceModal")).toBeVisible();
+        await expect(page.locator("#payInvoiceSaldo")).toHaveText("C$20.50");
+      }
+      await page.locator("#payInvoiceAmount").fill("   ");
+      await expect(page.locator("#payInvoiceAmount")).toHaveValue("");
+      expect(await page.locator("#payInvoiceAmount").evaluate(input => input.checkValidity())).toBe(false);
+      await page.locator("#paymentInvoiceForm button[type='submit']").click();
+      await expect(page.locator("#paymentInvoiceModal")).toBeVisible();
+
+      await page.locator("#paymentInvoiceModal .close-modal-btn").click();
+      await expect(page.locator("#customConfirmModal")).toBeVisible();
+      await page.locator("#customConfirmBtn").click();
+      await expect(page.locator("#paymentInvoiceModal")).toBeHidden();
+      await abrirEstadoCuentaDesdePayables(page, "Proveedor pagos límite");
+      await expect(invoiceRow).toContainText("Pendiente C$20.50");
+      await invoiceRow.getByRole("button", { name: "Abonar" }).click();
+      await page.locator("#payInvoiceAmount").fill("7.25");
+      await page.locator("#paymentInvoiceForm button[type='submit']").click();
+      await expect(page.locator("#customAlertMessage")).toContainText("No hay una caja abierta");
+      await expect(invoiceRow).toContainText("Pendiente C$20.50");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await page.locator("#payInvoiceAmount").fill("7.25");
+      await page.locator("#payInvoiceMethod").selectOption("transferencia");
+      await page.locator("#paymentInvoiceForm button[type='submit']").click();
+      await expect(page.locator("#paymentInvoiceModal")).toBeHidden();
+      await expect(invoiceRow).toContainText("Pendiente C$13.25");
+      await expect(invoiceRow).toContainText("Abonado C$7.25");
+      await expect(payableRow).toContainText("C$13.25");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      const partialPayment = page.locator("#statementTableBody tr").filter({
+        hasText: "Pago a proveedor por transferencia"
+      });
+      await expect(partialPayment).toContainText("C$7.25");
+      await expect(partialPayment).toContainText("andres");
+      const paymentDate = await page.evaluate(() => new Date().toLocaleDateString());
+      await expect(partialPayment).toContainText(paymentDate);
+      await expect(invoiceRow).toContainText("Pendiente C$13.25");
+
+      await invoiceRow.getByRole("button", { name: "Abonar" }).click();
+      await page.locator("#payInvoiceAmount").fill("13.25");
+      await page.locator("#paymentInvoiceForm button[type='submit']").click();
+      await expect(page.locator("#customAlertModal")).toBeVisible();
+      const paidInvoice = filaFacturaEstadoCuenta(page, "PAY-LIMIT-001");
+      await expect(paidInvoice).toContainText("Pendiente C$0.00");
+      await expect(paidInvoice.getByRole("button", { name: "Abonar" })).toHaveCount(0);
+      await page.locator("#customAlertModal .close-modal-btn").click();
+      await expect(page.locator("#payablesTableBody")).toContainText("No hay cuentas por pagar pendientes");
+
+      await page.reload();
+      await iniciarSesion(page);
+      await page.locator("#navPayablesBtn").click();
+      await expect(page.locator("#payablesTableBody")).toContainText("No hay cuentas por pagar pendientes");
+      await page.locator("#navSuppliersBtn").click();
+      const supplierRow = page.locator("#suppliersTableBody tr").filter({
+        hasText: "Proveedor pagos límite"
+      });
+      await supplierRow.getByRole("button", { name: "Edo. Cuenta" }).click();
+      await expect(page.locator("#statementTableBody")).toContainText("Pago PAY-LIMIT-001");
+      await expect(page.locator("#statementTableBody")).toContainText("C$13.25");
+      await expect(page.locator("#statementTableBody")).toContainText("C$7.25");
+    });
+
+    test("pago efectivo enlaza una sola salida a Caja; cancelar anulación conserva datos y anular después del cierre corrige historial", async ({ page }) => {
+      await iniciarSesion(page);
+      await crearProductoParaPayables(page, "PAYABLES-CASH-001", "Producto para pago efectivo");
+      await registrarCompraPayables(page, {
+        supplier: "Proveedor pago efectivo",
+        invoice: "PAY-CASH-001",
+        quantity: "2",
+        cost: "10",
+        product: "Producto para pago efectivo"
+      });
+      await abrirCajaDesdeUI(page, "100");
+
+      await abrirEstadoCuentaDesdePayables(page, "Proveedor pago efectivo");
+      let invoiceRow = filaFacturaEstadoCuenta(page, "PAY-CASH-001");
+      await invoiceRow.getByRole("button", { name: "Abonar" }).click();
+      await page.locator("#payInvoiceAmount").fill("5");
+      await page.locator("#payInvoiceMethod").selectOption("efectivo");
+      await page.locator("#paymentInvoiceForm button[type='submit']").click();
+      await expect(page.locator("#payablesTableBody tr").filter({
+        hasText: "Proveedor pago efectivo"
+      })).toContainText("C$15.00");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+      await expect(page.locator("#statementModal")).toBeVisible();
+
+      await page.locator("#statementTableBody tr").filter({
+        hasText: "Pago a proveedor por efectivo"
+      }).getByRole("button", { name: "Anular" }).click();
+      await expect(page.locator("#anularRegistroModal")).toBeVisible();
+      await page.locator("#anularRegistroModal .close-modal-btn").click();
+      await expect(page.locator("#customConfirmModal")).toBeVisible();
+      await page.locator("#customConfirmBtn").click();
+      await expect(page.locator("#anularRegistroModal")).toBeHidden();
+      await expect(page.locator("#payablesTableBody tr").filter({
+        hasText: "Proveedor pago efectivo"
+      })).toContainText("C$15.00");
+      await expect(page.locator("#statementTableBody")).not.toContainText("ANULADO");
+
+      await page.locator("#navCajaBtn").click();
+      await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$5.00");
+      await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$95.00");
+      await expect(page.locator("#cajaCentralBox #cajaMovimientosBody tr").filter({
+        hasText: "Pago Factura PAY-CASH-001: Proveedor pago efectivo"
+      })).toHaveCount(1);
+
+      await page.locator("#cerrarCajaBtn").click();
+      await page.locator("#cajaEfectivoRealInput").fill("95");
+      await page.locator("#confirmCierreCajaBtn").click();
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await page.locator("#navPayablesBtn").click();
+      const closedSessionPayableRow = page.locator("#payablesTableBody tr").filter({
+        hasText: "Proveedor pago efectivo"
+      });
+      await closedSessionPayableRow.getByRole("button", { name: "Ver Facturas" }).click();
+      const paymentRow = filaPagoEstadoCuenta(page, "PAY-CASH-001");
+      await paymentRow.getByRole("button", { name: "Anular" }).click();
+      await page.locator("#anularRegistroMotivo").fill("Pago aplicado incorrectamente");
+      await page.locator("#anularRegistroForm button[type='submit']").click();
+      await expect(page.locator("#customAlertMessage")).toContainText("Pago anulado exitosamente");
+      await expect(page.locator("#payablesTableBody tr").filter({
+        hasText: "Proveedor pago efectivo"
+      })).toContainText("C$20.00");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+      await expect(page.locator("#statementTableBody")).toContainText("ANULADO");
+      await expect(page.locator("#statementTableBody tr").filter({
+        hasText: "Pago PAY-CASH-001"
+      }).getByRole("button", { name: "Anular" })).toHaveCount(0);
+
+      await expect(page.locator("#statementModal")).toBeVisible();
+      await page.locator("#statementModal .close-modal-btn").click();
+      await page.locator("#navCajaBtn").click();
+      const closedSession = page.locator("#cajaHistorialBody tr").first();
+      await expect(closedSession.locator("td").nth(3)).toHaveText("C$100.00");
+      await expect(closedSession.locator("td").nth(4)).toHaveText("C$100.00");
+      await expect(closedSession.locator("td").nth(5)).toHaveText("C$95.00");
+      await expect(closedSession.locator("td").nth(6)).toHaveText("C$-5.00");
+
+      await page.reload();
+      await iniciarSesion(page);
+      await page.locator("#navPayablesBtn").click();
+      await expect(page.locator("#payablesTableBody tr").filter({
+        hasText: "Proveedor pago efectivo"
+      })).toContainText("C$20.00");
+      await page.locator("#navReportesBtn").click();
+      await expect(page.locator("#repCxP")).toHaveText("C$20.00");
+      await page.locator("#navCajaBtn").click();
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$-5.00");
+    });
+  });
+
+  const gastosConsoleErrors = new WeakMap();
+
+  test.describe("GASTOS:", () => {
+    test.beforeEach(async ({ page }) => {
+      const errors = [];
+      gastosConsoleErrors.set(page, errors);
+      monitorRequests(page, errors);
+    });
+
+    test.afterEach(async ({ page }) => {
+      expect(gastosConsoleErrors.get(page)).toEqual([]);
+    });
+
+    test("valida descripción y monto obligatorios, rechaza cero, negativos y solo espacios", async ({ page }) => {
+      await iniciarSesion(page);
+      await page.locator("#navGastosBtn").click();
+      await expect(page.locator("#gastosView")).toBeVisible();
+
+      await page.locator("#formRegistrarGasto button[type='submit']").click();
+      const invalidFields = await page.locator("#formRegistrarGasto").evaluate(form =>
+        [...form.querySelectorAll("[required]")]
+          .filter(field => !field.checkValidity())
+          .map(field => field.id)
+      );
+      expect(invalidFields).toEqual(["gastoDescripcion", "gastoMonto"]);
+      await expect(page.locator("#gastosTableBody")).toContainText("Sin gastos registrados");
+
+      await page.locator("#gastoDescripcion").fill("Gasto inválido");
+      for (const amount of ["0", "-1"]) {
+        await page.locator("#gastoMonto").fill(amount);
+        expect(await page.locator("#gastoMonto").evaluate(input => input.checkValidity())).toBe(false);
+        await page.locator("#formRegistrarGasto button[type='submit']").click();
+        await expect(page.locator("#gastosTableBody")).not.toContainText("Gasto inválido");
+      }
+
+      await page.locator("#gastoMetodo").selectOption("banco");
+      await page.locator("#gastoMonto").fill("1.25");
+      await page.locator("#gastoDescripcion").fill("   ");
+      expect(await page.locator("#gastoDescripcion").evaluate(input => input.checkValidity())).toBe(true);
+      await page.locator("#formRegistrarGasto button[type='submit']").click();
+      await expect(page.locator("#customAlertMessage")).toContainText("Ingrese una descripción válida");
+      await expect(page.locator("#gastosTableBody")).toContainText("Sin gastos registrados");
+    });
+
+    test("registra categorías, métodos, usuario y fecha; persiste y actualiza historial y reportes", async ({ page }) => {
+      await iniciarSesion(page);
+      await abrirCajaDesdeUI(page, "100");
+      await page.locator("#navGastosBtn").click();
+
+      const categories = await page.locator("#gastoCategoria option").allTextContents();
+      expect(categories).toEqual([
+        "Servicios Básicos",
+        "Renta / Alquiler",
+        "Transporte",
+        "Sueldos",
+        "Mantenimiento",
+        "Insumos de Limpieza",
+        "Otro"
+      ]);
+
+      await page.locator("#gastoCategoria").selectOption("Servicios Básicos");
+      await page.locator("#gastoMetodo").selectOption("caja");
+      await page.locator("#gastoDescripcion").fill("Electricidad de octubre");
+      await page.locator("#gastoComprobante").fill("REC-GAS-001");
+      await page.locator("#gastoMonto").fill("10.25");
+      await page.locator("#formRegistrarGasto button[type='submit']").click();
+      const cashExpenseRow = page.locator("#gastosTableBody tr").filter({
+        hasText: "Electricidad de octubre"
+      });
+      await expect(cashExpenseRow).toBeVisible();
+      const localDate = await page.evaluate(() => new Date().toLocaleDateString());
+      await expect(cashExpenseRow).toContainText(localDate);
+      await expect(page.locator("#gastosTableBody")).toContainText("Servicios Básicos");
+      await expect(page.locator("#gastosTableBody")).toContainText("REC-GAS-001");
+      await expect(page.locator("#gastosTableBody")).toContainText("C$10.25");
+      await expect(page.locator("#gastosTableBody")).toContainText("andres");
+      await expect(page.locator("#gastosResumenHoy")).toHaveText("C$10.25");
+      await expect(page.locator("#gastosResumenTotal")).toHaveText("C$10.25");
+      await expect(page.locator("#gastoDescripcion")).toHaveValue("");
+      await expect(page.locator("#gastoMonto")).toHaveValue("");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await page.locator("#gastoCategoria").selectOption("Transporte");
+      await page.locator("#gastoMetodo").selectOption("banco");
+      await page.locator("#gastoDescripcion").fill("Combustible pagado con tarjeta");
+      await page.locator("#gastoMonto").fill("4.50");
+      await page.locator("#formRegistrarGasto button[type='submit']").click();
+      await expect(page.locator("#gastosResumenTotal")).toHaveText("C$14.75");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await page.locator("#gastoCategoria").selectOption("Renta / Alquiler");
+      await page.locator("#gastoMetodo").selectOption("pendiente");
+      await page.locator("#gastoDescripcion").fill("Renta pendiente");
+      await page.locator("#gastoMonto").fill("20");
+      await page.locator("#formRegistrarGasto button[type='submit']").click();
+      await expect(page.locator("#gastosResumenTotal")).toHaveText("C$34.75");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await page.locator("#navCajaBtn").click();
+      await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$10.25");
+      await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$89.75");
+      await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Gasto: Servicios Básicos - Electricidad de octubre");
+      await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).not.toContainText("Combustible pagado con tarjeta");
+      await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).not.toContainText("Renta pendiente");
+
+      await page.locator("#navHistoryBtn").click();
+      await expect(page.locator("#summaryTotalExpenses")).toHaveText("C$34.75");
+
+      await page.reload();
+      await iniciarSesion(page);
+      await page.locator("#navGastosBtn").click();
+      await expect(page.locator("#gastosTableBody")).toContainText("Electricidad de octubre");
+      await expect(page.locator("#gastosTableBody")).toContainText("Combustible pagado con tarjeta");
+      await expect(page.locator("#gastosTableBody")).toContainText("Renta pendiente");
+      await expect(page.locator("#gastosResumenTotal")).toHaveText("C$34.75");
+      await page.locator("#navReportesBtn").click();
+      await expect(page.locator("#repGastos")).toHaveText("C$34.75");
+      await page.locator('.rep-subtab[data-target="repGastosBox"]').click();
+      await expect(page.locator("#repGastosCategoriaBody")).toContainText("Servicios Básicos");
+      await expect(page.locator("#repGastosCategoriaBody")).toContainText("C$10.25");
+      await expect(page.locator("#repGastosCategoriaBody")).toContainText("Transporte");
+      await expect(page.locator("#repGastosCategoriaBody")).toContainText("C$4.50");
+      await expect(page.locator("#repGastosCategoriaBody")).toContainText("Renta / Alquiler");
+      await expect(page.locator("#repGastosCategoriaBody")).toContainText("C$20.00");
+    });
+
+    test("requiere caja solo para efectivo y anular permite cancelar o revertir gastos de la sesión", async ({ page }) => {
+      await iniciarSesion(page);
+      await page.locator("#navGastosBtn").click();
+
+      await page.locator("#gastoMetodo").selectOption("caja");
+      await page.locator("#gastoDescripcion").fill("Intento sin caja");
+      await page.locator("#gastoMonto").fill("5");
+      await page.locator("#formRegistrarGasto button[type='submit']").click();
+      await expect(page.locator("#customAlertMessage")).toContainText("No hay caja abierta");
+      await expect(page.locator("#gastosTableBody")).not.toContainText("Intento sin caja");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await page.locator("#gastoMetodo").selectOption("banco");
+      await page.locator("#gastoDescripcion").fill("Banco sin caja abierta");
+      await page.locator("#gastoMonto").fill("2.50");
+      await page.locator("#formRegistrarGasto button[type='submit']").click();
+      await expect(page.locator("#gastosTableBody")).toContainText("Banco sin caja abierta");
+      await expect(page.locator("#gastosTableBody")).toContainText("Banco");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await abrirCajaDesdeUI(page, "50");
+      await page.locator("#navGastosBtn").click();
+      await page.locator("#gastoMetodo").selectOption("caja");
+      await page.locator("#gastoDescripcion").fill("Gasto de sesión uno");
+      await page.locator("#gastoMonto").fill("8.40");
+      await page.locator("#formRegistrarGasto button[type='submit']").click();
+      await page.locator("#customAlertModal .close-modal-btn").click();
+      await page.locator("#navCajaBtn").click();
+      await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$8.40");
+      await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$41.60");
+      await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Gasto: Servicios Básicos - Gasto de sesión uno");
+
+      await page.locator("#navGastosBtn").click();
+      const expenseRow = page.locator("#gastosTableBody tr").filter({
+        hasText: "Gasto de sesión uno"
+      });
+      await expenseRow.getByRole("button", { name: "Anular" }).click();
+      await expect(page.locator("#anularRegistroModal")).toBeVisible();
+      await page.locator("#anularRegistroModal .close-modal-btn").click();
+      await expect(page.locator("#customConfirmModal")).toBeVisible();
+      await page.locator("#customConfirmBtn").click();
+      await expect(expenseRow).not.toContainText("ANULADO");
+      await expect(page.locator("#gastosResumenTotal")).toHaveText("C$10.90");
+
+      await expenseRow.getByRole("button", { name: "Anular" }).click();
+      await page.locator("#anularRegistroForm button[type='submit']").click();
+      await expect(page.locator("#anularRegistroModal")).toBeVisible();
+      expect(await page.locator("#anularRegistroMotivo").evaluate(input => input.checkValidity())).toBe(false);
+      await page.locator("#anularRegistroMotivo").fill("Gasto equivocado");
+      await page.locator("#anularRegistroForm button[type='submit']").click();
+      await expect(page.locator("#customAlertMessage")).toContainText("Gasto anulado");
+      await expect(expenseRow).toContainText("ANULADO");
+      await expect(expenseRow.getByRole("button", { name: "Anular" })).toHaveCount(0);
+      await expect(page.locator("#gastosResumenTotal")).toHaveText("C$2.50");
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await page.locator("#navCajaBtn").click();
+      await expect(page.locator("#cajaResumenEntradas")).toHaveText("C$8.40");
+      await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$8.40");
+      await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$50.00");
+      await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Anulación Gasto: Gasto de sesión uno (Gasto equivocado)");
+
+      await page.locator("#cerrarCajaBtn").click();
+      await page.locator("#cajaEfectivoRealInput").fill("50");
+      await page.locator("#confirmCierreCajaBtn").click();
+      await page.locator("#customAlertModal .close-modal-btn").click();
+      await abrirCajaDesdeUI(page, "20");
+
+      await page.locator("#navGastosBtn").click();
+      await page.locator("#gastoMetodo").selectOption("caja");
+      await page.locator("#gastoDescripcion").fill("Gasto de caja cerrada");
+      await page.locator("#gastoMonto").fill("3");
+      await page.locator("#formRegistrarGasto button[type='submit']").click();
+      await page.locator("#customAlertModal .close-modal-btn").click();
+      await page.locator("#navCajaBtn").click();
+      await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$3.00");
+      await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$17.00");
+      await page.locator("#cerrarCajaBtn").click();
+      await page.locator("#cajaEfectivoRealInput").fill("17");
+      await page.locator("#confirmCierreCajaBtn").click();
+      await page.locator("#customAlertModal .close-modal-btn").click();
+
+      await page.locator("#navGastosBtn").click();
+      const closedExpense = page.locator("#gastosTableBody tr").filter({
+        hasText: "Gasto de caja cerrada"
+      });
+      await closedExpense.getByRole("button", { name: "Anular" }).click();
+      await page.locator("#anularRegistroMotivo").fill("No correspondía cobrarlo");
+      await page.locator("#anularRegistroForm button[type='submit']").click();
+      await page.locator("#customAlertModal .close-modal-btn").click();
+      await page.locator("#navCajaBtn").click();
+      await expect(page.locator("#cajaAbrirBox")).toBeVisible();
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$20.00");
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$17.00");
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$-3.00");
+
+      await page.reload();
+      await iniciarSesion(page);
+      await page.locator("#navGastosBtn").click();
+      await expect(page.locator("#gastosTableBody")).toContainText("Banco sin caja abierta");
+      await expect(page.locator("#gastosTableBody")).toContainText("Gasto de sesión uno");
+      await expect(page.locator("#gastosTableBody")).toContainText("Gasto de caja cerrada");
+      await expect(page.locator("#gastosResumenTotal")).toHaveText("C$2.50");
+      await page.locator("#navHistoryBtn").click();
+      await expect(page.locator("#summaryTotalExpenses")).toHaveText("C$2.50");
+      await page.locator("#navReportesBtn").click();
+      await expect(page.locator("#repGastos")).toHaveText("C$2.50");
+      await page.locator('.rep-subtab[data-target="repGastosBox"]').click();
+      await expect(page.locator("#repGastosCategoriaBody")).toContainText("C$2.50");
+      await page.locator("#navCajaBtn").click();
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$20.00");
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$-3.00");
+    });
+  });
+
+  test.afterEach(async ({ page }) => {
+    expect(cajaConsoleErrors.get(page)).toEqual([]);
+  });
+
+  test("abre con monto válido, rechaza vacío y negativo, y persiste tras recargar", async ({ page }) => {
+    await iniciarSesion(page);
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaView")).toBeVisible();
+
+    await page.locator("#abrirCajaBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese el monto de efectivo inicial");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#cajaEfectivoInicialInput").fill("  ");
+    await expect(page.locator("#cajaEfectivoInicialInput")).toHaveValue("");
+    await page.locator("#abrirCajaBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese el monto de efectivo inicial");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#cajaEfectivoInicialInput").fill("-1");
+    await page.locator("#abrirCajaBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese el monto de efectivo inicial");
+    await expect(page.locator("#cajaAbrirBox")).toBeVisible();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#cajaEfectivoInicialInput").fill("0");
+    await page.locator("#abrirCajaBtn").click();
+    await expect(page.locator("#cajaAbiertaBox")).toBeVisible();
+    await expect(page.locator("#cajaResumenInicial")).toHaveText("C$0.00");
+    await expect(page.locator("#cajaAbrirBox")).toBeHidden();
+
+    await page.reload();
+    await iniciarSesion(page);
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaAbiertaBox")).toBeVisible();
+    await expect(page.locator("#cajaResumenInicial")).toHaveText("C$0.00");
+    await expect(page.locator("#cajaAbrirBox")).toBeHidden();
+    await page.locator("#cerrarCajaBtn").click();
+    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$0.00");
+    await page.locator("#cajaEfectivoRealInput").fill("0");
+    await page.locator("#confirmCierreCajaBtn").click();
+    await expect(page.locator("#cajaAbiertaBox")).toBeHidden();
+    await expect(page.locator("#cajaHistorialBody")).toContainText("C$0.00");
+  });
+
+  test("valida movimientos manuales, calcula decimales y confirma movimientos", async ({ page }) => {
+    await iniciarSesion(page);
+    await abrirCajaDesdeUI(page, "100.00");
+
+    await page.locator("#cajaMovimientoConcepto").fill("Entrada con monto vacío");
+    await page.locator("#registrarEntradaBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese un monto válido");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#cajaMovimientoConcepto").fill("Entrada negativa");
+    await page.locator("#cajaMovimientoMonto").fill("-1");
+    await page.locator("#registrarEntradaBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese un monto válido");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#cajaMovimientoConcepto").fill("Entrada de cero");
+    await page.locator("#cajaMovimientoMonto").fill("0");
+    await page.locator("#registrarEntradaBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese un monto válido");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#cajaMovimientoConcepto").fill("   ");
+    await page.locator("#cajaMovimientoMonto").fill("1");
+    await page.locator("#registrarEntradaBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese un concepto");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await expect(page.locator("#cajaMovimientosBody")).toContainText("Sin movimientos registrados");
+
+    await page.locator("#cajaMovimientoConcepto").fill("Reposición de fondo");
+    await page.locator("#cajaMovimientoMonto").fill("20.10");
+    await page.locator("#registrarEntradaBtn").click();
+    await page.locator("#cajaMovimientoConcepto").fill("Compra de bolsas");
+    await page.locator("#cajaMovimientoMonto").fill("3.05");
+    await page.locator("#registrarSalidaBtn").click();
+
+    await expect(page.locator("#cajaResumenEntradas")).toHaveText("C$20.10");
+    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$3.05");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$117.05");
+
+    const entryRow = page.locator("#cajaCentralBox #cajaMovimientosBody tr").filter({
+      hasText: "Reposición de fondo"
+    });
+    await entryRow.getByRole("button", { name: "Confirmar" }).click();
+    await expect(page.locator("#cajaCentralBox #cajaMovimientosBody tr").filter({
+      hasText: "Reposición de fondo"
+    })).toContainText("Confirmado");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$117.05");
+
+    await page.reload();
+    await iniciarSesion(page);
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$117.05");
+    await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Compra de bolsas");
+    await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Reposición de fondo");
+  });
+
+  test("ventas de contado sí suman efectivo; crédito y tarjeta no, y los cobros solo suman si son en efectivo", async ({ page }) => {
+    await iniciarSesion(page);
+    await crearProductoParaCaja(page, "CAJA-SALES-001", "Producto para integrar con Caja");
+    await abrirClientes(page);
+    await page.locator("#addNewClientBtn").click();
+    await page.locator("#clientName").fill("Cliente para integración Caja");
+    await page.locator("#clientLimit").fill("500");
+    await page.locator("#clientDebt").fill("0");
+    await page.locator("#clientForm button[type='submit']").click();
+    const clientRow = page.locator("#clientsTableBody tr").filter({
+      hasText: "Cliente para integración Caja"
+    });
+    const clientId = (await clientRow.locator("td").first().innerText()).split("\n")[0];
+
+    await abrirCajaDesdeUI(page, "50.00");
+    await venderProductoDesdeUI(page, "CAJA-SALES-001");
+    await page.locator("#cashReceivedInput").fill("20");
+    await page.locator("#confirmCashBtn").click();
+    await expect(page.locator("#ticketModal")).toBeVisible();
+    await page.locator("#newSaleBtn").click();
+    await expect(page.locator("#cajaResumenVentas")).toHaveText("C$15.00");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$65.00");
+    await page.locator("#navCajaBtn").click();
+    const cashSale = page.locator("#cajaCentralBox #cajaOperacionesBody tr").filter({
+      hasText: "Venta"
+    }).filter({ hasText: "C$15.00" });
+    await cashSale.getByRole("button", { name: "Confirmar" }).click();
+    await expect(page.locator("#cajaCentralBox #cajaOperacionesBody tr").filter({
+      hasText: "Venta"
+    }).filter({ hasText: "C$15.00" })).toContainText("Confirmado");
+    await page.locator("#navSalesBtn").click();
+
+    await page.locator('input[name="paymentMethod"][value="card"]').check();
+    await venderProductoDesdeUI(page, "CAJA-SALES-001");
+    await expect(page.locator("#ticketModal")).toBeVisible();
+    await page.locator("#newSaleBtn").click();
+    await expect(page.locator("#cajaResumenVentas")).toHaveText("C$15.00");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$65.00");
+
+    await page.locator('input[name="paymentMethod"][value="credit"]').check();
+    await page.locator("#creditClientSelect").selectOption(clientId);
+    await venderProductoDesdeUI(page, "CAJA-SALES-001");
+    await expect(page.locator("#ticketModal")).toBeVisible();
+    await page.locator("#newSaleBtn").click();
+    await expect(page.locator("#cajaResumenVentas")).toHaveText("C$15.00");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$65.00");
+    await expect(page.locator("#cajaCentralVentas")).toHaveText("C$45.00");
+
+    await abrirClientes(page);
+    await clientRow.getByRole("button", { name: "Historial" }).click();
+    await page.locator("#statementTableBody").getByRole("button", { name: "Abonar" }).click();
+    await page.locator("#paySaleAmount").fill("5");
+    await page.locator("#paySaleMethod").selectOption("efectivo");
+    await page.locator("#paymentSaleForm button[type='submit']").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await expect(page.locator("#statementTableBody")).toContainText("Pago recibido por efectivo");
+
+    await page.locator("#statementTableBody").getByRole("button", { name: "Abonar" }).click();
+    await page.locator("#paySaleAmount").fill("2");
+    await page.locator("#paySaleMethod").selectOption("tarjeta");
+    await page.locator("#paymentSaleForm button[type='submit']").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await page.locator("#statementModal .close-modal-btn").click();
+
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaResumenEntradas")).toHaveText("C$5.00");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$70.00");
+    await expect(page.locator("#cajaCentralCobros")).toHaveText("C$7.00");
+    const cashPayment = page.locator("#cajaCentralBox #cajaOperacionesBody tr").filter({
+      hasText: "Cobro"
+    }).filter({ hasText: "C$5.00" });
+    await cashPayment.getByRole("button", { name: "Confirmar" }).click();
+    await expect(page.locator("#cajaCentralBox #cajaOperacionesBody tr").filter({
+      hasText: "Cobro"
+    }).filter({ hasText: "C$5.00" })).toContainText("Confirmado");
+    await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Confirmado");
+
+    await abrirClientes(page);
+    await clientRow.getByRole("button", { name: "Historial" }).click();
+    const cashAbono = page.locator("#statementTableBody tr").filter({
+      hasText: "Pago recibido por efectivo"
+    });
+    await cashAbono.getByRole("button", { name: "Anular" }).click();
+    await page.locator("#anularRegistroMotivo").fill("Cobro ingresado por error");
+    await page.locator("#anularRegistroForm button[type='submit']").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Abono anulado exitosamente");
+    await expect(page.locator("#statementTableBody")).toContainText("ANULADO");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await page.locator("#statementModal .close-modal-btn").click();
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaResumenEntradas")).toHaveText("C$5.00");
+    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$5.00");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$65.00");
+    await expect(page.locator("#cajaCentralCobros")).toHaveText("C$2.00");
+
+    await page.locator("#cerrarCajaBtn").click();
+    await page.locator("#cajaEfectivoRealInput").fill("65");
+    await page.locator("#confirmCierreCajaBtn").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await page.locator("#navSalesBtn").click();
+    await page.locator('input[name="paymentMethod"][value="cash"]').check();
+    await venderProductoDesdeUI(page, "CAJA-SALES-001");
+    await expect(page.locator("#customAlertMessage")).toContainText("No hay una caja abierta");
+    await expect(page.locator("#ticketModal")).toBeHidden();
+  });
+
+  test("gastos en efectivo afectan la sesión correcta; otros medios no, y anular revierte el efectivo", async ({ page }) => {
+    await iniciarSesion(page);
+    await abrirCajaDesdeUI(page, "50.00");
+    await page.locator("#navGastosBtn").click();
+    await expect(page.locator("#gastosView")).toBeVisible();
+
+    await page.locator("#gastoMetodo").selectOption("caja");
+    await page.locator("#gastoDescripcion").fill("Reparación pagada en efectivo");
+    await page.locator("#gastoComprobante").fill("G-CAJA-001");
+    await page.locator("#gastoMonto").fill("20.15");
+    await page.locator("#formRegistrarGasto button[type='submit']").click();
+    await expect(page.locator("#gastosTableBody")).toContainText("Reparación pagada en efectivo");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#gastoMetodo").selectOption("banco");
+    await page.locator("#gastoDescripcion").fill("Servicio pagado por banco");
+    await page.locator("#gastoMonto").fill("4.40");
+    await page.locator("#formRegistrarGasto button[type='submit']").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#gastoMetodo").selectOption("pendiente");
+    await page.locator("#gastoDescripcion").fill("Servicio pendiente");
+    await page.locator("#gastoMonto").fill("3.25");
+    await page.locator("#formRegistrarGasto button[type='submit']").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$20.15");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$29.85");
+
+    await page.locator("#navGastosBtn").click();
+    const cashExpense = page.locator("#gastosTableBody tr").filter({
+      hasText: "Reparación pagada en efectivo"
+    });
+    await cashExpense.getByRole("button", { name: "Anular" }).click();
+    await page.locator("#anularRegistroMotivo").fill("Gasto duplicado");
+    await page.locator("#anularRegistroForm button[type='submit']").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Gasto anulado");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaResumenEntradas")).toHaveText("C$20.15");
+    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$20.15");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$50.00");
+    await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Anulación Gasto: Reparación pagada en efectivo");
+
+    await page.locator("#cerrarCajaBtn").click();
+    await page.locator("#cajaEfectivoRealInput").fill("50");
+    await page.locator("#confirmCierreCajaBtn").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await page.locator("#navGastosBtn").click();
+    await page.locator("#gastoMetodo").selectOption("caja");
+    await page.locator("#gastoDescripcion").fill("Gasto en efectivo posterior al cierre");
+    await page.locator("#gastoMonto").fill("5");
+    await page.locator("#formRegistrarGasto button[type='submit']").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("No hay caja abierta");
+    await expect(page.locator("#gastosTableBody")).not.toContainText("Gasto en efectivo posterior al cierre");
+  });
+
+  test("compras no afectan Caja y pagos a proveedores en efectivo registran una salida", async ({ page }) => {
+    await iniciarSesion(page);
+    await crearProductoParaCaja(page, "CAJA-PURCHASE-001", "Producto comprado para Caja");
+    await abrirCajaDesdeUI(page, "100.00");
+
+    await abrirCompras(page);
+    await page.locator("#addNewPurchaseBtn").click();
+    await page.locator("#purchSupplier").fill("Proveedor pago Caja");
+    await page.locator("#purchInvoice").fill("FACT-CAJA-001");
+    await page.locator("#purchType").selectOption("credito");
+    await page.locator("#purchProductTemp").fill("Producto comprado para Caja");
+    await page.locator("#purchQtyTemp").fill("2");
+    await page.locator("#purchCostTemp").fill("12");
+    await page.locator("#btnAddItemToPurch").click();
+    await page.locator("#purchaseForm button[type='submit']").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#addNewPurchaseBtn").click();
+    await page.locator("#purchSupplier").fill("Proveedor pago Caja");
+    await page.locator("#purchInvoice").fill("FACT-CAJA-CASH-001");
+    await page.locator("#purchType").selectOption("contado");
+    await page.locator("#purchProductTemp").fill("Producto comprado para Caja");
+    await page.locator("#purchQtyTemp").fill("1");
+    await page.locator("#purchCostTemp").fill("10");
+    await page.locator("#btnAddItemToPurch").click();
+    await page.locator("#purchaseForm button[type='submit']").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$100.00");
+    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$0.00");
+
+    await abrirProveedores(page);
+    const supplierRow = page.locator("#suppliersTableBody tr").filter({
+      hasText: "Proveedor pago Caja"
+    });
+    await supplierRow.getByRole("button", { name: "Edo. Cuenta" }).click();
+    await page.locator("#statementTableBody").getByRole("button", { name: "Abonar" }).click();
+    await page.locator("#payInvoiceAmount").fill("5");
+    await page.locator("#payInvoiceMethod").selectOption("efectivo");
+    await page.locator("#paymentInvoiceForm button[type='submit']").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await expect(supplierRow).toContainText("C$19.00");
+    await page.locator("#statementTableBody").getByRole("button", { name: "Abonar" }).click();
+    await page.locator("#payInvoiceAmount").fill("3");
+    await page.locator("#payInvoiceMethod").selectOption("transferencia");
+    await page.locator("#paymentInvoiceForm button[type='submit']").click();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await expect(supplierRow).toContainText("C$16.00");
+    await page.locator("#statementModal .close-modal-btn").click();
+
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$5.00");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$95.00");
+    await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Pago Factura FACT-CAJA-001: Proveedor pago Caja");
+  });
+
+  test("cierra con validación y diferencia, permite corregir y anular movimientos del historial, conserva sesiones y reporta cierres", async ({ page }) => {
+    await iniciarSesion(page);
+    await abrirCajaDesdeUI(page, "100.10");
+
+    await page.locator("#cajaMovimientoConcepto").fill("Ingreso registrado");
+    await page.locator("#cajaMovimientoMonto").fill("20.20");
+    await page.locator("#registrarEntradaBtn").click();
+    await page.locator("#cerrarCajaBtn").click();
+    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$120.30");
+
+    await page.locator("#confirmCierreCajaBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese el monto real de efectivo contado");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await page.locator("#cajaEfectivoRealInput").fill("-1");
+    await page.locator("#confirmCierreCajaBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese el monto real de efectivo contado");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await page.locator("#cajaEfectivoRealInput").fill("125.30");
+    await page.locator("#confirmCierreCajaBtn").click();
+    await expect(page.locator("#cajaAbiertaBox")).toBeHidden();
+    await expect(page.locator("#cajaAbrirBox")).toBeVisible();
+    await expect(page.locator("#cajaHistorialBody tr")).toHaveCount(1);
+    const firstClosedRow = page.locator("#cajaHistorialBody tr").first();
+    await expect(firstClosedRow).toContainText("C$100.10");
+    await expect(firstClosedRow).toContainText("C$120.30");
+    await expect(firstClosedRow).toContainText("C$125.30");
+    await expect(firstClosedRow).toContainText("C$5.00");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    let movementRow = page.locator("#cajaCentralBox #cajaMovimientosBody tr").filter({
+      hasText: "Ingreso registrado"
+    });
+    await movementRow.getByRole("button", { name: "Corregir" }).click();
+    await page.locator("#cashCorrectionNewAmount").fill("0");
+    await page.locator("#cashCorrectionReason").fill("Corrección inválida");
+    await page.locator("#confirmCashCorrectionBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("nuevo monto válido");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await page.locator("#cashCorrectionNewAmount").fill("25.20");
+    await page.locator("#cashCorrectionReason").fill("   ");
+    await page.locator("#confirmCashCorrectionBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Indique el motivo");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await page.locator("#cashCorrectionReason").fill("Conteo revisado");
+    await page.locator("#confirmCashCorrectionBtn").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Corrección registrada");
+    await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$125.30");
+    await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$0.00");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    movementRow = page.locator("#cajaCentralBox #cajaMovimientosBody tr").filter({
+      hasText: "Ingreso registrado"
+    });
+    await movementRow.getByRole("button", { name: "Anular" }).click();
+    await page.locator("#anularRegistroForm button[type='submit']").click();
+    await expect(page.locator("#anularRegistroModal")).toBeVisible();
+    expect(await page.locator("#anularRegistroMotivo").evaluate(input => input.checkValidity())).toBe(false);
+    await page.locator("#anularRegistroMotivo").fill("Movimiento duplicado");
+    await page.locator("#anularRegistroForm button[type='submit']").click();
+    await expect(page.locator("#customAlertMessage")).toContainText("Movimiento anulado");
+    await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$100.10");
+    await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$25.20");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await abrirCajaDesdeUI(page, "10.50");
+    await page.locator("#cerrarCajaBtn").click();
+    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$10.50");
+    await page.locator("#cajaEfectivoRealInput").fill("10.50");
+    await page.locator("#confirmCierreCajaBtn").click();
+    await expect(page.locator("#cajaHistorialBody tr")).toHaveCount(2);
+    await expect(page.locator("#cajaHistorialBody tr").nth(1)).toContainText("C$100.10");
+    await expect(page.locator("#cajaHistorialBody tr").nth(1)).toContainText("C$25.20");
+    await expect(page.locator("#customAlertModal .close-modal-btn")).toBeVisible();
+    await page.locator("#customAlertModal .close-modal-btn").click();
+
+    await page.reload();
+    await iniciarSesion(page);
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaAbrirBox")).toBeVisible();
+    await expect(page.locator("#cajaAbiertaBox")).toBeHidden();
+    await expect(page.locator("#cajaHistorialBody tr")).toHaveCount(2);
+    await page.locator("#navReportesBtn").click();
+    await expect(page.locator("#reportesView")).toBeVisible();
+    await page.locator('.rep-subtab[data-target="repCajaBox"]').click();
+    await expect(page.locator("#repCajaBody tr")).toHaveCount(2);
+    await expect(page.locator("#repCajaBody")).toContainText("C$100.10");
+    await expect(page.locator("#repCajaBody")).toContainText("C$25.20");
+    await expect(page.locator("#repCajaBody")).toContainText("C$10.50");
+  });
 });

@@ -20,12 +20,17 @@ localDB.version(9).stores({
     audit_logs: '++id, business_id, fechaTS, usuario, modulo, accion'
 });
 
-const USERS = [ { username: "vendedor1", password: "1234", role: "vendedor" }, { username: "gestor", password: "4321", role: "gestor" } ];
+const USERS = [
+    { username: "andres", password: "4321", role: "gestor" },
+    { username: "gestor", password: "4321", role: "gestor" },
+    { username: "vendedor1", password: "1234", role: "vendedor" }
+];
 
 let products = [], clients = [], suppliers = [], purchasesHistory = [], salesHistory = [], cart = [];
 let cajaActual = null, cajaHistorial = [], gastosHistory = [], abonosHistory = [], auditHistory = [];
 let buyerType = "retail", paymentMethod = "cash", currentUser = null;
 let unlockedModuleId = null;
+let renderizandoCarrito = false;
 let saleNumber = 1, totalTemporal = 0, subtotalTemporal = 0, descuentoPct = 0, descuentoMonto = 0, pendingAdminView = null, tempImageBase64 = null, tempConfigLogoBase64 = null;
 let procesandoVenta = false;
 let ticketEsVentaNueva = false;
@@ -117,7 +122,11 @@ async function initApp() {
         await initCaja();
     } catch (err) { console.error("Error cargando base de datos local:", err.message); }
 }
-window.addEventListener('DOMContentLoaded', initApp);
+const appInitialization = new Promise(resolve => {
+    const initialize = () => { initApp().then(resolve); };
+    if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", initialize, { once: true });
+    else initialize();
+});
 
 async function registrarAuditoria(modulo, accion, detalleTexto) {
     const log = { business_id: DEFAULT_BUSINESS_ID, fecha: new Date().toLocaleString(), fechaTS: Date.now(), usuario: currentUser ? currentUser.displayName : 'Sistema', modulo: modulo, accion: accion, detalle: detalleTexto };
@@ -255,28 +264,31 @@ window.confirmarAnularRegistro = function() {
     if (anularRegistroCallback) anularRegistroCallback(motivo);
 };
 
-document.getElementById("loginForm")?.addEventListener("submit", (e) => {
-    e.preventDefault(); 
-    const uVal = document.getElementById("loginUsername").value.trim(); 
+document.getElementById("loginForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await appInitialization;
+    const uVal = document.getElementById("loginUsername").value.trim();
     const pVal = document.getElementById("loginPassword").value;
-    
-    let user = null;
-    if (pVal === "1234") { user = { username: uVal, password: "1234", role: "vendedor" }; } 
-    else if (pVal === "4321") { user = { username: uVal, password: "4321", role: "gestor" }; }
-    
-    if (user && uVal !== "") { 
-        currentUser = { ...user, displayName: user.username }; 
-        loginScreen?.classList.add("hidden"); app?.classList.remove("hidden"); 
-        if(document.getElementById("sellerName")) document.getElementById("sellerName").textContent = currentUser.username; 
-        if(document.getElementById("roleBadge")) document.getElementById("roleBadge").textContent = currentUser.role === "gestor" ? "Administrador" : "Usuario"; 
+    const loginError = document.getElementById("loginError");
+
+    const user = USERS.find(candidate => candidate.username === uVal && candidate.password === pVal);
+
+    if (user && uVal !== "") {
+        loginError?.classList.add("hidden");
+        currentUser = { ...user, displayName: user.username };
+        loginScreen?.classList.add("hidden"); app?.classList.remove("hidden");
+        if(document.getElementById("sellerName")) document.getElementById("sellerName").textContent = currentUser.username;
+        if(document.getElementById("roleBadge")) document.getElementById("roleBadge").textContent = currentUser.role === "gestor" ? "Administrador" : "Usuario";
         unlockedModuleId = null; switchView("salesView"); actualizarCatalogo();
         registrarAuditoria('SESION', 'LOGIN', `Inicio de sesión (${currentUser.role})`);
-    } else { document.getElementById("loginError")?.classList.remove("hidden"); }
+    } else {
+        loginError?.classList.remove("hidden");
+    }
 });
 
-document.getElementById("logoutBtn")?.addEventListener("click", () => {
+document.getElementById("logoutBtn")?.addEventListener("click", async () => {
     detenerCamaraVentas();
-    if (currentUser) registrarAuditoria('SESION', 'LOGOUT', `Cierre de sesión`);
+    if (currentUser) await registrarAuditoria('SESION', 'LOGOUT', `Cierre de sesión`);
     app?.classList.add("hidden"); loginScreen?.classList.remove("hidden"); document.getElementById("loginForm")?.reset(); cart = []; resetearDescuentoVenta(); actualizarCarrito(); unlockedModuleId = null; currentUser = null;
 });
 
@@ -344,8 +356,10 @@ function cargarVistaConfiguracion() {
 
 window.guardarConfiguracion = function() {
     if (!isAdmin()) { showAlert("No tiene permisos."); return; }
+    const minStockInput = document.getElementById("confMinStock");
+    if (!minStockInput.checkValidity()) { minStockInput.reportValidity(); return; }
     const prevConfig = JSON.stringify(sysConfig);
-    sysConfig = { name: document.getElementById("confName").value.trim() || "POS DISTRIBUIDORA", ruc: document.getElementById("confRuc").value.trim(), address: document.getElementById("confAddress").value.trim(), phone: document.getElementById("confPhone").value.trim(), currency: document.getElementById("confCurrency").value.trim() || "C$", header: document.getElementById("confHeader").value.trim(), footer: document.getElementById("confFooter").value.trim(), tax: 0, minStock: parseInt(document.getElementById("confMinStock").value) || 5, logo: tempConfigLogoBase64 };
+    sysConfig = { name: document.getElementById("confName").value.trim() || "POS DISTRIBUIDORA", ruc: document.getElementById("confRuc").value.trim(), address: document.getElementById("confAddress").value.trim(), phone: document.getElementById("confPhone").value.trim(), currency: document.getElementById("confCurrency").value.trim() || "C$", header: document.getElementById("confHeader").value.trim(), footer: document.getElementById("confFooter").value.trim(), tax: 0, minStock: parseInt(minStockInput.value) || 5, logo: tempConfigLogoBase64 };
     localStorage.setItem('posSystemConfig', JSON.stringify(sysConfig));
     if (prevConfig !== JSON.stringify(sysConfig)) registrarAuditoria('CONFIGURACION', 'ACTUALIZACION', 'Actualizó configuración del negocio');
     showAlert("Configuración guardada exitosamente.");
@@ -412,6 +426,21 @@ function refrescarSelectClientesCredito(seleccionarId) {
 
 document.getElementsByName("paymentMethod").forEach(radio => { radio.addEventListener("change", (e) => { paymentMethod = e.target.value; const clientBox = document.getElementById("creditClientContainer"); if(paymentMethod === "credit") { clientBox?.classList.remove("hidden"); refrescarSelectClientesCredito(); } else { clientBox?.classList.add("hidden"); } }); });
 
+function obtenerDescuentoPctActual() {
+    const applies = document.querySelector('input[name="descApplies"][value="si"]')?.checked;
+    const input = document.getElementById("descuentoPct");
+
+    if (!applies) {
+        descuentoPct = 0;
+        if (input && input.value) input.value = "";
+        return 0;
+    }
+
+    const value = parseFloat(input?.value ?? "");
+    descuentoPct = Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
+    return descuentoPct;
+}
+
 document.getElementsByName("descApplies").forEach(radio => radio.addEventListener("change", e => {
     const applies = e.target.value === "si";
     document.getElementById("descuentoBox")?.classList.toggle("hidden", !applies);
@@ -422,9 +451,8 @@ document.getElementsByName("descApplies").forEach(radio => radio.addEventListene
     }
     actualizarCarrito();
 }));
-document.getElementById("descuentoPct")?.addEventListener("input", e => {
-    const value = parseFloat(e.target.value);
-    descuentoPct = Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
+document.getElementById("descuentoPct")?.addEventListener("input", () => {
+    obtenerDescuentoPctActual();
     actualizarCarrito();
 });
 
@@ -528,12 +556,16 @@ document.getElementById("clearCartBtn")?.addEventListener("click", () => {
 });
 
 function actualizarCarrito() { 
+    if (renderizandoCarrito) return;
+    renderizandoCarrito = true;
+    try {
     let subtotalSinImpuesto = 0; let total = 0; const cartItemsDiv = document.getElementById("cartItems"); 
     if (cart.length === 0) { if(cartItemsDiv) cartItemsDiv.innerHTML = `<div class="text-center" style="padding:20px; color:#999;">Carrito vacío</div>`; } else { 
         if(cartItemsDiv) cartItemsDiv.innerHTML = cart.map((item, index) => { const retail = item.retailPrice || item.retail || 0; const wholesale = item.wholesalePrice || item.wholesale || 0; const precio = buyerType === "retail" ? retail : wholesale; const itemTotal = r2(precio * item.cantidad); const currentStock = stockReal(item); subtotalSinImpuesto = r2(subtotalSinImpuesto + itemTotal); total = r2(total + itemTotal); return `<div class="cart-item-row" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding:12px 0;"><div style="flex:1;"><strong>${escapeHtml(item.name)}</strong><br><small>${sysConfig.currency}${precio.toFixed(2)} c/u · Stock: ${currentStock}</small></div><div class="qty-control" style="display:flex; align-items:center; gap:8px;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, -1)">-</button><input type="number" value="${item.cantidad}" onchange="window.cambiarCantidadManual(${index}, this.value)" style="width: 45px; text-align: center;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, 1)">+</button></div><div style="text-align:right; margin-left:15px;"><strong>${sysConfig.currency}${itemTotal.toFixed(2)}</strong><br><button onclick="window.eliminarDelCarrito(${index})" style="background:transparent; color:#d32f2f; border:none; cursor:pointer; font-size:12px;">Quitar</button></div></div>`; }).join(""); 
     } 
     subtotalTemporal = subtotalSinImpuesto;
-    descuentoMonto = r2(subtotalSinImpuesto * descuentoPct / 100);
+    const descuentoPctActual = obtenerDescuentoPctActual();
+    descuentoMonto = r2(subtotalSinImpuesto * descuentoPctActual / 100);
     total = r2(subtotalSinImpuesto - descuentoMonto);
     totalTemporal = total;
     document.getElementById("descuentoRow")?.classList.toggle("hidden", descuentoMonto <= 0);
@@ -542,6 +574,9 @@ function actualizarCarrito() {
     if(document.getElementById("subtotal")) document.getElementById("subtotal").textContent = `${sysConfig.currency}${subtotalSinImpuesto.toFixed(2)}`; 
     if(document.getElementById("total")) document.getElementById("total").textContent = `${sysConfig.currency}${total.toFixed(2)}`; 
     if(document.getElementById("cartItemCount")) document.getElementById("cartItemCount").textContent = `${cart.length} productos`; 
+    } finally {
+        renderizandoCarrito = false;
+    }
 }
 
 async function registrarMovimientoKardex(productoId, tipoMovimiento, cantidadFisica, motivoRef) {
@@ -1010,7 +1045,7 @@ window.toggleEstadoCliente = async function(id) {
     const nuevoEstado = c.active === false ? true : false;
     showConfirm(`¿Deseas ${nuevoEstado ? 'activar' : 'inactivar'} al cliente ${c.name}?`, async () => {
         c.active = nuevoEstado; await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c);
-        actualizarTablaClientes(); showAlert(`Cliente ${nuevoEstado ? 'activado' : 'inactivado'}.`);
+        actualizarTablaClientes(); refrescarSelectClientesCredito(); showAlert(`Cliente ${nuevoEstado ? 'activado' : 'inactivado'}.`);
     });
 };
 
@@ -1291,6 +1326,10 @@ document.getElementById("supplierForm")?.addEventListener("submit", async (e) =>
         debt: id ? (suppliers.find(s => String(s.id) === String(id))?.debt||0) : 0, 
         active: id ? (suppliers.find(s => String(s.id) === String(id))?.active !== false) : true 
     }; 
+    if (!suppData.name || !suppData.contact || !suppData.phone) {
+        showAlert("Complete nombre, contacto y teléfono.");
+        return;
+    }
     
     if (id) { 
         const idx = suppliers.findIndex(s => String(s.id) === String(id)); 
@@ -1381,9 +1420,21 @@ window.anularAbonoProveedor = async function(abonoId) {
     showAnularRegistro("Anular Pago a Proveedor", `Proveedor: ${proveedor ? proveedor.name : 'Desconocido'} - Monto: ${sysConfig.currency}${abono.monto.toFixed(2)}`, async (motivo) => {
         abono.anulado = true; abono.motivoAnulacion = motivo; abono.fechaAnulacion = new Date().toLocaleString(); abono.usuarioAnulacion = currentUser.displayName;
         if (proveedor) { proveedor.debt = r2((proveedor.debt || 0) + abono.monto); await localDB.suppliers.put(proveedor); await encolarSincronizacion('UPDATE', 'suppliers', proveedor); }
-        if (cajaActual && (!abono.metodoPago || abono.metodoPago === "efectivo")) { cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo: "entrada", monto: abono.monto, concepto: `Anulación Pago Proveedor: ${proveedor ? proveedor.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", referenciaAbonoId: abono.id }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion('UPDATE', 'cajaSessions', cajaActual); }
+        if (!abono.metodoPago || abono.metodoPago === "efectivo") {
+            const session = cajaHistorial.find(item => item.movimientos?.some(mov => String(mov.referenciaAbonoId) === String(abono.id))) || cajaActual;
+            if (session) {
+                session.movimientos.push({ id: Date.now() + Math.random(), tipo: "entrada", monto: abono.monto, concepto: `Anulación Pago Proveedor: ${proveedor ? proveedor.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", referenciaAbonoId: abono.id });
+                if (session.estado === "cerrada") {
+                    const summary = calcularResumenCaja(session);
+                    session.efectivoEsperado = summary.esperado;
+                    session.diferencia = r2((session.efectivoReal || 0) - summary.esperado);
+                }
+                await localDB.cajaSessions.put(session);
+                await encolarSincronizacion('UPDATE', 'cajaSessions', session);
+            }
+        }
         await localDB.abonos.put(abono); await encolarSincronizacion('UPDATE', 'abonos', abono); await registrarAuditoria('PROVEEDORES', 'ANULAR_PAGO', `Anuló pago de ${sysConfig.currency}${abono.monto.toFixed(2)} al proveedor ${proveedor ? proveedor.name : ''}. Motivo: ${motivo}`);
-        actualizarTablaCuentasPorPagar(); if(cajaActual) renderCajaView(); renderDashboard(); showAlert("Pago anulado exitosamente.");
+        actualizarTablaCuentasPorPagar(); renderCajaView(); renderDashboard(); showAlert("Pago anulado exitosamente.");
         if(proveedor) setTimeout(() => window.verEstadoCuentaProveedor(proveedor.id), 500);
     });
 };
@@ -1509,7 +1560,7 @@ window.eliminarCompra = function(id) {
     });
 };
 
-function actualizarTablaCuentasPorPagar() { const tb = document.getElementById("payablesTableBody"); if(!tb) return; const deudores = suppliers.filter(s => (s.debt||0) > 0); if(deudores.length === 0) { tb.innerHTML = `<tr><td colspan="6" class="text-center">No hay cuentas por pagar pendientes.</td></tr>`; } else { tb.innerHTML = deudores.map(s => { const facturasCredito = purchasesHistory.filter(p => p.proveedor === s.name && p.tipo === "credito" && !p.anulada).sort((a,b) => new Date(a.vencimiento) - new Date(b.vencimiento)); const proxVencimiento = facturasCredito.length > 0 ? facturasCredito[0].vencimiento : 'Ver facturas'; return `<tr><td>${s.id}</td><td><strong>${escapeHtml(s.name)}</strong></td><td>${escapeHtml(s.phone) || '-'}</td><td style="color:#d32f2f; font-weight:bold;">${proxVencimiento}</td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td><td><button class="btn btn-sm btn-secondary" onclick="window.verEstadoCuentaProveedor('${s.id}')">Ver Facturas</button></td></tr>`; }).join(""); } }
+function actualizarTablaCuentasPorPagar() { const tb = document.getElementById("payablesTableBody"); if(!tb) return; const deudores = suppliers.filter(s => (s.debt||0) > 0); if(deudores.length === 0) { tb.innerHTML = `<tr><td colspan="6" class="text-center">No hay cuentas por pagar pendientes.</td></tr>`; } else { tb.innerHTML = deudores.map(s => { const facturasCredito = purchasesHistory.filter(p => p.proveedor === s.name && p.tipo === "credito" && !p.anulada && obtenerSaldoFactura("proveedor", p) > 0).sort((a,b) => new Date(a.vencimiento) - new Date(b.vencimiento)); const proxVencimiento = facturasCredito.length > 0 ? facturasCredito[0].vencimiento : 'Ver facturas'; return `<tr><td>${s.id}</td><td><strong>${escapeHtml(s.name)}</strong></td><td>${escapeHtml(s.phone) || '-'}</td><td style="color:#d32f2f; font-weight:bold;">${proxVencimiento}</td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td><td><button class="btn btn-sm btn-secondary" onclick="window.verEstadoCuentaProveedor('${s.id}')">Ver Facturas</button></td></tr>`; }).join(""); } }
 window.abrirAbonoProveedor = function(id) { const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("payableSupplierId").value = s.id; document.getElementById("payableSupplierName").textContent = s.name; document.getElementById("payableDebt").textContent = `${sysConfig.currency}${(s.debt||0).toFixed(2)}`; const pa = document.getElementById("payableAmount"); if(pa) pa.value = ""; document.getElementById("payablePaymentModal")?.classList.remove("hidden"); };
 window.abrirAbonoFacturaProveedor = function(id) {
     const purchase = purchasesHistory.find(item => String(item.id) === String(id));
@@ -1609,7 +1660,7 @@ function calcularResumenCaja(session) {
 }
 async function abrirCaja(efectivoInicial) { if (cajaActual) { showAlert("Ya existe una caja abierta."); return; } if (isNaN(efectivoInicial) || efectivoInicial < 0) { showAlert("Ingrese un monto inicial válido."); return; } const nueva = { business_id: DEFAULT_BUSINESS_ID, estado: "abierta", usuarioApertura: currentUser.displayName, fechaAperturaTS: Date.now(), fechaApertura: new Date().toLocaleString(), efectivoInicial: efectivoInicial, movimientos: [], fechaCierreTS: null, fechaCierre: null, efectivoReal: null, efectivoEsperado: null, diferencia: null, usuarioCierre: null }; const id = await localDB.cajaSessions.add(nueva); nueva.id = id; cajaActual = nueva; cajaHistorial.unshift(nueva); await encolarSincronizacion("INSERT", "cajaSessions", nueva); await registrarAuditoria('CAJA', 'APERTURA', `Abrió caja con ${sysConfig.currency}${efectivoInicial.toFixed(2)}`); renderCajaView(); }
 async function registrarMovimientoCaja(tipo, monto, concepto) { monto = r2(monto); if (!cajaActual) { showAlert("No hay una caja abierta."); return; } if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (!concepto || !concepto.trim()) { showAlert("Ingrese un concepto."); return; } cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo, monto, concepto: concepto.trim(), fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", anulado: false }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); }
-window.anularMovimientoCaja = async function(indexOriginal, sessionId) { if (!isAdmin()) { showAlert("No tiene permisos."); return; } const session = sessionId ? cajaHistorial.find(item => String(item.id) === String(sessionId)) : cajaActual; const mov = session?.movimientos[indexOriginal]; if (!mov || mov.anulado) return; showAnularRegistro("Anular Movimiento de Caja", `${mov.tipo.toUpperCase()}: ${mov.concepto} (${sysConfig.currency}${mov.monto.toFixed(2)})`, async (motivo) => { mov.anulado = true; mov.motivoAnulacion = motivo; mov.usuarioAnulacion = currentUser.displayName; mov.fechaAnulacion = new Date().toLocaleString(); await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); renderCajaView(); showAlert("Movimiento anulado."); }); };
+window.anularMovimientoCaja = async function(indexOriginal, sessionId) { if (!isAdmin()) { showAlert("No tiene permisos."); return; } const session = sessionId ? cajaHistorial.find(item => String(item.id) === String(sessionId)) : cajaActual; const mov = session?.movimientos[indexOriginal]; if (!mov || mov.anulado) return; showAnularRegistro("Anular Movimiento de Caja", `${mov.tipo.toUpperCase()}: ${mov.concepto} (${sysConfig.currency}${mov.monto.toFixed(2)})`, async (motivo) => { mov.anulado = true; mov.motivoAnulacion = motivo; mov.usuarioAnulacion = currentUser.displayName; mov.fechaAnulacion = new Date().toLocaleString(); if (session.estado === "cerrada") { const summary = calcularResumenCaja(session); session.efectivoEsperado = summary.esperado; session.diferencia = r2((session.efectivoReal || 0) - summary.esperado); } await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); renderCajaView(); showAlert("Movimiento anulado."); }); };
 window.confirmarMovimientoCaja = async function(sessionId, index) { if (!isAdmin()) { showAlert("No tiene permisos para confirmar movimientos."); return; } const session = cajaHistorial.find(item => String(item.id) === String(sessionId)); const mov = session?.movimientos[index]; if (!mov || mov.anulado || mov.estado !== "pendiente") return; mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = new Date().toLocaleString(); await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); await registrarAuditoria("CAJA", "CONFIRMAR_MOVIMIENTO", `Confirmó ${mov.tipo} de ${sysConfig.currency}${r2(mov.monto).toFixed(2)}: ${mov.concepto}`); renderCajaView(); };
 window.confirmarVentaCaja = async function(id) { if (!isAdmin()) { showAlert("No tiene permisos para confirmar operaciones."); return; } const sale = salesHistory.find(item => String(item.id) === String(id)); if (!sale || sale.anulada || sale.estadoCaja !== "pendiente") return; sale.estadoCaja = "confirmado"; sale.usuarioConfirmacionCaja = currentUser.displayName; sale.fechaConfirmacionCaja = new Date().toLocaleString(); await localDB.sales.put(sale); await encolarSincronizacion("UPDATE", "sales", sale); await registrarAuditoria("CAJA", "CONFIRMAR_VENTA", `Confirmó venta #${sale.numero} (${sale.metodo}) por ${sysConfig.currency}${r2(sale.total).toFixed(2)}`); renderCajaView(); };
 window.abrirCorreccionCaja = function(sessionId, index) { if (!isAdmin()) { showAlert("Solo el administrador puede corregir movimientos."); return; } const session = cajaHistorial.find(item => String(item.id) === String(sessionId)); const mov = session?.movimientos[index]; if (!mov || mov.tipo !== "entrada" || mov.anulado) return; document.getElementById("cashCorrectionSessionId").value = session.id; document.getElementById("cashCorrectionMovementIndex").value = index; document.getElementById("cashCorrectionOldAmount").textContent = `${sysConfig.currency}${r2(mov.monto).toFixed(2)}`; document.getElementById("cashCorrectionNewAmount").value = r2(mov.monto).toFixed(2); document.getElementById("cashCorrectionReason").value = ""; document.getElementById("cashCorrectionModal")?.classList.remove("hidden"); };
@@ -1754,8 +1805,62 @@ function renderCajaCentral() {
 function renderCajaView() { renderCajaViewBase(); renderCajaCentral(); }
 
 function renderGastosSelect() { const sel = document.getElementById("gastoCategoria"); if (sel && sel.options.length === 0) sel.innerHTML = GASTOS_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join(""); }
-window.registrarGastoSubmit = async function() { const categoria = document.getElementById("gastoCategoria").value; const metodo = document.getElementById("gastoMetodo").value; const descripcion = document.getElementById("gastoDescripcion").value.trim(); const comprobante = document.getElementById("gastoComprobante").value.trim() || "S/F"; const monto = r2(parseFloat(document.getElementById("gastoMonto").value)); if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (metodo === "caja" && !cajaActual) { showAlert("No hay caja abierta."); return; } const nuevoGasto = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, categoria, metodo, comprobante, monto, descripcion, fecha: new Date().toLocaleString(), fechaTS: Date.now(), usuario: currentUser ? currentUser.displayName : "Sistema", sessionId: cajaActual ? cajaActual.id : null, anulado: false }; gastosHistory.push(nuevoGasto); await localDB.gastos.put(nuevoGasto); await encolarSincronizacion("INSERT", "gastos", nuevoGasto); if (metodo === "caja") { cajaActual.movimientos.push({ tipo: "salida", monto, concepto: `Gasto: ${categoria} - ${descripcion}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); } document.getElementById("formRegistrarGasto")?.reset(); renderGastosView(); actualizarTablaHistorial(); renderDashboard(); showAlert(`Gasto registrado.`); };
-window.eliminarGasto = function(id) { if (!isAdmin()) { showAlert("No tiene permisos."); return; } const gasto = gastosHistory.find(g => String(g.id) === String(id)); if (!gasto || gasto.anulado) return; showAnularRegistro("Anular Gasto", `${gasto.categoria} — ${gasto.descripcion} — Monto: ${sysConfig.currency}${(gasto.monto||0).toFixed(2)}.`, async (motivo) => { if (gasto.metodo === "caja" && cajaActual && gasto.sessionId === cajaActual.id) { cajaActual.movimientos.push({ tipo: "entrada", monto: gasto.monto, concepto: `Anulación Gasto: ${gasto.descripcion} (${motivo})`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); } gasto.anulado = true; gasto.motivoAnulacion = motivo; gasto.fechaAnulacion = new Date().toLocaleString(); gasto.usuarioAnulacion = currentUser.displayName; await localDB.gastos.put(gasto); await encolarSincronizacion('UPDATE', 'gastos', gasto); renderGastosView(); actualizarTablaHistorial(); renderDashboard(); showAlert("Gasto anulado."); }); };
+window.registrarGastoSubmit = async function() {
+    const categoria = document.getElementById("gastoCategoria").value;
+    const metodo = document.getElementById("gastoMetodo").value;
+    const descripcion = document.getElementById("gastoDescripcion").value.trim();
+    const comprobante = document.getElementById("gastoComprobante").value.trim() || "S/F";
+    const monto = r2(parseFloat(document.getElementById("gastoMonto").value));
+    if (!descripcion) { showAlert("Ingrese una descripción válida."); return; }
+    if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; }
+    if (metodo === "caja" && !cajaActual) { showAlert("No hay caja abierta."); return; }
+    const nuevoGasto = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, categoria, metodo, comprobante, monto, descripcion, fecha: new Date().toLocaleString(), fechaTS: Date.now(), usuario: currentUser ? currentUser.displayName : "Sistema", sessionId: cajaActual ? cajaActual.id : null, anulado: false };
+    gastosHistory.push(nuevoGasto);
+    await localDB.gastos.put(nuevoGasto);
+    await encolarSincronizacion("INSERT", "gastos", nuevoGasto);
+    if (metodo === "caja") {
+        cajaActual.movimientos.push({ tipo: "salida", monto, concepto: `Gasto: ${categoria} - ${descripcion}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" });
+        await localDB.cajaSessions.put(cajaActual);
+        await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual);
+        renderCajaView();
+    }
+    document.getElementById("formRegistrarGasto")?.reset();
+    renderGastosView();
+    actualizarTablaHistorial();
+    renderDashboard();
+    showAlert("Gasto registrado.");
+};
+window.eliminarGasto = function(id) {
+    if (!isAdmin()) { showAlert("No tiene permisos."); return; }
+    const gasto = gastosHistory.find(g => String(g.id) === String(id));
+    if (!gasto || gasto.anulado) return;
+    showAnularRegistro("Anular Gasto", `${gasto.categoria} — ${gasto.descripcion} — Monto: ${sysConfig.currency}${(gasto.monto||0).toFixed(2)}.`, async (motivo) => {
+        if (gasto.metodo === "caja" && gasto.sessionId !== null && gasto.sessionId !== undefined) {
+            const session = cajaHistorial.find(item => String(item.id) === String(gasto.sessionId));
+            if (session) {
+                session.movimientos.push({ tipo: "entrada", monto: gasto.monto, concepto: `Anulación Gasto: ${gasto.descripcion} (${motivo})`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" });
+                if (session.estado === "cerrada") {
+                    const summary = calcularResumenCaja(session);
+                    session.efectivoEsperado = summary.esperado;
+                    session.diferencia = r2((session.efectivoReal || 0) - summary.esperado);
+                }
+                await localDB.cajaSessions.put(session);
+                await encolarSincronizacion("UPDATE", "cajaSessions", session);
+                renderCajaView();
+            }
+        }
+        gasto.anulado = true;
+        gasto.motivoAnulacion = motivo;
+        gasto.fechaAnulacion = new Date().toLocaleString();
+        gasto.usuarioAnulacion = currentUser.displayName;
+        await localDB.gastos.put(gasto);
+        await encolarSincronizacion("UPDATE", "gastos", gasto);
+        renderGastosView();
+        actualizarTablaHistorial();
+        renderDashboard();
+        showAlert("Gasto anulado.");
+    });
+};
 function renderGastosView() { renderGastosSelect(); const tbody = document.getElementById("gastosTableBody"); if (tbody) { if (gastosHistory.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="text-center">Sin gastos registrados.</td></tr>`; } else { tbody.innerHTML = [...gastosHistory].reverse().map(g => { const metodoHtml = g.metodo === 'caja' ? '💵 Caja' : (g.metodo === 'banco' ? '💳 Banco' : '⏳ Pendiente'); const anuladoTag = g.anulado ? ' <span style="color:#d32f2f; font-weight:bold; font-size:11px;">❌ ANULADO</span>' : ''; const totalFormat = g.anulado ? `<del>${sysConfig.currency}${r2(g.monto).toFixed(2)}</del>` : `${sysConfig.currency}${r2(g.monto).toFixed(2)}`; const actionBtn = g.anulado ? '-' : `<button class="btn btn-sm btn-danger" onclick="window.eliminarGasto('${g.id}')">Anular</button>`; const trStyle = g.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : ''; return `<tr ${trStyle}><td>${escapeHtml(g.fecha)}</td><td><strong>${escapeHtml(g.categoria)}</strong></td><td>${escapeHtml(g.descripcion)}${anuladoTag}</td><td>${metodoHtml}<br><small style="color:#666;">Ref: ${escapeHtml(g.comprobante)}</small></td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${totalFormat}</td><td>${escapeHtml(g.usuario)}</td><td>${actionBtn}</td></tr>`; }).join(""); } } const totalHoy = gastosHistory.filter(g => !g.anulado && esHoyTS(g.fechaTS)).reduce((sum, g) => sum + g.monto, 0); const totalGeneral = gastosHistory.filter(g => !g.anulado).reduce((sum, g) => sum + g.monto, 0); if (document.getElementById("gastosResumenHoy")) document.getElementById("gastosResumenHoy").textContent = `${sysConfig.currency}${r2(totalHoy).toFixed(2)}`; if (document.getElementById("gastosResumenTotal")) document.getElementById("gastosResumenTotal").textContent = `${sysConfig.currency}${r2(totalGeneral).toFixed(2)}`; }
 
 document.querySelectorAll(".rep-subtab").forEach(btn => { btn.addEventListener("click", (e) => { e.stopPropagation(); document.querySelectorAll(".rep-subtab").forEach(b => b.classList.remove("active")); document.querySelectorAll(".rep-subview").forEach(s => s.classList.add("hidden")); btn.classList.add("active"); document.getElementById(btn.dataset.target)?.classList.remove("hidden"); }); });
