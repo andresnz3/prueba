@@ -397,6 +397,7 @@ test("vendedor requiere autorización para Dashboard y la pierde al salir", asyn
   await page.locator("#authForm button[type='submit']").click();
   await expect(page.locator("#authError")).toBeVisible();
   await expect(page.locator("#dashboardView")).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem("posLoginFailState"))).toBeNull();
 
   await page.locator("#authModal .close-modal-btn").click();
   await expect(page.locator("#authModal")).toBeHidden();

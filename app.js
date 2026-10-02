@@ -60,6 +60,45 @@ function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+const LOGIN_FAILURE_KEY = "posLoginFailState";
+
+function readLoginFailureState() {
+    try {
+        const raw = localStorage.getItem(LOGIN_FAILURE_KEY);
+        if (!raw) return { count: 0, firstFailureTs: 0, lockedUntil: 0 };
+        const parsed = JSON.parse(raw);
+        return {
+            count: Number(parsed.count) || 0,
+            firstFailureTs: Number(parsed.firstFailureTs) || 0,
+            lockedUntil: Number(parsed.lockedUntil) || 0
+        };
+    } catch (error) {
+        console.warn("No se pudo leer estado de bloqueo de login:", error);
+        return { count: 0, firstFailureTs: 0, lockedUntil: 0 };
+    }
+}
+
+function saveLoginFailureState(state) {
+    localStorage.setItem(LOGIN_FAILURE_KEY, JSON.stringify(state));
+}
+
+function clearLoginFailureState() {
+    localStorage.removeItem(LOGIN_FAILURE_KEY);
+}
+
+function getLoginRemainingSeconds() {
+    const state = readLoginFailureState();
+    const now = Date.now();
+    if (!state.lockedUntil || state.lockedUntil <= now) return 0;
+    return Math.ceil((state.lockedUntil - now) / 1000);
+}
+
+function isLoginBlocked() {
+    const state = readLoginFailureState();
+    const now = Date.now();
+    return Boolean(state.lockedUntil && state.lockedUntil > now);
+}
+
 const r2 = value => Math.round((Number(value) || 0) * 100) / 100;
 const mediosPagoVenta = { cash: "Efectivo", card: "Tarjeta", transfer: "Transferencia", credit: "Crédito" };
 function obtenerMedioPagoVenta(venta) { return venta.medioPago || ({ "Contado": "cash", "Tarjeta": "card", "Transferencia": "transfer", "Crédito": "credit" }[venta.metodo] || "cash"); }
@@ -270,10 +309,19 @@ document.getElementById("loginForm")?.addEventListener("submit", async (e) => {
     const uVal = document.getElementById("loginUsername").value.trim();
     const pVal = document.getElementById("loginPassword").value;
     const loginError = document.getElementById("loginError");
+    const now = Date.now();
+
+    if (isLoginBlocked()) {
+        const remainingSeconds = getLoginRemainingSeconds();
+        loginError?.classList.remove("hidden");
+        loginError.textContent = `Demasiados intentos. Inténtalo nuevamente en ${remainingSeconds} segundos.`;
+        return;
+    }
 
     const user = USERS.find(candidate => candidate.username === uVal && candidate.password === pVal);
 
     if (user && uVal !== "") {
+        clearLoginFailureState();
         loginError?.classList.add("hidden");
         currentUser = { ...user, displayName: user.username };
         loginScreen?.classList.add("hidden"); app?.classList.remove("hidden");
@@ -282,7 +330,28 @@ document.getElementById("loginForm")?.addEventListener("submit", async (e) => {
         unlockedModuleId = null; switchView("salesView"); actualizarCatalogo();
         registrarAuditoria('SESION', 'LOGIN', `Inicio de sesión (${currentUser.role})`);
     } else {
+        let nextState = readLoginFailureState();
+        if (!nextState.count || !nextState.firstFailureTs || (now - nextState.firstFailureTs) > 5 * 60 * 1000) {
+            nextState = { count: 1, firstFailureTs: now, lockedUntil: 0 };
+        } else {
+            nextState.count += 1;
+        }
+
+        if (nextState.count >= 5) {
+            nextState.lockedUntil = now + 120000;
+        } else if (nextState.count >= 3) {
+            nextState.lockedUntil = now + 30000;
+        }
+
+        saveLoginFailureState(nextState);
         loginError?.classList.remove("hidden");
+
+        if (nextState.lockedUntil && nextState.lockedUntil > now) {
+            const remainingSeconds = Math.ceil((nextState.lockedUntil - now) / 1000);
+            loginError.textContent = `Demasiados intentos. Inténtalo nuevamente en ${remainingSeconds} segundos.`;
+        } else {
+            loginError.textContent = "Credenciales incorrectas";
+        }
     }
 });
 
@@ -519,7 +588,7 @@ function actualizarCatalogo() {
     if(pGrid) {
         pGrid.innerHTML = list.map(p => { 
             const retail = p.retailPrice || p.retail || 0; const wholesale = p.wholesalePrice || p.wholesale || 0; const precio = buyerType === "retail" ? retail : wholesale; 
-            const iconOrImage = p.image ? `<img src="${p.image}" style="width:100%; height:80px; object-fit:cover; border-radius:4px; margin-bottom:5px;">` : `<div style="text-align:center; padding:15px;">${iconoProducto("width:2.2rem;height:2.2rem;stroke-width:1.5;")}</div>`; 
+            const iconOrImage = p.image ? `<img src="${escapeHtml(p.image)}" style="width:100%; height:80px; object-fit:cover; border-radius:4px; margin-bottom:5px;">` : `<div style="text-align:center; padding:15px;">${iconoProducto("width:2.2rem;height:2.2rem;stroke-width:1.5;")}</div>`;
             const minStock = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); const stockColor = p.stock <= minStock ? "color: red;" : "color: #666;";
             return `<div class="product-card" onclick="window.agregarAlCarritoPorId('${p.id}')">${iconOrImage}<strong>${escapeHtml(p.name)}</strong><br><small style="color:#666;">Cód: ${escapeHtml(p.barcode)}</small><br><div style="font-size:.85rem; font-weight:600; ${stockColor}">Stock: ${p.stock||0}</div><br><span style="color: #28a745; font-weight: bold;">${sysConfig.currency}${precio.toFixed(2)}</span></div>`; 
         }).join("");
@@ -717,7 +786,7 @@ function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
         pagoH = `<div style="display:flex; justify-content:space-between; margin-top:10px;"><span>Pago con ${escapeHtml(sale.metodo)}</span><strong>${sysConfig.currency}${r2(sale.total).toFixed(2)}</strong></div>`;
     }
     const statusAnulada = sale.anulada ? `<div style="text-align:center; color:white; background:#d32f2f; font-weight:bold; padding:5px; margin-bottom:10px;">FACTURA ANULADA</div>` : ``;
-    const confLogoImg = sysConfig.logo ? `<div style="text-align:center; margin-bottom: 5px;"><img src="${sysConfig.logo}" style="max-width: 120px; max-height: 80px; object-fit: contain;"></div>` : ''; const confH3 = `<h3 style="text-align:center; margin:0;">${escapeHtml(sysConfig.name)}</h3>`; const confRucInfo = sysConfig.ruc ? `<div style="text-align:center; font-size:12px;">RUC: ${escapeHtml(sysConfig.ruc)}</div>` : ''; const confAddressInfo = sysConfig.address ? `<div style="text-align:center; font-size:12px;">Dir: ${escapeHtml(sysConfig.address)}</div>` : ''; const confPhoneInfo = sysConfig.phone ? `<div style="text-align:center; font-size:12px;">Tel: ${escapeHtml(sysConfig.phone)}</div>` : ''; const confExtraHeader = sysConfig.header ? `<div style="text-align:center; font-size:12px; margin-bottom:5px;">${escapeHtml(sysConfig.header)}</div>` : ''; const confFooterFinal = sysConfig.footer ? `<div style="text-align: center; margin-top: 15px; font-size: 13px;">${escapeHtml(sysConfig.footer)}</div>` : `<div style="text-align: center; margin-top: 15px; font-size: 13px;">¡Gracias por su compra!</div>`;
+    const confLogoImg = sysConfig.logo ? `<div style="text-align:center; margin-bottom: 5px;"><img src="${escapeHtml(sysConfig.logo)}" style="max-width: 120px; max-height: 80px; object-fit: contain;"></div>` : ''; const confH3 = `<h3 style="text-align:center; margin:0;">${escapeHtml(sysConfig.name)}</h3>`; const confRucInfo = sysConfig.ruc ? `<div style="text-align:center; font-size:12px;">RUC: ${escapeHtml(sysConfig.ruc)}</div>` : ''; const confAddressInfo = sysConfig.address ? `<div style="text-align:center; font-size:12px;">Dir: ${escapeHtml(sysConfig.address)}</div>` : ''; const confPhoneInfo = sysConfig.phone ? `<div style="text-align:center; font-size:12px;">Tel: ${escapeHtml(sysConfig.phone)}</div>` : ''; const confExtraHeader = sysConfig.header ? `<div style="text-align:center; font-size:12px; margin-bottom:5px;">${escapeHtml(sysConfig.header)}</div>` : ''; const confFooterFinal = sysConfig.footer ? `<div style="text-align: center; margin-top: 15px; font-size: 13px;">${escapeHtml(sysConfig.footer)}</div>` : `<div style="text-align: center; margin-top: 15px; font-size: 13px;">¡Gracias por su compra!</div>`;
     const subtotalFinal = Number.isFinite(Number(sale.subtotal)) ? Number(sale.subtotal) : subtotalTicket;
     const descuentoTicket = r2(sale.descuentoMonto || 0);
     const resumenDescuento = descuentoTicket > 0 ? `<div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:3px;"><span>Subtotal</span><span>${sysConfig.currency}${subtotalFinal.toFixed(2)}</span></div><div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:3px;"><span>Descuento${sale.descuentoPct ? ` (${sale.descuentoPct}%)` : ""}</span><span>-${sysConfig.currency}${descuentoTicket.toFixed(2)}</span></div>` : "";
@@ -883,7 +952,7 @@ function actualizarTablaInventario() {
         const btnEliminar = `<button class="btn btn-sm" style="background:#dc2626; color:#fff;" onclick="window.eliminarProductoLogico('${p.id}')">Eliminar</button>`;
 
         const btnAjuste = `<button class="btn btn-sm" style="background:#d97706; color:#fff; margin-right:4px;" onclick="window.abrirAjuste('${p.id}')">${iconoAjuste()} Ajuste</button>`;
-        const fotoHtml = p.image ? `<img src="${p.image}" style="width:40px; height:40px; object-fit:cover; border-radius:4px;">` : iconoProducto("width:40px;height:40px;");
+        const fotoHtml = p.image ? `<img src="${escapeHtml(p.image)}" style="width:40px; height:40px; object-fit:cover; border-radius:4px;">` : iconoProducto("width:40px;height:40px;");
         return `<tr style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(p.barcode)}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}${btnEliminar}</div></td></tr>`; 
     }).join(""); 
     
@@ -1896,7 +1965,7 @@ function renderReportes() {
     const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
     set("repVentas", `${sysConfig.currency}${totalVentas.toFixed(2)}`); set("repCompras", `${sysConfig.currency}${totalCompras.toFixed(2)}`); set("repGastos", `${sysConfig.currency}${totalGastos.toFixed(2)}`); set("repUtilidad", `${sysConfig.currency}${utilidad.toFixed(2)}`); set("repCxC", `${sysConfig.currency}${totalCxC.toFixed(2)}`); set("repCxP", `${sysConfig.currency}${totalCxP.toFixed(2)}`);
 
-    const porMetodo = {}; ventasValidas.forEach(venta => { const metodo = mediosPagoVenta[obtenerMedioPagoVenta(venta)] || venta.metodo; if (!porMetodo[metodo]) porMetodo[metodo] = { count: 0, total: 0 }; porMetodo[metodo].count++; porMetodo[metodo].total += venta.total; }); const metodoBody = document.getElementById("repVentasMetodoBody"); if (metodoBody) { const entries = Object.entries(porMetodo); metodoBody.innerHTML = entries.length === 0 ? `<tr><td colspan="3" class="text-center">Sin ventas.</td></tr>` : entries.map(([metodo, d]) => `<tr><td>${metodo}</td><td>${d.count}</td><td>${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
+    const porMetodo = {}; ventasValidas.forEach(venta => { const metodo = mediosPagoVenta[obtenerMedioPagoVenta(venta)] || venta.metodo; if (!porMetodo[metodo]) porMetodo[metodo] = { count: 0, total: 0 }; porMetodo[metodo].count++; porMetodo[metodo].total += venta.total; }); const metodoBody = document.getElementById("repVentasMetodoBody"); if (metodoBody) { const entries = Object.entries(porMetodo); metodoBody.innerHTML = entries.length === 0 ? `<tr><td colspan="3" class="text-center">Sin ventas.</td></tr>` : entries.map(([metodo, d]) => `<tr><td>${escapeHtml(metodo)}</td><td>${d.count}</td><td>${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
     const contadorProd = {}; ventasValidas.forEach(v => { if (v.items) v.items.forEach(i => { if (!contadorProd[i.name]) contadorProd[i.name] = { cantidad: 0, total: 0 }; const precio = v.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); contadorProd[i.name].cantidad += i.cantidad; contadorProd[i.name].total += precio * i.cantidad; }); }); const topBody = document.getElementById("repTopProductosBody"); if (topBody) { const sorted = Object.entries(contadorProd).sort((a, b) => b[1].cantidad - a[1].cantidad).slice(0, 15); topBody.innerHTML = sorted.length === 0 ? `<tr><td colspan="3" class="text-center">Sin datos.</td></tr>` : sorted.map(([name, d]) => `<tr><td>${escapeHtml(name)}</td><td>${d.cantidad}</td><td>${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
     const porVendedor = {};
     ventasValidas.forEach(venta => {

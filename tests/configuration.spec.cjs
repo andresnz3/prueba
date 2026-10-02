@@ -62,12 +62,14 @@ test("solo permite iniciar sesión con usuarios registrados y valida todos los c
     ["andres", " 4321 "]
   ];
   for (const [username, password] of invalidCredentials) {
+    await page.evaluate(() => localStorage.removeItem("posLoginFailState"));
     await page.locator("#loginUsername").fill(username);
     await page.locator("#loginPassword").fill(password);
     await page.locator("#loginForm button[type='submit']").click();
     await expect(page.locator("#loginScreen")).toBeVisible();
     await expect(page.locator("#app")).toBeHidden();
     await expect(page.locator("#loginError")).toBeVisible();
+    await expect(page.locator("#loginError")).toHaveText("Credenciales incorrectas");
   }
 
   const registeredUsers = [

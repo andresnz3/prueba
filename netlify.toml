@@ -1,0 +1,45 @@
+[[redirects]]
+  from = "/tests/*"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/.agents/*"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/package.json"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/package-lock.json"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/skills-lock.json"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/eslint.config.mjs"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/playwright.config.cjs"
+  to = "/404.html"
+  status = 404
+
+[[headers]]
+  for = "/*"
+
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    X-Robots-Tag = "noindex, nofollow"
+    Permissions-Policy = "camera=(self), microphone=(self), geolocation=(), payment=(), usb=(), interest-cohort=()"
+    Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' data: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; connect-src 'self' data: blob: https:; worker-src 'self' blob:; media-src 'self' blob: https:; upgrade-insecure-requests"

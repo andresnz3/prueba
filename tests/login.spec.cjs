@@ -356,6 +356,86 @@ test("login incorrecto no permite entrar al sistema", async ({ page }) => {
   await expect(page.locator("#app")).toBeHidden();
 });
 
+test("el bloqueo de login aplica sus niveles, persiste y se reinicia al iniciar sesión correctamente", async ({ page }) => {
+  const loginFailureKey = "posLoginFailState";
+  await page.goto("/");
+  await page.evaluate(key => localStorage.removeItem(key), loginFailureKey);
+
+  const loginError = page.locator("#loginError");
+  const submitInvalidLogin = async () => {
+    await page.locator("#loginUsername").fill("andres");
+    await page.locator("#loginPassword").fill("incorrecta");
+    await page.locator("#loginForm button[type='submit']").click();
+  };
+  const readState = () => page.evaluate(key => JSON.parse(localStorage.getItem(key)), loginFailureKey);
+  const expireCurrentLock = async () => {
+    await page.evaluate(key => {
+      const state = JSON.parse(localStorage.getItem(key));
+      state.lockedUntil = Date.now() - 1;
+      localStorage.setItem(key, JSON.stringify(state));
+    }, loginFailureKey);
+  };
+
+  for (let count = 1; count <= 2; count += 1) {
+    await submitInvalidLogin();
+    await expect(loginError).toHaveText("Credenciales incorrectas");
+    const state = await readState();
+    expect(state.count).toBe(count);
+    expect(state.lockedUntil).toBe(0);
+  }
+
+  await submitInvalidLogin();
+  await expect(loginError).toContainText("Demasiados intentos");
+  await expect(loginError).toContainText(/\d+ segundos/);
+  let state = await readState();
+  expect(state.count).toBe(3);
+  expect(state.lockedUntil - Date.now()).toBeGreaterThan(0);
+  expect(state.lockedUntil - Date.now()).toBeLessThanOrEqual(30000);
+  expect(Object.keys(state)).not.toContain("password");
+  expect(JSON.stringify(state)).not.toContain("incorrecta");
+
+  await page.reload();
+  await page.locator("#loginUsername").fill("andres");
+  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginForm button[type='submit']").click();
+  await expect(page.locator("#loginScreen")).toBeVisible();
+  await expect(page.locator("#app")).toBeHidden();
+  await expect(loginError).toContainText("Demasiados intentos");
+  state = await readState();
+  expect(state.count).toBe(3);
+
+  await expireCurrentLock();
+  await submitInvalidLogin();
+  await expect(loginError).toContainText(/Demasiados intentos.*\d+ segundos/);
+  state = await readState();
+  expect(state.count).toBe(4);
+  expect(state.lockedUntil - Date.now()).toBeGreaterThan(0);
+  expect(state.lockedUntil - Date.now()).toBeLessThanOrEqual(30000);
+
+  await expireCurrentLock();
+  await submitInvalidLogin();
+  await expect(loginError).toContainText(/Demasiados intentos.*\d+ segundos/);
+  state = await readState();
+  expect(state.count).toBe(5);
+  expect(state.lockedUntil - Date.now()).toBeGreaterThan(0);
+  expect(state.lockedUntil - Date.now()).toBeLessThanOrEqual(120000);
+
+  await expireCurrentLock();
+  await submitInvalidLogin();
+  await expect(loginError).toContainText(/Demasiados intentos.*\d+ segundos/);
+  state = await readState();
+  expect(state.count).toBe(6);
+  expect(state.lockedUntil - Date.now()).toBeGreaterThan(0);
+  expect(state.lockedUntil - Date.now()).toBeLessThanOrEqual(120000);
+
+  await expireCurrentLock();
+  await page.locator("#loginUsername").fill("andres");
+  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginForm button[type='submit']").click();
+  await expect(page.locator("#salesView")).toBeVisible();
+  expect(await page.evaluate(key => localStorage.getItem(key), loginFailureKey)).toBeNull();
+});
+
 test("login requiere usuario y contraseña", async ({ page }) => {
   await page.goto("/");
 
