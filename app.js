@@ -1402,8 +1402,9 @@ purchProductInputEl?.addEventListener("input", () => { delete purchProductInputE
 document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { delete purchProductInputEl?.dataset.productId; });
 document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { document.getElementById("purchaseForm")?.reset(); const pi = document.getElementById("purchId"); if(pi) pi.value = ""; currentPurchaseCart = []; renderPurchaseCart(); document.getElementById("purchDaysContainer").style.display = "none"; const sdl = document.getElementById("supplierDataList"); if(sdl) sdl.innerHTML = suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">`).join(""); const pdl = document.getElementById("productDataList"); if(pdl) pdl.innerHTML = products.filter(p=>!p.deleted).map(p => `<option value="${escapeHtml(p.name)}">`).join(""); document.getElementById("purchaseModal")?.classList.remove("hidden"); });
 document.getElementById("btnAddItemToPurch")?.addEventListener("click", () => {
-    const prodName = purchProductInputEl.value.trim(); const qty = parseInt(document.getElementById("purchQtyTemp").value); const cost = parseFloat(document.getElementById("purchCostTemp").value);
-    if(!prodName || isNaN(qty) || isNaN(cost) || qty <= 0) { showAlert("Ingrese producto, cantidad y costo unitario."); return; }
+    const prodName = purchProductInputEl.value.trim(); const qty = Number(document.getElementById("purchQtyTemp").value); const cost = parseFloat(document.getElementById("purchCostTemp").value);
+    if(!prodName || !Number.isFinite(qty) || !Number.isFinite(cost) || qty <= 0) { showAlert("Ingrese producto, cantidad y costo unitario."); return; }
+    if (!Number.isInteger(qty)) { showAlert("La cantidad debe ser un número entero mayor que cero."); return; }
     if (cost < 0) { showAlert("El costo unitario no puede ser negativo."); return; }
     const quickProductId = purchProductInputEl.dataset.productId;
     const quickProduct = quickProductId && products.find(p => String(p.id) === quickProductId && !p.deleted && (p.name || "").trim().toLowerCase() === prodName.toLowerCase());

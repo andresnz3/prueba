@@ -88,6 +88,11 @@ async function abrirInventario(page) {
   await expect(page.locator("#inventoryView")).toBeVisible();
 }
 
+async function abrirCompras(page) {
+  await page.locator("#navPurchasesBtn").click();
+  await expect(page.locator("#purchasesView")).toBeVisible();
+}
+
 test("un producto se puede agregar al carrito", async ({ page }) => {
   await iniciarSesion(page);
 
@@ -1734,4 +1739,394 @@ test("producto creado desde inventario persiste después de recargar", async ({ 
   });
   await expect(productRow).toContainText("Producto persistente");
   await expect(productRow.locator("td").nth(3)).toContainText("7");
+});
+
+test("crear compra al contado con producto existente actualiza factura e inventario", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-purchase-basic-001", "PURCHASE-BASIC-001", "Producto compra contado");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+
+  await page.locator("#purchSupplier").fill("Proveedor contado");
+  await page.locator("#purchInvoice").fill("FACT-CONT-001");
+  await page.locator("#purchProductTemp").fill("Producto compra contado");
+  await page.locator("#purchQtyTemp").fill("3");
+  await page.locator("#purchCostTemp").fill("10");
+  await page.locator("#btnAddItemToPurch").click();
+
+  await expect(page.locator("#purchCartBody")).toContainText("Producto compra contado");
+  await expect(page.locator("#purchCartBody")).toContainText("C$30.00");
+  await expect(page.locator("#purchTotalDisplay")).toHaveText("C$30.00");
+  await page.locator("#purchaseForm button[type='submit']").click();
+
+  await expect(page.locator("#purchaseModal")).toBeHidden();
+  const purchaseRow = page.locator("#purchasesTableBody tr").filter({
+    hasText: "FACT-CONT-001"
+  });
+  await expect(purchaseRow).toContainText("Proveedor contado");
+  await expect(purchaseRow).toContainText("C$30.00");
+  await expect(purchaseRow).toContainText("CONTADO");
+
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await abrirInventario(page);
+  const productRow = page.locator("#inventoryTableBody tr").filter({
+    hasText: "PURCHASE-BASIC-001"
+  });
+  await expect(productRow.locator("td").nth(3)).toContainText("13");
+});
+
+test("no permite agregar a una compra un producto inexistente", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+
+  await page.locator("#purchProductTemp").fill("Producto que no existe");
+  await page.locator("#purchQtyTemp").fill("2");
+  await page.locator("#purchCostTemp").fill("8");
+  await page.locator("#btnAddItemToPurch").click();
+
+  await expect(page.locator("#customAlertModal")).toBeVisible();
+  await expect(page.locator("#customAlertMessage")).toContainText("El producto no existe");
+  await expect(page.locator("#purchCartBody")).toContainText("Aún no hay productos");
+  await expect(page.locator("#purchTotalDisplay")).toHaveText("C$0.00");
+});
+
+test("crear producto nuevo desde Compras permite agregarlo a la factura", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await page.locator("#quickAddProductFromPurchBtn").click();
+  await expect(page.locator("#productModal")).toBeVisible();
+
+  await page.locator("#prodBarcode").fill("PURCHASE-NEW-001");
+  await page.locator("#prodName").fill("Producto nuevo desde compra");
+  await page.locator("#prodCost").fill("5");
+  await page.locator("#prodStock").fill("0");
+  await page.locator("#prodMinStock").fill("1");
+  await page.locator("#productForm button[type='submit']").click();
+  await expect(page.locator("#productModal")).toBeHidden();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await expect(page.locator("#purchProductTemp")).toHaveValue("Producto nuevo desde compra");
+  await expect(page.locator("#purchCostTemp")).toHaveValue("5");
+  await page.locator("#purchQtyTemp").fill("4");
+  await page.locator("#btnAddItemToPurch").click();
+  await expect(page.locator("#purchCartBody")).toContainText("Producto nuevo desde compra");
+  await expect(page.locator("#purchTotalDisplay")).toHaveText("C$20.00");
+
+  await page.locator("#purchSupplier").fill("Proveedor producto nuevo");
+  await page.locator("#purchInvoice").fill("FACT-NEW-PROD-001");
+  await page.locator("#purchaseForm button[type='submit']").click();
+  await expect(page.locator("#purchasesTableBody")).toContainText("FACT-NEW-PROD-001");
+});
+
+test("rechaza cantidad no positiva y costo negativo al agregar productos", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-purchase-invalid-001", "PURCHASE-INVALID-001", "Producto para validar compra");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+
+  await page.locator("#purchProductTemp").fill("Producto para validar compra");
+  await page.locator("#purchQtyTemp").fill("0");
+  await page.locator("#purchCostTemp").fill("10");
+  await page.locator("#btnAddItemToPurch").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("Ingrese producto, cantidad y costo unitario");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await expect(page.locator("#purchCartBody")).toContainText("Aún no hay productos");
+
+  await page.locator("#purchQtyTemp").fill("2");
+  await page.locator("#purchCostTemp").fill("-1");
+  await page.locator("#btnAddItemToPurch").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("costo unitario no puede ser negativo");
+  await expect(page.locator("#purchCartBody")).toContainText("Aún no hay productos");
+});
+
+test("una compra actualiza el costo y los precios derivados del producto", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-purchase-cost-001", "PURCHASE-COST-001", "Producto para actualizar costo");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await page.locator("#purchSupplier").fill("Proveedor cambio costo");
+  await page.locator("#purchInvoice").fill("FACT-COST-001");
+  await page.locator("#purchProductTemp").fill("Producto para actualizar costo");
+  await page.locator("#purchQtyTemp").fill("2");
+  await page.locator("#purchCostTemp").fill("15");
+  await page.locator("#btnAddItemToPurch").click();
+  await page.locator("#purchaseForm button[type='submit']").click();
+  await expect(page.locator("#purchaseModal")).toBeHidden();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await abrirInventario(page);
+  const productRow = page.locator("#inventoryTableBody tr").filter({
+    hasText: "PURCHASE-COST-001"
+  });
+  await expect(productRow.locator("td").nth(4)).toHaveText("C$15.00");
+  await expect(productRow.locator("td").nth(5)).toContainText("Men: C$16.50");
+  await expect(productRow.locator("td").nth(5)).toContainText("May: C$16.50");
+});
+
+test("compra a crédito guarda proveedor, factura y vencimiento", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-purchase-credit-001", "PURCHASE-CREDIT-001", "Producto para compra a crédito");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+
+  await page.locator("#quickAddSupplierFromPurchBtn").click();
+  await page.locator("#suppName").fill("Proveedor crédito prueba");
+  await page.locator("#suppContact").fill("Contacto prueba");
+  await page.locator("#suppPhone").fill("88881234");
+  await page.locator("#supplierForm button[type='submit']").click();
+  await expect(page.locator("#supplierModal")).toBeHidden();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await expect(page.locator("#purchSupplier")).toHaveValue("Proveedor crédito prueba");
+
+  await page.locator("#purchInvoice").fill("FACT-CREDIT-001");
+  await page.locator("#purchType").selectOption("credito");
+  await expect(page.locator("#purchDaysContainer")).toBeVisible();
+  await page.locator("#purchDays").fill("15");
+  await page.locator("#purchProductTemp").fill("Producto para compra a crédito");
+  await page.locator("#purchQtyTemp").fill("2");
+  await page.locator("#purchCostTemp").fill("8");
+  await page.locator("#btnAddItemToPurch").click();
+  await page.locator("#purchaseForm button[type='submit']").click();
+
+  const purchaseRow = page.locator("#purchasesTableBody tr").filter({
+    hasText: "FACT-CREDIT-001"
+  });
+  await expect(purchaseRow).toContainText("Proveedor crédito prueba");
+  await expect(purchaseRow).toContainText("C$16.00");
+  await expect(purchaseRow).toContainText("CRÉDITO");
+  await expect(purchaseRow).toContainText("Pendiente C$16.00");
+  await expect(purchaseRow).toContainText("Vence:");
+
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await purchaseRow.getByRole("button", { name: "Ver Factura" }).click();
+  await expect(page.locator("#ticketContent")).toContainText("FACT-CREDIT-001");
+  await expect(page.locator("#ticketContent")).toContainText("Vence:");
+  const expectedDueDate = await page.evaluate(() => {
+    const date = new Date();
+    date.setDate(date.getDate() + 15);
+    return date.toLocaleDateString();
+  });
+  await expect(page.locator("#ticketContent")).toContainText(expectedDueDate);
+});
+
+test("valida proveedor y factura obligatorios y exige al menos un producto", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await page.locator("#purchaseForm button[type='submit']").click();
+
+  const missingRequiredFields = await page.locator("#purchaseForm").evaluate(form =>
+    [...form.querySelectorAll("[required]")]
+      .filter(field => !field.checkValidity())
+      .map(field => field.id)
+  );
+  expect(missingRequiredFields).toEqual(["purchSupplier", "purchInvoice"]);
+  await expect(page.locator("#purchaseModal")).toBeVisible();
+
+  await page.locator("#purchSupplier").fill("Proveedor sin productos");
+  await page.locator("#purchInvoice").fill("FACT-EMPTY-001");
+  await page.locator("#purchaseForm button[type='submit']").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("Agrega al menos un producto");
+  await expect(page.locator("#purchaseModal")).toBeVisible();
+  await expect(page.locator("#purchasesTableBody")).not.toContainText("FACT-EMPTY-001");
+});
+
+test("anular compra requiere motivo, revierte stock y conserva factura anulada", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-purchase-void-001", "PURCHASE-VOID-001", "Producto para anular compra");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await page.locator("#purchSupplier").fill("Proveedor anulación prueba");
+  await page.locator("#purchInvoice").fill("FACT-VOID-001");
+  await page.locator("#purchProductTemp").fill("Producto para anular compra");
+  await page.locator("#purchQtyTemp").fill("3");
+  await page.locator("#purchCostTemp").fill("10");
+  await page.locator("#btnAddItemToPurch").click();
+  await page.locator("#purchaseForm button[type='submit']").click();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  const purchaseRow = page.locator("#purchasesTableBody tr").filter({
+    hasText: "FACT-VOID-001"
+  });
+  await purchaseRow.getByRole("button", { name: "Anular" }).click();
+  await expect(page.locator("#anularRegistroModal")).toBeVisible();
+  await page.locator("#anularRegistroModal .close-modal-btn").click();
+  await page.locator("#customConfirmBtn").click();
+  await expect(page.locator("#anularRegistroModal")).toBeHidden();
+  await expect(purchaseRow).not.toContainText("ANULADA");
+
+  await purchaseRow.getByRole("button", { name: "Anular" }).click();
+  await page.locator("#anularRegistroMotivo").fill("Factura capturada por error");
+  await page.locator("#anularRegistroForm button[type='submit']").click();
+  await expect(purchaseRow).toContainText("ANULADA");
+  await expect(purchaseRow.getByRole("button", { name: "Anular" })).toHaveCount(0);
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await abrirInventario(page);
+  const productRow = page.locator("#inventoryTableBody tr").filter({
+    hasText: "PURCHASE-VOID-001"
+  });
+  await expect(productRow.locator("td").nth(3)).toContainText("10");
+});
+
+test("rechaza cantidades fraccionarias sin truncarlas en la compra", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-purchase-fraction-001", "PURCHASE-FRACTION-001", "Producto para cantidad entera");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await page.locator("#purchProductTemp").fill("Producto para cantidad entera");
+  await page.locator("#purchQtyTemp").evaluate(input => {
+    input.value = "1.5";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await expect(page.locator("#purchQtyTemp")).toHaveValue("1.5");
+  expect(await page.locator("#purchQtyTemp").evaluate(input => input.validity.stepMismatch)).toBe(true);
+  await page.locator("#purchCostTemp").fill("10");
+  await page.locator("#btnAddItemToPurch").click();
+
+  await expect(page.locator("#customAlertMessage")).toContainText("La cantidad debe ser un número entero");
+  await expect(page.locator("#purchCartBody")).toContainText("Aún no hay productos");
+});
+
+test("compra e incremento de stock persisten después de recargar", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-purchase-persist-001", "PURCHASE-PERSIST-001", "Producto de compra persistente");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await page.locator("#purchSupplier").fill("Proveedor compra persistente");
+  await page.locator("#purchInvoice").fill("FACT-PERSIST-001");
+  await page.locator("#purchProductTemp").fill("Producto de compra persistente");
+  await page.locator("#purchQtyTemp").fill("2");
+  await page.locator("#purchCostTemp").fill("10");
+  await page.locator("#btnAddItemToPurch").click();
+  await page.locator("#purchaseForm button[type='submit']").click();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  const purchaseRow = page.locator("#purchasesTableBody tr").filter({
+    hasText: "FACT-PERSIST-001"
+  });
+  await expect(purchaseRow).toContainText("Proveedor compra persistente");
+  await expect(purchaseRow).toContainText("C$20.00");
+
+  await abrirInventario(page);
+  const productRow = page.locator("#inventoryTableBody tr").filter({
+    hasText: "PURCHASE-PERSIST-001"
+  });
+  await expect(productRow.locator("td").nth(3)).toContainText("12");
+});
+
+test("compra calcula el total y actualiza stock para varios productos", async ({ page }) => {
+  await iniciarSesion(page);
+  await crearProducto(page, "test-purchase-multi-001", "PURCHASE-MULTI-001", "Producto múltiple uno");
+  await crearProducto(page, "test-purchase-multi-002", "PURCHASE-MULTI-002", "Producto múltiple dos");
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await page.locator("#purchSupplier").fill("Proveedor compra múltiple");
+  await page.locator("#purchInvoice").fill("FACT-MULTI-001");
+
+  await page.locator("#purchProductTemp").fill("Producto múltiple uno");
+  await page.locator("#purchQtyTemp").fill("2");
+  await page.locator("#purchCostTemp").fill("3");
+  await page.locator("#btnAddItemToPurch").click();
+  await page.locator("#purchProductTemp").fill("Producto múltiple dos");
+  await page.locator("#purchQtyTemp").fill("4");
+  await page.locator("#purchCostTemp").fill("2.5");
+  await page.locator("#btnAddItemToPurch").click();
+
+  await expect(page.locator("#purchCartBody tr")).toHaveCount(2);
+  await expect(page.locator("#purchCartBody")).toContainText("C$6.00");
+  await expect(page.locator("#purchCartBody")).toContainText("C$10.00");
+  await expect(page.locator("#purchTotalDisplay")).toHaveText("C$16.00");
+  await page.locator("#purchaseForm button[type='submit']").click();
+  await expect(page.locator("#purchasesTableBody")).toContainText("FACT-MULTI-001");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await abrirInventario(page);
+  await expect(page.locator("#inventoryTableBody tr").filter({
+    hasText: "PURCHASE-MULTI-001"
+  }).locator("td").nth(3)).toContainText("12");
+  await expect(page.locator("#inventoryTableBody tr").filter({
+    hasText: "PURCHASE-MULTI-002"
+  }).locator("td").nth(3)).toContainText("14");
+});
+
+test("no permite anular una compra si el stock ya no cubre la factura", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  await page.locator("#addNewPurchaseBtn").click();
+  await page.locator("#quickAddProductFromPurchBtn").click();
+  await page.locator("#prodBarcode").fill("PURCHASE-PARTIAL-001");
+  await page.locator("#prodName").fill("Producto con mercancía vendida");
+  await page.locator("#prodCost").fill("10");
+  await page.locator("#prodStock").fill("0");
+  await page.locator("#prodMinStock").fill("1");
+  await page.locator("#productForm button[type='submit']").click();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.locator("#purchSupplier").fill("Proveedor stock parcial");
+  await page.locator("#purchInvoice").fill("FACT-PARTIAL-001");
+  await page.locator("#purchQtyTemp").fill("5");
+  await page.locator("#btnAddItemToPurch").click();
+  await page.locator("#purchaseForm button[type='submit']").click();
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  await page.evaluate(async id => {
+    const request = indexedDB.open("POS_OfflineDB");
+    const db = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction("products", "readwrite");
+      const store = transaction.objectStore("products");
+      const getRequest = store.getAll();
+      getRequest.onsuccess = () => {
+        const product = getRequest.result.find(item => item.barcode === id);
+        if (!product) {
+          reject(new Error(`No se encontró el producto con código ${id}`));
+          return;
+        }
+        product.stock = 2;
+        store.put(product);
+      };
+      getRequest.onerror = () => reject(getRequest.error);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+  }, "PURCHASE-PARTIAL-001");
+
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirCompras(page);
+  const purchaseRow = page.locator("#purchasesTableBody tr").filter({
+    hasText: "FACT-PARTIAL-001"
+  });
+  await purchaseRow.getByRole("button", { name: "Anular" }).click();
+  await page.locator("#anularRegistroMotivo").fill("Intento de anular mercancía ya vendida");
+  await page.locator("#anularRegistroForm button[type='submit']").click();
+
+  await expect(page.locator("#customAlertMessage")).toContainText("No se puede anular");
+  await expect(page.locator("#customAlertMessage")).toContainText("stock 2, factura 5");
+  await expect(purchaseRow).not.toContainText("ANULADA");
 });
