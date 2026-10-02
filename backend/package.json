@@ -1,0 +1,24 @@
+{
+  "name": "pos-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "dev": "node --watch --env-file=.env server.js",
+    "test": "node --test tests/*.test.cjs",
+    "test:integration": "node --env-file=.env scripts/test-integration.cjs",
+    "init-business": "node --env-file=.env scripts/init-business.cjs",
+    "migrate:auth": "node --env-file=.env scripts/migrate-auth.cjs"
+  },
+  "dependencies": {
+    "argon2": "^0.45.1",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "mysql2": "^3.14.0"
+  }
+}

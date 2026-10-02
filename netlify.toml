@@ -1,3 +1,7 @@
+[build]
+  command = "node scripts/build-static.cjs"
+  publish = "dist"
+
 [[redirects]]
   from = "/tests/*"
   to = "/404.html"
