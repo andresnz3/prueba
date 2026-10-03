@@ -51,3 +51,9 @@ Esta etapa entrega autenticacion y permisos, no integracion del frontend. El bac
 ## Frontend fase 5.1
 
 La integracion opcional de autenticacion esta descrita en ../FRONTEND_AUTH.md. Modo local conserva Dexie y login local; modo conectado usa cookies/CSRF y cuentas MySQL, con caches Dexie por negocio. No sincroniza operaciones. Desde la raiz: npm.cmd run test:frontend --prefix backend ejecuta Playwright contra una base temporal aislada.
+
+## Fase 5.2: productos e inventario
+
+Implementados en MySQL, con permisos inventory, CSRF, transacciones, movimientos y revisiones para ediciones concurrentes. Ver [INVENTORY.md](INVENTORY.md) para el contrato y [PHASE52.md](../PHASE52.md) para los archivos, pruebas y bloqueos temporales. No hay nuevas variables de entorno, dependencias ni migraciones SQL.
+
+Fotografias conectadas: ver PRODUCT_IMAGES.md para carga binaria, almacenamiento privado, permisos, configuracion y pruebas. No requiere migracion SQL.

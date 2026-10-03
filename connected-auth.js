@@ -12,7 +12,7 @@
   el('businessLoginGroup').classList.remove('hidden');
   el('loginBusinessId').disabled = false; el('loginBusinessId').required = true;
   el('adminUsernameGroup').classList.remove('hidden'); el('grantAdminUsername').disabled = false; el('grantAdminUsername').required = true;
-  el('modeDescription').textContent = 'Acceso verificado por el servidor. Operaciones guardadas en este navegador, separadas por negocio.';
+  el('modeDescription').textContent = 'Acceso verificado. Productos e inventario en MySQL; ventas, compras y caja pendientes.';
   const api = new window.PosApiClient(window.POS_API_BASE_URL);
   const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'dashboard', configView: 'settings' };
   let identity = null, boundBusiness = null, activeView = null, grant = null, pendingView = null;
@@ -30,7 +30,7 @@
     el('navUsersBtn').classList.add('hidden'); el('renewSessionBtn').classList.add('hidden');
     el('loginBusinessId').disabled = false; el('authMode').disabled = false;
     detenerCamaraVentas(); if (localDB) localDB.close();
-    window.PosRuntime.clearCart();
+    window.PosRuntime.clearCart(); window.PosRuntime.setProducts([]); window.PosInventory.closePanels();
     message('loginError', text);
   }
   function error(error, target = 'connectedNotice') {
@@ -55,16 +55,17 @@
     await initApp(); assertGeneration(version);
     if (Date.parse(value.expiresAt) <= Date.now()) throw new window.PosApiError('INVALID_SESSION', 401);
     el('sellerName').textContent = identity.fullName;
-    document.querySelector('.seller-info span').textContent = 'Sesión verificada · datos locales';
+    document.querySelector('.seller-info span').textContent = 'Sesión verificada · inventario MySQL';
     el('roleBadge').textContent = identity.role === 'ADMIN' ? 'Administrador' : 'Usuario';
     el('businessContext').textContent = 'Conectado · Negocio ' + identity.businessId;
     el('businessContext').classList.remove('hidden');
-    el('connectedNotice').textContent = 'Autenticación conectada. Ventas, compras, inventario y caja siguen en Dexie; todavía no se sincronizan.';
+    el('connectedNotice').textContent = 'Productos e inventario en MySQL. Ventas, compras, caja y demás escrituras pendientes están bloqueadas; no hay sincronización offline.';
     el('connectedNotice').classList.remove('hidden');
     el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN'); el('renewSessionBtn').classList.remove('hidden');
     el('loginBusinessId').value = identity.businessId; el('loginBusinessId').disabled = true;
-    el('loginError').classList.add('hidden'); el('loginScreen').classList.add('hidden'); el('app').classList.remove('hidden');
-    grant = null; await api.enter('sales'); assertGeneration(version); activeView = 'salesView'; renderPosView(activeView); actualizarCatalogo();
+    el('loginError').classList.add('hidden');
+    grant = null; await api.enter('sales'); assertGeneration(version); await window.PosInventory.load('salesView'); assertGeneration(version); activeView = 'salesView'; renderPosView(activeView); actualizarCatalogo();
+    el('loginScreen').classList.add('hidden'); el('app').classList.remove('hidden');
   }
   async function verify() {
     const version = generation;
@@ -88,6 +89,7 @@
         activeView = view; renderPosView(view); renderUsers(users); return;
       }
       await api.enter(views[view]); assertGeneration(version);
+      await window.PosInventory.load(view); assertGeneration(version);
       activeView = view; renderPosView(view); pendingView = null;
     } catch (failure) {
       if (failure.code === 'STALE_REQUEST') return;
@@ -107,7 +109,7 @@
       // Si una cookie valida permanecio tras una interrupcion, restaurar solo la misma identidad.
       const value = await api.login(el('loginBusinessId').value.trim(), el('loginUsername').value.trim(), el('loginPassword').value);
       clearPasswords(); await establish(value);
-    } catch (failure) { error(failure, 'loginError'); }
+    } catch (failure) { if (identity) expire(failure.message); else error(failure, 'loginError'); }
     finally { clearPasswords(); button.disabled = false; busy = false; }
   }
   async function logout() {
@@ -122,6 +124,7 @@
     try {
       const value = await api.authorize(views[view], el('grantAdminUsername').value.trim(), el('gestorPassword').value);
       await api.enter(views[view]); assertGeneration(version);
+      await window.PosInventory.load(view); assertGeneration(version);
       grant = { view, until: Date.parse(value.expiresAt) }; activeView = view; pendingView = null;
       el('authModal').classList.add('hidden'); renderPosView(view);
       clearTimeout(grantTimer); grantTimer = setTimeout(() => { grant = null; navigate('salesView'); }, Math.max(0, grant.until - Date.now()));
@@ -188,12 +191,17 @@
     // Revocacion best effort; no se confia en ella. El backend conserva el TTL.
     if (grant) api.leave(views[grant.view]).catch(() => {});
   });
-  window.PosConnected = Object.freeze({ login, logout, navigate, authorize, canView,
+  async function inventoryOperation(operation) {
+    mutationLock(); const version = generation; await verify(); assertGeneration(version);
+    const result = await operation(api, boundBusiness);
+    assertGeneration(version); return result;
+  }
+  window.PosConnected = Object.freeze({ login, logout, navigate, authorize, canView, inventoryOperation, handleError: error,
     canManageModule: view => Boolean(identity && activeView && (identity.role === 'ADMIN' || ((Array.isArray(view) ? view.includes(activeView) : view === activeView) && grant?.view === activeView && grant.until > Date.now()))) });
   (async () => {
     busy = true; mode.disabled = true; el('loginForm').querySelector('button').disabled = true;
     try { await establish(await api.me()); }
-    catch (failure) { if (failure.code !== 'INVALID_SESSION') error(failure, 'loginError'); }
+    catch (failure) { if (identity) expire(failure.message); else if (failure.code !== 'INVALID_SESSION') error(failure, 'loginError'); }
     finally { busy = false; mode.disabled = false; el('loginForm').querySelector('button').disabled = false; }
   })();
 })();

@@ -27,3 +27,7 @@ The frontend accepts a free-text supplier name for a cash purchase, so `purchase
 Other mappings to preserve in a migration include `products.marginRetail` / `marginWholesale`, `retailPrice` / `wholesalePrice`, `active` and soft-delete `deleted`; client `creditLimit`, `debt`, and `deudaSinFactura`; supplier `debt`; and local config keys including `name`, `ruc`, `currency`, `header`, `footer`, `tax`, `minStock`, and `logo`. The SQL stores receivable/payable balances as derived operational data, not mutable columns on clients or suppliers; opening debt can be represented by `opening_balance` and ledger entries in the backend migration.
 
 The browser currently uses one fixed `DEFAULT_BUSINESS_ID` and has no authenticated server-side tenant boundary. This schema prepares tenant relationships but does not itself provide authorization or convert the current frontend into a multi-tenant application.
+
+## Estado tras la fase 5.2
+
+En modo conectado products e inventory_movements utilizan los IDs BIGINT y business_id de la sesion MySQL. El modo local conserva Dexie y su identificador anterior. schema.sql no se modifica: uniqueness, CHECK y claves compuestas existentes se reutilizan. El campo supplier del formulario Dexie no tiene equivalente en products; esta deshabilitado en conectado mientras se define la futura relacion de proveedores. El resto de las operaciones financieras no esta integrado.

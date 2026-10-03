@@ -20,7 +20,7 @@ export default [
     }
   },
   {
-    files: ["tests-connected/auth.spec.cjs"],
+    files: ["tests-connected/*.spec.cjs"],
     languageOptions: {
       // Variables del POS usadas exclusivamente por callbacks de page.evaluate.
       globals: {

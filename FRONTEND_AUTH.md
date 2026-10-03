@@ -1,3 +1,7 @@
+# Estado actualizado: fase 5.2
+
+Productos, stock y Kardex conectados usan MySQL. Ventas, compras, caja y otras escrituras pendientes estan bloqueadas; no se usan los productos operativos de Dexie como respaldo ni se implementa sincronizacion. Ver [PHASE52.md](PHASE52.md) y [backend/INVENTORY.md](backend/INVENTORY.md) para el contrato, los limites y los resultados actuales. El contrato siguiente documenta la base de autenticacion de la fase 5.1; sus notas anteriores sobre persistencia operativa en Dexie en modo conectado quedan sustituidas por esta etapa.
+
 # Fase 5.1: autenticacion conectada
 
 ## Cambios identificados antes de implementar

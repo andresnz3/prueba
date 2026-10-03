@@ -18,6 +18,7 @@ function readConfig(env = process.env) {
     if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) throw new Error('Configuracion invalida: CORS_ORIGINS');
   }
   return {
+    images: require('./images').readImageConfig(env, mode),
     mode, host: required('HOST'), port: integer('PORT', 3000, 1, 65535), origins,
     jsonLimit: integer('JSON_LIMIT_BYTES', 16384, 1024, 1048576),
     healthTimeout: integer('HEALTH_TIMEOUT_MS', 4000, 100, 30000),

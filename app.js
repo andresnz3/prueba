@@ -114,6 +114,11 @@ const esHoyTS = timestamp => new Date(timestamp).toLocaleDateString() === new Da
 const MSG_SIN_CAJA = "No hay una caja abierta. Un administrador debe abrir la caja en la sección Caja antes de cobrar en efectivo.";
 let ultimoEscaneo = 0, camaraVentasBusy = false, reporteHastaManual = false;
 
+function blockPendingConnected() {
+    if (!connectedMode) return false;
+    showAlert('Operacion pendiente de integrar con MySQL. En modo conectado no se guardan ventas, compras, caja, cobros ni gastos en Dexie.');
+    return true;
+}
 function stockReal(item) {
     const live = products.find(product => String(product.id) === String(item.id));
     return live ? (live.stock || 0) : 0;
@@ -131,12 +136,18 @@ function iconoAjuste() {
 
 // Cola local reservada para conectar con una futura capa backend; no realiza llamadas de red.
 async function encolarSincronizacion(action, table_name, data) {
+    if (connectedMode) return;
     try {
         await localDB.sync_queue.add({ action, table_name, data: JSON.stringify(data), status: 'pending' });
     } catch (e) { console.error("Error encolando sincronización:", e); }
 }
 
 async function initApp() {
+    if (connectedMode) {
+        products = []; clients = []; suppliers = []; salesHistory = []; purchasesHistory = [];
+        abonosHistory = []; gastosHistory = []; auditHistory = []; cajaHistorial = []; cajaActual = null;
+        return;
+    }
     try {
         products = await localDB.products.toArray() || [];
         clients = await localDB.clients.toArray() || [];
@@ -175,6 +186,7 @@ const appInitialization = new Promise(resolve => {
 });
 
 async function registrarAuditoria(modulo, accion, detalleTexto) {
+    if (connectedMode) return;
     const log = { business_id: DEFAULT_BUSINESS_ID, fecha: new Date().toLocaleString(), fechaTS: Date.now(), usuario: currentUser ? currentUser.displayName : 'Sistema', modulo: modulo, accion: accion, detalle: detalleTexto };
     auditHistory.push(log); await localDB.audit_logs.put(log); await encolarSincronizacion('INSERT', 'audit_logs', log); if (!document.getElementById("historyView")?.classList.contains("hidden")) actualizarTablaAuditoria();
 }
@@ -428,6 +440,7 @@ function renderPosView(viewId) {
 document.getElementById("confLogoInput")?.addEventListener("change", function(e) { const file = e.target.files[0]; if(file) { const reader = new FileReader(); reader.onload = function(evt) { tempConfigLogoBase64 = evt.target.result; const prev = document.getElementById("confLogoPreview"); if(prev) { prev.src = tempConfigLogoBase64; prev.style.display = "block"; } }; reader.readAsDataURL(file); } });
 document.getElementById("prodImageInput")?.addEventListener("change", function(e) {
     const file = e.target.files[0];
+    if (connectedMode) { window.PosInventory.selectImage(file); return; }
     if(file) {
         const reader = new FileReader();
         reader.onload = function(evt) {
@@ -670,6 +683,7 @@ function actualizarCarrito() {
 }
 
 async function registrarMovimientoKardex(productoId, tipoMovimiento, cantidadFisica, motivoRef) {
+    if (blockPendingConnected()) return;
     const prodIndex = products.findIndex(p => String(p.id) === String(productoId)); if (prodIndex === -1) return false;
     const stockAnterior = products[prodIndex].stock || 0; const stockNuevo = stockAnterior + cantidadFisica;
     if (stockNuevo < 0) return false;
@@ -681,6 +695,7 @@ async function registrarMovimientoKardex(productoId, tipoMovimiento, cantidadFis
 }
 
 document.getElementById("processSaleBtn")?.addEventListener("click", () => {
+    if (blockPendingConnected()) return;
     if (procesandoVenta) return;
     if (cart.length === 0) {
         showAlert("El carrito está vacío. Agregue productos antes de cobrar.");
@@ -720,6 +735,7 @@ document.getElementById("processSaleBtn")?.addEventListener("click", () => {
 });
 
 document.getElementById("confirmCashBtn")?.addEventListener("click", () => {
+    if (blockPendingConnected()) return;
     if (procesandoVenta) return;
     if (!cajaActual) { document.getElementById("cashModal")?.classList.add("hidden"); showAlert(MSG_SIN_CAJA); return; }
     const montoPagado = r2(parseFloat(document.getElementById("cashReceivedInput")?.value));
@@ -736,6 +752,7 @@ document.getElementById("confirmCashBtn")?.addEventListener("click", () => {
 });
 
 async function registrarVenta(total, pago, vuelto) {
+    if (blockPendingConnected()) return;
     try {
     if (paymentMethod === "cash" && !cajaActual) { showAlert(MSG_SIN_CAJA); return; }
     for (const item of cart) {
@@ -840,6 +857,7 @@ document.getElementById("pdfTicketBtn")?.addEventListener("click", () => {
 
 window.abrirAnularVenta = function(id) { if (!isAdmin('historyView')) { showAlert("No tiene permisos para anular ventas."); return; } const s = salesHistory.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("anularVentaId").value = s.id; document.getElementById("anularVentaNumero").textContent = '#' + String(s.numero).padStart(6, '0'); document.getElementById("anularVentaMotivo").value = ""; document.getElementById("anularVentaModal").classList.remove("hidden"); };
 window.confirmarAnularVenta = async function() {
+    if (blockPendingConnected()) return;
     if (!isAdmin('historyView')) { showAlert("No tiene permisos para anular ventas."); return; }
     const id = document.getElementById("anularVentaId").value; const motivo = document.getElementById("anularVentaMotivo").value.trim(); const sale = salesHistory.find(x => String(x.id) === String(id)); if (!sale || sale.anulada) return;
     if ((calcFactura(sale.id)?.abonado || 0) > 0) { showAlert("Anule primero los abonos aplicados a esta factura antes de anular la venta."); return; }
@@ -927,7 +945,8 @@ document.getElementById('prodRetail')?.addEventListener('input', () => window.ca
 document.getElementById('prodWholesale')?.addEventListener('input', () => window.calcularMargenPorPrecio('wholesale'));
 
 document.getElementById("productForm")?.addEventListener("submit", async (e) => { 
-    e.preventDefault(); 
+    e.preventDefault();
+    if (connectedMode) { await window.PosInventory.save(); return; }
     const barcode = document.getElementById("prodBarcode").value.trim(); if (!barcode) { showAlert("⚠️ El código de barras es obligatorio."); return; }
     const idVal = document.getElementById("prodId").value;
     const nombreVal = document.getElementById("prodName").value.trim(); if (!nombreVal) { showAlert("⚠️ El nombre del producto es obligatorio."); return; }
@@ -970,7 +989,7 @@ function actualizarTablaInventario() {
         const btnKardex = `<button class="btn btn-sm" style="background:#0891b2; color:#fff; margin-right:4px;" onclick="window.verKardex('${p.id}')">Kardex</button>`;
         const btnEditar = `<button class="btn btn-sm" style="background:#2563eb; color:#fff; margin-right:4px;" onclick="window.editarProducto('${p.id}')">Editar</button>`;
         const btnEstado = `<button class="btn btn-sm" style="background:${isActive ? '#d97706' : '#16a34a'}; color:#fff; margin-right:4px;" onclick="window.toggleEstadoProducto('${p.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>`;
-        const btnEliminar = `<button class="btn btn-sm" style="background:#dc2626; color:#fff;" onclick="window.eliminarProductoLogico('${p.id}')">Eliminar</button>`;
+        const btnEliminar = connectedMode ? "" : `<button class="btn btn-sm" style="background:#dc2626; color:#fff;" onclick="window.eliminarProductoLogico('${p.id}')">Eliminar</button>`;
 
         const btnAjuste = `<button class="btn btn-sm" style="background:#d97706; color:#fff; margin-right:4px;" onclick="window.abrirAjuste('${p.id}')">${iconoAjuste()} Ajuste</button>`;
         const fotoHtml = p.image ? `<img src="${escapeHtml(p.image)}" style="width:40px; height:40px; object-fit:cover; border-radius:4px;">` : iconoProducto("width:40px;height:40px;");
@@ -982,8 +1001,12 @@ function actualizarTablaInventario() {
     if(document.getElementById("invOutOfStock")) document.getElementById("invOutOfStock").textContent = agotados;
 }
 
-window.editarProducto = function(id) { 
-    const p = products.find(x => String(x.id) === String(id)); if(!p) return; 
+window.editarProducto = function(id) {
+    if (connectedMode) return window.PosInventory.edit(id);
+    const p = products.find(x => String(x.id) === String(id)); if(!p) return;
+    showProductEditor(p);
+};
+function showProductEditor(p) {
     document.getElementById("prodId").value = p.id; document.getElementById("prodBarcode").value = p.barcode || ""; document.getElementById("prodName").value = p.name || ""; document.getElementById("prodCategory").value = p.category || "Abarrotes"; document.getElementById("prodCost").value = p.cost || 0; document.getElementById("prodMargenRetail").value = p.marginRetail !== undefined ? p.marginRetail : 10; document.getElementById("prodMargenWholesale").value = p.marginWholesale !== undefined ? p.marginWholesale : 10; document.getElementById("prodRetail").value = p.retailPrice || p.retail || 0; document.getElementById("prodWholesale").value = p.wholesalePrice || p.wholesale || 0; document.getElementById("prodStock").value = p.stock || 0; document.getElementById("prodMinStock").value = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); document.getElementById("prodStatus").value = p.active !== false ? "true" : "false"; 
     actualizarSelectProveedoresProducto(); const pSupp = document.getElementById("prodSupplier"); if(pSupp) pSupp.value = p.supplier || "";
     tempImageBase64 = p.image || null;
@@ -993,6 +1016,7 @@ window.editarProducto = function(id) {
 };
 
 window.toggleEstadoProducto = async function(id) {
+    if (connectedMode) return window.PosInventory.toggle(id);
     if (!isAdmin('inventoryView')) { showAlert("No tiene permisos."); return; }
     const p = products.find(x => String(x.id) === String(id)); if(!p) return;
     const nuevoEstado = p.active === false ? true : false;
@@ -1004,6 +1028,7 @@ window.toggleEstadoProducto = async function(id) {
 };
 
 window.eliminarProductoLogico = function(id) {
+    if (connectedMode) { showAlert("En modo conectado se inactivan productos y se conserva su historial. Utiliza Inactivar."); return; }
     if (!isAdmin('inventoryView')) { showAlert("No tiene permisos. Ingrese la contraseña de gestor."); return; }
     const p = products.find(x => String(x.id) === String(id));
     if (!p) return;
@@ -1067,6 +1092,7 @@ window.detenerProdCamara = function() {
 };
 
 window.verKardex = async function(id) {
+    if (connectedMode) return window.PosInventory.kardex(id);
     const p = products.find(x => String(x.id) === String(id)); if(!p) return;
     document.getElementById("kardexModalTitle").textContent = `Kardex: ${p.name||""}`; document.getElementById("kardexModalSubtitle").textContent = `Código: ${p.barcode||""} | Stock Actual: ${p.stock||0}`;
     const movimientos = await localDB.inventory_movements.toArray(); const filtrados = movimientos.filter(m => String(m.producto_id) === String(p.id)).sort((a, b) => b.fechaTS - a.fechaTS);
@@ -1082,8 +1108,8 @@ window.verKardex = async function(id) {
     }
     document.getElementById("kardexModal").classList.remove("hidden");
 };
-window.abrirAjuste = function(id) { if (!isAdmin('inventoryView')) { showAlert("No tiene permisos para ajustar inventario."); return; } const p = products.find(x => String(x.id) === String(id)); if(!p) return; document.getElementById("ajusteProductoId").value = p.id; document.getElementById("ajusteProductoNombre").textContent = `${p.name||""} (Stock Actual: ${p.stock||0})`; document.getElementById("ajusteInventarioForm")?.reset(); document.getElementById("ajusteInventarioModal").classList.remove("hidden"); };
-window.guardarAjusteInventario = async function() { if (!isAdmin('inventoryView')) { showAlert("No tiene permisos para ajustar inventario."); return; } const pId = document.getElementById("ajusteProductoId").value; const tipo = document.getElementById("ajusteTipo").value; const cantidad = parseInt(document.getElementById("ajusteCantidad").value); const motivo = document.getElementById("ajusteMotivo").value.trim(); if (isNaN(cantidad) || cantidad <= 0) { showAlert("Ingrese una cantidad válida, mayor que cero."); return; } if (!motivo) { showAlert("Debe indicar un motivo para el ajuste."); return; } const cantReal = tipo === "MERMA" ? -Math.abs(cantidad) : Math.abs(cantidad); const prod = products.find(p => String(p.id) === String(pId)); if (!prod) { showAlert("Producto no encontrado."); return; } if ((prod.stock || 0) + cantReal < 0) { showAlert(`No puede descontar ${Math.abs(cantReal)} unidades: solo hay ${prod.stock || 0} en stock.`); return; } const ok = await registrarMovimientoKardex(pId, tipo, cantReal, motivo); if (!ok) { showAlert("No se pudo registrar el ajuste."); return; } await registrarAuditoria('INVENTARIO', 'AJUSTE', `Ajuste (${tipo}) de ${cantReal} unidades en "${prod.name}". Motivo: ${motivo}`); document.getElementById("ajusteInventarioModal").classList.add("hidden"); actualizarTablaInventario(); actualizarCatalogo(); renderDashboard(); showAlert("Ajuste de inventario guardado correctamente."); };
+window.abrirAjuste = function(id) { if (connectedMode) return window.PosInventory.openAdjustment(id); if (!isAdmin('inventoryView')) { showAlert("No tiene permisos para ajustar inventario."); return; } const p = products.find(x => String(x.id) === String(id)); if(!p) return; document.getElementById("ajusteProductoId").value = p.id; document.getElementById("ajusteProductoNombre").textContent = `${p.name||""} (Stock Actual: ${p.stock||0})`; document.getElementById("ajusteInventarioForm")?.reset(); document.getElementById("ajusteInventarioModal").classList.remove("hidden"); };
+window.guardarAjusteInventario = async function() { if (connectedMode) return window.PosInventory.adjust(); if (!isAdmin('inventoryView')) { showAlert("No tiene permisos para ajustar inventario."); return; } const pId = document.getElementById("ajusteProductoId").value; const tipo = document.getElementById("ajusteTipo").value; const cantidad = parseInt(document.getElementById("ajusteCantidad").value); const motivo = document.getElementById("ajusteMotivo").value.trim(); if (isNaN(cantidad) || cantidad <= 0) { showAlert("Ingrese una cantidad válida, mayor que cero."); return; } if (!motivo) { showAlert("Debe indicar un motivo para el ajuste."); return; } const cantReal = tipo === "MERMA" ? -Math.abs(cantidad) : Math.abs(cantidad); const prod = products.find(p => String(p.id) === String(pId)); if (!prod) { showAlert("Producto no encontrado."); return; } if ((prod.stock || 0) + cantReal < 0) { showAlert(`No puede descontar ${Math.abs(cantReal)} unidades: solo hay ${prod.stock || 0} en stock.`); return; } const ok = await registrarMovimientoKardex(pId, tipo, cantReal, motivo); if (!ok) { showAlert("No se pudo registrar el ajuste."); return; } await registrarAuditoria('INVENTARIO', 'AJUSTE', `Ajuste (${tipo}) de ${cantReal} unidades en "${prod.name}". Motivo: ${motivo}`); document.getElementById("ajusteInventarioModal").classList.add("hidden"); actualizarTablaInventario(); actualizarCatalogo(); renderDashboard(); showAlert("Ajuste de inventario guardado correctamente."); };
 
 function prepararCampoDeudaCliente(esEdicion) {
     const debtInput = document.getElementById("clientDebt"), hint = document.getElementById("clientDebtHint");
@@ -1371,6 +1397,7 @@ window.verEstadoCuentaCliente = function(id) {
 };
 
 window.anularAbonoCliente = async function(abonoId) {
+    if (blockPendingConnected()) return;
     if (!isAdmin('clientsView')) { showAlert("No tiene permisos."); return; }
     const abono = abonosHistory.find(a => String(a.id) === String(abonoId)); if(!abono || abono.anulado) return;
     const cliente = clients.find(c => String(c.id) === String(abono.referenciaId));
@@ -1504,6 +1531,7 @@ window.verEstadoCuentaProveedor = function(id) {
 };
 
 window.anularAbonoProveedor = async function(abonoId) {
+    if (blockPendingConnected()) return;
     if (!isAdmin(['suppliersView', 'payablesView'])) { showAlert("No tiene permisos."); return; }
     const abono = abonosHistory.find(a => String(a.id) === String(abonoId)); if(!abono || abono.anulado) return;
     const proveedor = suppliers.find(s => String(s.id) === String(abono.referenciaId));
@@ -1566,7 +1594,7 @@ function resolverProductoDeItemCompra(item) {
 }
 
 document.getElementById("purchaseForm")?.addEventListener("submit", async (e) => { 
-    e.preventDefault(); if (!isAdmin(['purchasesView', 'historyView'])) { showAlert("No tiene permisos para registrar compras."); return; } if(currentPurchaseCart.length === 0) { showAlert("Agrega al menos un producto a la factura."); return; }
+    e.preventDefault(); if (blockPendingConnected()) return; if (!isAdmin(['purchasesView', 'historyView'])) { showAlert("No tiene permisos para registrar compras."); return; } if(currentPurchaseCart.length === 0) { showAlert("Agrega al menos un producto a la factura."); return; }
     const pId = document.getElementById("purchId").value; const tipoCompra = document.getElementById("purchType").value; const proveedorNombre = document.getElementById("purchSupplier").value.trim(); const facturaNum = document.getElementById("purchInvoice").value.trim() || "S/F";
     const purchaseItems = currentPurchaseCart.map(item => { const producto = resolverProductoDeItemCompra(item); return producto ? { ...item, productId: producto.id } : null; });
     if (purchaseItems.some(item => !item)) { showAlert("No se puede guardar la compra: cada producto debe estar vinculado a un producto del inventario."); return; }
@@ -1628,6 +1656,7 @@ function actualizarTablaCompras() {
 }
 
 window.eliminarCompra = function(id) {
+    if (blockPendingConnected()) return;
     if (!isAdmin(['purchasesView', 'historyView'])) { showAlert("No tiene permisos para anular compras."); return; }
     const compra = purchasesHistory.find(p => String(p.id) === String(id)); if (!compra || compra.anulada) return;
     showAnularRegistro("Anular Factura de Compra", `Factura ${compra.factura} — Proveedor: ${compra.proveedor} — Total: ${sysConfig.currency}${(compra.total||0).toFixed(2)}.`, async (motivo) => {
@@ -1748,12 +1777,18 @@ function calcularResumenCaja(session) {
     const esperado = session.efectivoInicial + ventasContado + entradas - salidas;
     return { ventasContado: r2(ventasContado), entradas: r2(entradas), salidas: r2(salidas), esperado: r2(esperado) };
 }
-async function abrirCaja(efectivoInicial) { if (cajaActual) { showAlert("Ya existe una caja abierta."); return; } if (isNaN(efectivoInicial) || efectivoInicial < 0) { showAlert("Ingrese un monto inicial válido."); return; } const nueva = { business_id: DEFAULT_BUSINESS_ID, estado: "abierta", usuarioApertura: currentUser.displayName, fechaAperturaTS: Date.now(), fechaApertura: new Date().toLocaleString(), efectivoInicial: efectivoInicial, movimientos: [], fechaCierreTS: null, fechaCierre: null, efectivoReal: null, efectivoEsperado: null, diferencia: null, usuarioCierre: null }; const id = await localDB.cajaSessions.add(nueva); nueva.id = id; cajaActual = nueva; cajaHistorial.unshift(nueva); await encolarSincronizacion("INSERT", "cajaSessions", nueva); await registrarAuditoria('CAJA', 'APERTURA', `Abrió caja con ${sysConfig.currency}${efectivoInicial.toFixed(2)}`); renderCajaView(); }
-async function registrarMovimientoCaja(tipo, monto, concepto) { monto = r2(monto); if (!cajaActual) { showAlert("No hay una caja abierta."); return; } if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (!concepto || !concepto.trim()) { showAlert("Ingrese un concepto."); return; } cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo, monto, concepto: concepto.trim(), fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", anulado: false }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); }
-window.anularMovimientoCaja = async function(indexOriginal, sessionId) { if (!isAdmin('cajaView')) { showAlert("No tiene permisos."); return; } const session = sessionId ? cajaHistorial.find(item => String(item.id) === String(sessionId)) : cajaActual; const mov = session?.movimientos[indexOriginal]; if (!mov || mov.anulado) return; showAnularRegistro("Anular Movimiento de Caja", `${mov.tipo.toUpperCase()}: ${mov.concepto} (${sysConfig.currency}${mov.monto.toFixed(2)})`, async (motivo) => { mov.anulado = true; mov.motivoAnulacion = motivo; mov.usuarioAnulacion = currentUser.displayName; mov.fechaAnulacion = new Date().toLocaleString(); if (session.estado === "cerrada") { const summary = calcularResumenCaja(session); session.efectivoEsperado = summary.esperado; session.diferencia = r2((session.efectivoReal || 0) - summary.esperado); } await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); renderCajaView(); showAlert("Movimiento anulado."); }); };
-window.confirmarMovimientoCaja = async function(sessionId, index) { if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar movimientos."); return; } const session = cajaHistorial.find(item => String(item.id) === String(sessionId)); const mov = session?.movimientos[index]; if (!mov || mov.anulado || mov.estado !== "pendiente") return; mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = new Date().toLocaleString(); await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); await registrarAuditoria("CAJA", "CONFIRMAR_MOVIMIENTO", `Confirmó ${mov.tipo} de ${sysConfig.currency}${r2(mov.monto).toFixed(2)}: ${mov.concepto}`); renderCajaView(); };
-window.confirmarVentaCaja = async function(id) { if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar operaciones."); return; } const sale = salesHistory.find(item => String(item.id) === String(id)); if (!sale || sale.anulada || sale.estadoCaja !== "pendiente") return; sale.estadoCaja = "confirmado"; sale.usuarioConfirmacionCaja = currentUser.displayName; sale.fechaConfirmacionCaja = new Date().toLocaleString(); await localDB.sales.put(sale); await encolarSincronizacion("UPDATE", "sales", sale); await registrarAuditoria("CAJA", "CONFIRMAR_VENTA", `Confirmó venta #${sale.numero} (${sale.metodo}) por ${sysConfig.currency}${r2(sale.total).toFixed(2)}`); renderCajaView(); };
-window.abrirCorreccionCaja = function(sessionId, index) { if (!isAdmin('cajaView')) { showAlert("Solo el administrador puede corregir movimientos."); return; } const session = cajaHistorial.find(item => String(item.id) === String(sessionId)); const mov = session?.movimientos[index]; if (!mov || mov.tipo !== "entrada" || mov.anulado) return; document.getElementById("cashCorrectionSessionId").value = session.id; document.getElementById("cashCorrectionMovementIndex").value = index; document.getElementById("cashCorrectionOldAmount").textContent = `${sysConfig.currency}${r2(mov.monto).toFixed(2)}`; document.getElementById("cashCorrectionNewAmount").value = r2(mov.monto).toFixed(2); document.getElementById("cashCorrectionReason").value = ""; document.getElementById("cashCorrectionModal")?.classList.remove("hidden"); };
+async function abrirCaja(efectivoInicial) {
+    if (blockPendingConnected()) return; if (cajaActual) { showAlert("Ya existe una caja abierta."); return; } if (isNaN(efectivoInicial) || efectivoInicial < 0) { showAlert("Ingrese un monto inicial válido."); return; } const nueva = { business_id: DEFAULT_BUSINESS_ID, estado: "abierta", usuarioApertura: currentUser.displayName, fechaAperturaTS: Date.now(), fechaApertura: new Date().toLocaleString(), efectivoInicial: efectivoInicial, movimientos: [], fechaCierreTS: null, fechaCierre: null, efectivoReal: null, efectivoEsperado: null, diferencia: null, usuarioCierre: null }; const id = await localDB.cajaSessions.add(nueva); nueva.id = id; cajaActual = nueva; cajaHistorial.unshift(nueva); await encolarSincronizacion("INSERT", "cajaSessions", nueva); await registrarAuditoria('CAJA', 'APERTURA', `Abrió caja con ${sysConfig.currency}${efectivoInicial.toFixed(2)}`); renderCajaView(); }
+async function registrarMovimientoCaja(tipo, monto, concepto) {
+    if (blockPendingConnected()) return; monto = r2(monto); if (!cajaActual) { showAlert("No hay una caja abierta."); return; } if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (!concepto || !concepto.trim()) { showAlert("Ingrese un concepto."); return; } cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo, monto, concepto: concepto.trim(), fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", anulado: false }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); }
+window.anularMovimientoCaja = async function(indexOriginal, sessionId) {
+    if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos."); return; } const session = sessionId ? cajaHistorial.find(item => String(item.id) === String(sessionId)) : cajaActual; const mov = session?.movimientos[indexOriginal]; if (!mov || mov.anulado) return; showAnularRegistro("Anular Movimiento de Caja", `${mov.tipo.toUpperCase()}: ${mov.concepto} (${sysConfig.currency}${mov.monto.toFixed(2)})`, async (motivo) => { mov.anulado = true; mov.motivoAnulacion = motivo; mov.usuarioAnulacion = currentUser.displayName; mov.fechaAnulacion = new Date().toLocaleString(); if (session.estado === "cerrada") { const summary = calcularResumenCaja(session); session.efectivoEsperado = summary.esperado; session.diferencia = r2((session.efectivoReal || 0) - summary.esperado); } await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); renderCajaView(); showAlert("Movimiento anulado."); }); };
+window.confirmarMovimientoCaja = async function(sessionId, index) {
+    if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar movimientos."); return; } const session = cajaHistorial.find(item => String(item.id) === String(sessionId)); const mov = session?.movimientos[index]; if (!mov || mov.anulado || mov.estado !== "pendiente") return; mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = new Date().toLocaleString(); await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); await registrarAuditoria("CAJA", "CONFIRMAR_MOVIMIENTO", `Confirmó ${mov.tipo} de ${sysConfig.currency}${r2(mov.monto).toFixed(2)}: ${mov.concepto}`); renderCajaView(); };
+window.confirmarVentaCaja = async function(id) {
+    if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar operaciones."); return; } const sale = salesHistory.find(item => String(item.id) === String(id)); if (!sale || sale.anulada || sale.estadoCaja !== "pendiente") return; sale.estadoCaja = "confirmado"; sale.usuarioConfirmacionCaja = currentUser.displayName; sale.fechaConfirmacionCaja = new Date().toLocaleString(); await localDB.sales.put(sale); await encolarSincronizacion("UPDATE", "sales", sale); await registrarAuditoria("CAJA", "CONFIRMAR_VENTA", `Confirmó venta #${sale.numero} (${sale.metodo}) por ${sysConfig.currency}${r2(sale.total).toFixed(2)}`); renderCajaView(); };
+window.abrirCorreccionCaja = function(sessionId, index) {
+    if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("Solo el administrador puede corregir movimientos."); return; } const session = cajaHistorial.find(item => String(item.id) === String(sessionId)); const mov = session?.movimientos[index]; if (!mov || mov.tipo !== "entrada" || mov.anulado) return; document.getElementById("cashCorrectionSessionId").value = session.id; document.getElementById("cashCorrectionMovementIndex").value = index; document.getElementById("cashCorrectionOldAmount").textContent = `${sysConfig.currency}${r2(mov.monto).toFixed(2)}`; document.getElementById("cashCorrectionNewAmount").value = r2(mov.monto).toFixed(2); document.getElementById("cashCorrectionReason").value = ""; document.getElementById("cashCorrectionModal")?.classList.remove("hidden"); };
 document.getElementById("confirmCashCorrectionBtn")?.addEventListener("click", async () => {
     if (!isAdmin('cajaView')) { showAlert("Solo el administrador puede corregir movimientos."); return; }
     const sessionId = document.getElementById("cashCorrectionSessionId").value;
@@ -1786,7 +1821,8 @@ document.getElementById("confirmCashCorrectionBtn")?.addEventListener("click", a
     renderCajaView();
     showAlert("Corrección registrada; el valor original quedó en el historial.");
 });
-async function cerrarCaja(efectivoReal) { if (!cajaActual) return; efectivoReal = r2(efectivoReal); const resumen = calcularResumenCaja(cajaActual); const diferencia = r2(efectivoReal - resumen.esperado); cajaActual.estado = "cerrada"; cajaActual.fechaCierreTS = Date.now(); cajaActual.fechaCierre = new Date().toLocaleString(); cajaActual.efectivoReal = efectivoReal; cajaActual.efectivoEsperado = resumen.esperado; cajaActual.diferencia = diferencia; cajaActual.usuarioCierre = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); cajaActual = null; await initCaja(); renderCajaView(); showAlert(`Caja cerrada exitosamente.`); }
+async function cerrarCaja(efectivoReal) {
+    if (blockPendingConnected()) return; if (!cajaActual) return; efectivoReal = r2(efectivoReal); const resumen = calcularResumenCaja(cajaActual); const diferencia = r2(efectivoReal - resumen.esperado); cajaActual.estado = "cerrada"; cajaActual.fechaCierreTS = Date.now(); cajaActual.fechaCierre = new Date().toLocaleString(); cajaActual.efectivoReal = efectivoReal; cajaActual.efectivoEsperado = resumen.esperado; cajaActual.diferencia = diferencia; cajaActual.usuarioCierre = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); cajaActual = null; await initCaja(); renderCajaView(); showAlert(`Caja cerrada exitosamente.`); }
 document.getElementById("abrirCajaBtn")?.addEventListener("click", () => { const inputEl = document.getElementById("cajaEfectivoInicialInput"); const inicial = parseFloat(inputEl?.value); if (isNaN(inicial) || inicial < 0) { showAlert("⚠️ Ingrese el monto de efectivo inicial con el que abre la caja."); inputEl?.focus(); return; } abrirCaja(inicial); if (inputEl) inputEl.value = ""; });
 document.getElementById("registrarEntradaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("entrada", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
 document.getElementById("registrarSalidaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("salida", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
@@ -1822,7 +1858,8 @@ document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () =>
 });
 function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map(m => { const icon = m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${sysConfig.currency}${(s.efectivoInicial||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(s.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); } }
 
-window.confirmarAbonoCaja = async function(id) { if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar pagos."); return; } const abono = abonosHistory.find(item => String(item.id) === String(id)); if (!abono || abono.anulado || abono.estado !== "pendiente") return; abono.estado = "confirmado"; abono.usuarioConfirmacion = currentUser.displayName; abono.fechaConfirmacion = new Date().toLocaleString(); await localDB.abonos.put(abono); await encolarSincronizacion("UPDATE", "abonos", abono); for (const session of cajaHistorial) { let changed = false; (session.movimientos || []).forEach(mov => { if (String(mov.referenciaAbonoId) === String(abono.id) && mov.estado === "pendiente") { mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = abono.fechaConfirmacion; changed = true; } }); if (changed) { await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); } } await registrarAuditoria("CAJA", "CONFIRMAR_ABONO", `Confirmó ${abono.tipo === "cliente" ? "cobro" : "pago"} de ${sysConfig.currency}${r2(abono.monto).toFixed(2)} (${abono.metodoPago || "medio no registrado"})`); renderCajaView(); };
+window.confirmarAbonoCaja = async function(id) {
+    if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar pagos."); return; } const abono = abonosHistory.find(item => String(item.id) === String(id)); if (!abono || abono.anulado || abono.estado !== "pendiente") return; abono.estado = "confirmado"; abono.usuarioConfirmacion = currentUser.displayName; abono.fechaConfirmacion = new Date().toLocaleString(); await localDB.abonos.put(abono); await encolarSincronizacion("UPDATE", "abonos", abono); for (const session of cajaHistorial) { let changed = false; (session.movimientos || []).forEach(mov => { if (String(mov.referenciaAbonoId) === String(abono.id) && mov.estado === "pendiente") { mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = abono.fechaConfirmacion; changed = true; } }); if (changed) { await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); } } await registrarAuditoria("CAJA", "CONFIRMAR_ABONO", `Confirmó ${abono.tipo === "cliente" ? "cobro" : "pago"} de ${sysConfig.currency}${r2(abono.monto).toFixed(2)} (${abono.metodoPago || "medio no registrado"})`); renderCajaView(); };
 
 function renderCajaCentral() {
     const validSales = salesHistory.filter(sale => !sale.anulada);
@@ -1896,6 +1933,7 @@ function renderCajaView() { renderCajaViewBase(); renderCajaCentral(); }
 
 function renderGastosSelect() { const sel = document.getElementById("gastoCategoria"); if (sel && sel.options.length === 0) sel.innerHTML = GASTOS_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join(""); }
 window.registrarGastoSubmit = async function() {
+    if (blockPendingConnected()) return;
     const categoria = document.getElementById("gastoCategoria").value;
     const metodo = document.getElementById("gastoMetodo").value;
     const descripcion = document.getElementById("gastoDescripcion").value.trim();
@@ -1921,6 +1959,7 @@ window.registrarGastoSubmit = async function() {
     showAlert("Gasto registrado.");
 };
 window.eliminarGasto = function(id) {
+    if (blockPendingConnected()) return;
     if (!isAdmin('gastosView')) { showAlert("No tiene permisos."); return; }
     const gasto = gastosHistory.find(g => String(g.id) === String(id));
     if (!gasto || gasto.anulado) return;
@@ -2071,6 +2110,14 @@ window.generarExcelDashboard = function() {
 // Puente de estado del POS: no concede permisos en la API.
 window.PosRuntime = Object.freeze({
     setUser(user) { currentUser = user ? { ...user, displayName: user.fullName } : null; },
+    setProducts(values) {
+        if (!connectedMode || values.some(value => value.businessId !== DEFAULT_BUSINESS_ID)) throw new Error('Negocio incorrecto');
+        products = values.map(value => ({ ...value, business_id: value.businessId }));
+        actualizarTablaInventario(); actualizarCatalogo();
+    },
+    openProductEditor: showProductEditor,
+    productImage: () => tempImageBase64,
+    setProductImage: image => { tempImageBase64 = image; },
     prepareConnectedBusiness(businessId, apiBaseUrl) {
         if (!connectedMode) throw new Error('Modalidad incorrecta');
         DEFAULT_BUSINESS_ID = businessId;
