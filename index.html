@@ -282,7 +282,7 @@
                         <div id="connectedSalesFlowSetting" class="scanner-section hidden">
                             <label for="connectedSalesFlow">Flujo de venta para este negocio</label>
                             <div class="scanner-input-wrapper">
-                                <select id="connectedSalesFlow"><option value="DIRECT">Venta directa</option><option value="CENTRALIZED">Pedido para cobro en Caja</option></select>
+                                <select id="connectedSalesFlow"><option value="DIRECT">Venta directa</option><option value="CENTRALIZED">Caja centralizada</option></select>
                                 <button id="saveConnectedSalesFlow" class="btn btn-secondary" type="button">Guardar flujo</button>
                             </div>
                             <p id="connectedSalesFlowMessage" role="status" aria-live="polite">En venta directa, cada vendedor cobra. En el flujo central, los vendedores preparan pedidos y un usuario con permiso de Caja los cobra.</p>
@@ -788,9 +788,16 @@
     <script src="api-config.js"></script>
     <script src="api-client.js"></script>
     <script src="validation.js"></script>
+<div id="localOrderCheckoutModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="localOrderTitle">
+<div class="modal-overlay"></div><div class="modal-card"><h2 id="localOrderTitle">Cobrar orden</h2>
+<p id="localOrderSummary"></p><p id="localOrderPriceNotice" role="status" aria-live="polite"></p><div id="localOrderItems"></div>
+<form id="localOrderForm" novalidate><div class="form-group"><label for="localOrderMethod">Método de pago</label><select id="localOrderMethod"><option value="cash">Efectivo</option><option value="card">Tarjeta</option><option value="transfer">Transferencia</option><option value="credit">Crédito del cliente de la orden</option></select></div>
+<div id="localOrderCashGroup" class="form-group"><label for="localOrderReceived">Efectivo recibido</label><input id="localOrderReceived" type="number" min="0" step="0.01" inputmode="decimal"></div>
+<div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button id="localOrderConfirmBtn" type="submit" class="btn btn-primary">Confirmar y cobrar</button></div></form></div></div>
     <script src="app.js"></script>
     <script src="connected-inventory.js"></script>
     <script src="connected-sales.js"></script>
+    <script src="local-cash-flow.js"></script>
     <script src="connected-auth.js"></script>
     <script src="icons.js"></script>
 </body>

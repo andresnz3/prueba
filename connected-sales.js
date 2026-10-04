@@ -149,7 +149,7 @@
   }
   function renderCheckoutMode() {
     const button = el('processSaleBtn');
-    if (button) button.textContent = salesFlow === 'CENTRALIZED' ? 'Enviar pedido a Caja' : 'Procesar / Cobrar Venta';
+    if (button) button.textContent = salesFlow === 'CENTRALIZED' ? 'Enviar a Caja' : 'Procesar / Cobrar Venta';
   }
   async function startOrderCharge(id) {
     if (busy || pending()) { showPending(); showAlert('Comprueba la operación pendiente antes de continuar.'); return; }
@@ -158,7 +158,8 @@
   }
   async function refreshOrderQuote() {
     if (!activeOrderId || busy) return;
-    busy = true;
+    busy = true; el("confirmConnectedSaleBtn").disabled = true;
+    let refreshed = false;
     try {
       quote = await api(client => client.quoteOrder(activeOrderId, el('connectedOrderPaymentMethod').value));
       el('connectedCheckoutTitle').textContent = 'Cobrar pedido #' + activeOrderId;
@@ -175,9 +176,12 @@
       el('connectedCashReceived').value = ''; window.PosValidation.clear(el('connectedCheckoutModal'));
       el('confirmConnectedSaleBtn').textContent = quote.priceChanged ? 'Confirmar precio y cobrar' : 'Confirmar y cobrar pedido';
       el('connectedCheckoutModal').classList.remove('hidden');
-      if (quote.paymentMethod === 'CASH') el('connectedCashReceived').focus(); else el('confirmConnectedSaleBtn').focus();
+      refreshed = true;
     } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
-    finally { busy = false; }
+    finally {
+      busy = false; el('confirmConnectedSaleBtn').disabled = false;
+      if (refreshed) (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus();
+    }
   }
   async function confirmPayment(id) {
     await perform('PAYMENT_CONFIRM', {}, (client, input) => client.confirmPayment(id, input));

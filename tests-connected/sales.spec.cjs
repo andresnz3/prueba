@@ -69,7 +69,7 @@ test('Caja confirma tarjeta/transferencia con actor y fecha sin aumentar efectiv
 test('flujo centralizado permite preparar como vendedor y cobrar con precio revalidado en Caja',async({page})=>{
   const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:'100'});await call(page,'setSalesFlow','CENTRALIZED');const salesBefore=await call(page,'sales'),stockBefore=(await call(page,'product',product.id)).stock;
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browserseller');await add(page,product);
-  await expect(page.locator('#processSaleBtn')).toHaveText('Enviar pedido a Caja');
+  await expect(page.locator('#processSaleBtn')).toHaveText('Enviar a Caja');
   await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('enviado a Caja');await closeAlert(page);
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browseradmin');await page.locator('#navCajaBtn').click();
   await expect(page.locator('#connectedSalesFlow')).toHaveValue('CENTRALIZED');await expect(page.locator('#cajaOperacionesBody')).toContainText('Pedido pendiente');expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);
@@ -154,5 +154,12 @@ for (const method of ['cash']) {
     await expect(page.locator('#ticketModal')).toBeHidden();
     expect(await call(page,'sales')).toEqual(beforeSales); expect(await call(page,'product',product.id)).toEqual(beforeProduct); expect(await call(page,'cashSessions')).toEqual(beforeCash);
     expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,queue:0});
+  });
+}
+for(const method of ['CASH','CARD','TRANSFER']) {
+  test('orden conectada '+method+' rechaza caja cerrada despues de cotizar sin escribir Dexie',async({page})=>{
+    const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:'100'});await call(page,'setSalesFlow','CENTRALIZED');await page.locator('#navCajaBtn').click();await page.locator('#navSalesBtn').click();await add(page,product);await page.locator('#processSaleBtn').click();await closeAlert(page);await page.locator('#navCajaBtn').click();await page.locator('#cajaEfectivoInicialInput').fill('100');await page.locator('#abrirCajaBtn').click();await closeAlert(page);await page.locator('#cajaOperacionesBody button[data-action=charge-order]').click();if(method!=='CASH')await page.locator('#connectedOrderPaymentMethod').selectOption(method);await expect(page.locator('#confirmConnectedSaleBtn')).toBeEnabled();await expect(page.locator('#connectedCashGroup')).toHaveClass(method==='CASH'?/form-group/:/hidden/);if(method==='CASH')await page.locator('#connectedCashReceived').fill('100');
+    const open=await call(page,'currentCash',true),beforeSales=await call(page,'sales'),beforeStock=(await call(page,'product',product.id)).stock;await call(page,'closeCash',open.id,{operationKey:randomUUID(),countedAmount:open.expectedAmount});await page.locator('#confirmConnectedSaleBtn').click();await expect(page.locator('#customAlertMessage')).toHaveText('Debes abrir caja antes de facturar o cobrar');await closeAlert(page);expect(await call(page,'sales')).toEqual(beforeSales);expect((await call(page,'product',product.id)).stock).toBe(beforeStock);
+    expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),orders:await localDB.saleOrders.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,orders:0,queue:0});await page.locator('#connectedCheckoutModal .close-modal-btn').click();const overview=await call(page,'cashOverview');const order=overview.pendingOrders.find(o=>o.items.some(i=>i.productId===product.id));await call(page,'cancelOrder',order.id,{operationKey:randomUUID()});await call(page,'setSalesFlow','DIRECT');
   });
 }

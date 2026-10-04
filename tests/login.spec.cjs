@@ -3498,7 +3498,8 @@ test.describe("CAJA:", () => {
     const cashSale = page.locator("#cajaCentralBox #cajaOperacionesBody tr").filter({
       hasText: "Venta"
     }).filter({ hasText: "C$15.00" });
-    await cashSale.getByRole("button", { name: "Confirmar" }).click();
+    // Efectivo se confirma al cobrar; el requisito nuevo sustituye la confirmacion posterior.
+    await expect(cashSale.getByRole("button", { name: "Confirmar" })).toHaveCount(0);
     await expect(page.locator("#cajaCentralBox #cajaOperacionesBody tr").filter({
       hasText: "Venta"
     }).filter({ hasText: "C$15.00" })).toContainText("Confirmado");
