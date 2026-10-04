@@ -1,3 +1,5 @@
+> Ventas/caja de fase 5.3 implementadas segun [SALES.md](SALES.md). sales permite cobrar contado; cash exige autorizacion para apertura/cierre y history para consultas/anulaciones. Los otros modulos financieros siguen pendientes.
+
 # Contrato de autenticacion
 
 Todas las rutas tienen prefijo /api. IDs BIGINT se envian como cadenas decimales. Los cuerpos aceptan solo los campos documentados: campos adicionales (incluido businessId en operaciones autenticadas) dan 400. Las escrituras usan Content-Type: application/json, incluso DELETE y operaciones con cuerpo vacio {}.

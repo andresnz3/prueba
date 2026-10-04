@@ -2340,6 +2340,7 @@ test("CLIENTES: rechaza nombre en blanco y montos negativos", async ({ page }) =
 test("CLIENTES: el alta rápida asocia cliente con venta a crédito y actualiza su deuda", async ({ page }) => {
   await iniciarSesion(page);
   await crearProducto(page, "test-client-sale-001", "CLIENT-SALE-001", "Producto para venta del cliente");
+  await abrirCajaDesdeUI(page, "0");
   await page.reload();
   await iniciarSesion(page);
 
@@ -2374,6 +2375,7 @@ test("CLIENTES: el alta rápida asocia cliente con venta a crédito y actualiza 
 test("CLIENTES: no permite una venta a crédito superior al límite disponible", async ({ page }) => {
   await iniciarSesion(page);
   await crearProducto(page, "test-client-limit-001", "CLIENT-LIMIT-001", "Producto sobre límite de crédito");
+  await abrirCajaDesdeUI(page, "0");
   await page.reload();
   await iniciarSesion(page);
   await abrirClientes(page);
@@ -2445,6 +2447,7 @@ test("CLIENTES: inactivar y reactivar controla disponibilidad para crédito", as
 test("CLIENTES: historial muestra venta a crédito y permite abonar a su factura", async ({ page }) => {
   await iniciarSesion(page);
   await crearProducto(page, "test-client-ledger-001", "CLIENT-LEDGER-001", "Producto estado de cuenta");
+  await abrirCajaDesdeUI(page, "0");
   await page.reload();
   await iniciarSesion(page);
   await abrirClientes(page);
@@ -2991,7 +2994,7 @@ test.describe("CAJA:", () => {
       await invoiceRow.getByRole("button", { name: "Abonar" }).click();
       await page.locator("#payInvoiceAmount").fill("7.25");
       await page.locator("#paymentInvoiceForm button[type='submit']").click();
-      await expect(page.locator("#customAlertMessage")).toContainText("No hay una caja abierta");
+      await expect(page.locator("#customAlertMessage")).toHaveText("Debes abrir caja antes de facturar o cobrar");
       await expect(invoiceRow).toContainText("Pendiente C$20.50");
       await page.locator("#customAlertModal .close-modal-btn").click();
 
@@ -3571,7 +3574,7 @@ test.describe("CAJA:", () => {
     await page.locator("#navSalesBtn").click();
     await page.locator('input[name="paymentMethod"][value="cash"]').check();
     await venderProductoDesdeUI(page, "CAJA-SALES-001");
-    await expect(page.locator("#customAlertMessage")).toContainText("No hay una caja abierta");
+    await expect(page.locator("#customAlertMessage")).toHaveText("Debes abrir caja antes de facturar o cobrar");
     await expect(page.locator("#ticketModal")).toBeHidden();
   });
 

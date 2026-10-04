@@ -13,7 +13,9 @@
     "test:integration": "node --env-file=.env scripts/test-integration.cjs",
     "init-business": "node --env-file=.env scripts/init-business.cjs",
     "migrate:auth": "node --env-file=.env scripts/migrate-auth.cjs",
-    "test:frontend": "node --env-file=.env scripts/test-integration.cjs --browser"
+    "test:frontend": "node --env-file=.env scripts/test-integration.cjs --browser",
+    "migrate:sales": "node --env-file=.env scripts/migrate-sales.cjs",
+    "migrate:cash-workflow": "node --env-file=.env scripts/migrate-cash-workflow.cjs"
   },
   "dependencies": {
     "argon2": "^0.45.1",

@@ -8,6 +8,6 @@ function errorHandler(error, req, res, next) {
   if (error.type === 'entity.too.large') { status = 413; code = req.originalUrl?.split('?')[0] === '/api/product-images' ? 'IMAGE_TOO_LARGE' : 'PAYLOAD_TOO_LARGE'; }
   if (error.type === 'entity.parse.failed') { status = 400; code = 'INVALID_JSON'; }
   if (error.status === 415) { status = 415; code = 'UNSUPPORTED_BODY'; }
-  res.status(status).json({ error: { code } });
+  res.status(status).json({ error: { code, ...(error.field ? { field: error.field } : {}) } });
 }
 module.exports = { httpError, errorHandler };

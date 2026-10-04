@@ -1,3 +1,5 @@
+> Informe historico de fase 5.2. El alcance actual de ventas y caja esta en [PHASE53.md](PHASE53.md).
+
 # Informe de la fase 5.2
 
 Productos, existencias, ajustes, mermas y Kardex usan MySQL en modo conectado. Modo local conserva Dexie, sus usuarios, formulas y operaciones. La autenticacion y administracion de usuarios siguen siendo del backend en modo conectado.

@@ -3,6 +3,7 @@
 (() => {
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
+  el('productForm').noValidate = true; el('ajusteInventarioForm').noValidate = true;
   let rows = [], editing = null, busy = false, uncertain = false;
   let photoFile = null, photoPreview = null, photoError = null, uploadedPhoto = null;
   const imageInput = el('prodImageInput');
@@ -18,6 +19,7 @@
     else if (file && !file.size) photoError = new window.PosApiError('IMAGE_INVALID');
     const preview = el('prodImagePreview');
     if (photoError) {
+      window.PosValidation.field('prodImageInput', photoError.message);
       imageInput.value = ''; window.PosRuntime.setProductImage(editing?.image || null);
       preview.src = editing?.image || ''; preview.style.display = editing?.image ? 'block' : 'none';
       showAlert(photoError.message); return;
@@ -28,7 +30,7 @@
     preview.src = photoPreview; preview.style.display = 'block';
   }
   const blockedForms = new Set(['purchaseForm', 'paymentSaleForm', 'paymentForm', 'paymentInvoiceForm', 'payablePaymentForm', 'clientForm', 'supplierForm']);
-  const blockedButtons = new Set(['processSaleBtn', 'confirmCashBtn', 'addNewPurchaseBtn', 'quickAddProductFromPurchBtn', 'quickEditProductFromPurchBtn', 'confirmCashCorrectionBtn', 'abrirCajaBtn', 'registrarEntradaBtn', 'registrarSalidaBtn', 'cerrarCajaBtn']);
+  const blockedButtons = new Set(['confirmCashBtn', 'addNewPurchaseBtn', 'quickAddProductFromPurchBtn', 'quickEditProductFromPurchBtn', 'confirmCashCorrectionBtn', 'registrarEntradaBtn', 'registrarSalidaBtn']);
   // Capture impide ejecutar los handlers locales cuando el modulo aun no tiene API.
   document.addEventListener('submit', event => {
     if (!blockedForms.has(event.target.id)) return;
@@ -82,7 +84,12 @@
     if (failure.status >= 500 || ['NETWORK_ERROR', 'DATABASE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(failure.code)) {
       uncertain = true; rows = []; window.PosRuntime.setProducts(rows);
       showAlert(failure.message + '\nActualiza el inventario y comprueba el Kardex antes de reintentar una escritura; una respuesta perdida no confirma si se guardo.');
-    } else showAlert(failure.message);
+    } else {
+      const fields = { barcode: 'prodBarcode', name: 'prodName', category: 'prodCategory', cost: 'prodCost', marginRetail: 'prodMargenRetail', marginWholesale: 'prodMargenWholesale', retailPrice: 'prodRetail', wholesalePrice: 'prodWholesale', stock: 'prodStock', minStock: 'prodMinStock', quantity: 'ajusteCantidad', reason: 'ajusteMotivo' };
+      const input = failure.code === 'BARCODE_EXISTS' ? 'prodBarcode' : failure.code === 'INSUFFICIENT_STOCK' ? 'ajusteCantidad' : fields[failure.field];
+      if (input) window.PosValidation.field(input, failure.code === 'INVALID_INPUT' ? 'Revisa el valor de este campo; respeta su límite y precisión.' : failure.message);
+      showAlert(failure.message);
+    }
   }
   async function run(operation) {
     if (busy) return;
@@ -102,6 +109,7 @@
   async function edit(id) { return run(async () => { resetPhoto(); editing = await detail(id); imageInput.value = ''; publish(editing); window.PosRuntime.openProductEditor(editing); }); }
   function checkWrite() { if (uncertain) throw new window.PosApiError('RETRY_OPERATION'); }
   async function save() {
+    if (!window.PosValidation.validate(el('productForm'), true)) return;
     return run(async () => {
       checkWrite();
       const id = el('prodId').value;
@@ -141,6 +149,7 @@
     });
   }
   async function adjust() {
+    if (!window.PosValidation.validate(el('ajusteInventarioForm'), true)) return;
     return run(async () => {
       checkWrite(); const id = el('ajusteProductoId').value;
       const data = { type: el('ajusteTipo').value === 'MERMA' ? 'WASTE' : 'ADJUSTMENT', quantity: el('ajusteCantidad').value, reason: el('ajusteMotivo').value.trim() };

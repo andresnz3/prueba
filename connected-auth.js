@@ -12,7 +12,7 @@
   el('businessLoginGroup').classList.remove('hidden');
   el('loginBusinessId').disabled = false; el('loginBusinessId').required = true;
   el('adminUsernameGroup').classList.remove('hidden'); el('grantAdminUsername').disabled = false; el('grantAdminUsername').required = true;
-  el('modeDescription').textContent = 'Acceso verificado. Productos e inventario en MySQL; ventas, compras y caja pendientes.';
+  el('modeDescription').textContent = 'Acceso verificado. Productos e inventario en MySQL; ventas de contado y caja MySQL; crédito y compras pendientes.';
   const api = new window.PosApiClient(window.POS_API_BASE_URL);
   const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'dashboard', configView: 'settings' };
   let identity = null, boundBusiness = null, activeView = null, grant = null, pendingView = null;
@@ -59,12 +59,12 @@
     el('roleBadge').textContent = identity.role === 'ADMIN' ? 'Administrador' : 'Usuario';
     el('businessContext').textContent = 'Conectado · Negocio ' + identity.businessId;
     el('businessContext').classList.remove('hidden');
-    el('connectedNotice').textContent = 'Productos e inventario en MySQL. Ventas, compras, caja y demás escrituras pendientes están bloqueadas; no hay sincronización offline.';
+    el('connectedNotice').textContent = 'Ventas de contado, caja, productos e inventario en MySQL. Crédito, abonos, compras y movimientos manuales pendientes. Requiere conexión; no hay sincronización offline.';
     el('connectedNotice').classList.remove('hidden');
     el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN'); el('renewSessionBtn').classList.remove('hidden');
     el('loginBusinessId').value = identity.businessId; el('loginBusinessId').disabled = true;
     el('loginError').classList.add('hidden');
-    grant = null; await api.enter('sales'); assertGeneration(version); await window.PosInventory.load('salesView'); assertGeneration(version); activeView = 'salesView'; renderPosView(activeView); actualizarCatalogo();
+    grant = null; await api.enter('sales'); assertGeneration(version); await window.PosInventory.load('salesView'); assertGeneration(version); activeView = 'salesView'; await window.PosSales.load(activeView); assertGeneration(version); renderPosView(activeView); actualizarCatalogo();
     el('loginScreen').classList.add('hidden'); el('app').classList.remove('hidden');
   }
   async function verify() {
@@ -81,6 +81,7 @@
     const previous = activeView; const version = generation;
     try {
       await verify();
+      if (['reportesView', 'dashboardView'].includes(view)) { message('connectedNotice', 'Reportes y Dashboard conectados están pendientes de integrar todos los módulos financieros. No se muestran indicadores incompletos.'); return; }
       if (previous && previous !== view && grant) { await api.leave(views[previous]); grant = null; clearTimeout(grantTimer); }
       if (view === 'usersView') {
         // /users autoriza en el servidor; un cambio visual de rol nunca habilita esta ruta.
@@ -89,7 +90,7 @@
         activeView = view; renderPosView(view); renderUsers(users); return;
       }
       await api.enter(views[view]); assertGeneration(version);
-      await window.PosInventory.load(view); assertGeneration(version);
+      await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version);
       activeView = view; renderPosView(view); pendingView = null;
     } catch (failure) {
       if (failure.code === 'STALE_REQUEST') return;
@@ -104,7 +105,7 @@
     } finally { busy = false; el('app').inert = false; }
   }
   async function login() {
-    if (busy) return; busy = true; const button = el('loginForm').querySelector('button[type=submit]'); button.disabled = true;
+    if (busy) return; if (!window.PosValidation.validate(el('loginForm'))) return; busy = true; const button = el('loginForm').querySelector('button[type=submit]'); button.disabled = true;
     try {
       // Si una cookie valida permanecio tras una interrupcion, restaurar solo la misma identidad.
       const value = await api.login(el('loginBusinessId').value.trim(), el('loginUsername').value.trim(), el('loginPassword').value);
@@ -124,7 +125,7 @@
     try {
       const value = await api.authorize(views[view], el('grantAdminUsername').value.trim(), el('gestorPassword').value);
       await api.enter(views[view]); assertGeneration(version);
-      await window.PosInventory.load(view); assertGeneration(version);
+      await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version);
       grant = { view, until: Date.parse(value.expiresAt) }; activeView = view; pendingView = null;
       el('authModal').classList.add('hidden'); renderPosView(view);
       clearTimeout(grantTimer); grantTimer = setTimeout(() => { grant = null; navigate('salesView'); }, Math.max(0, grant.until - Date.now()));

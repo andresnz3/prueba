@@ -29,6 +29,7 @@ function product(body, editing = false) {
   const result = {};
   for (const field of fields) {
     if (!Object.hasOwn(data, field)) continue;
+    try {
     if (['barcode', 'name', 'category'].includes(field)) result[field] = v.text(data[field], field === 'name' ? 180 : 100);
     else if (['cost', 'retailPrice', 'wholesalePrice'].includes(field)) result[field] = decimal(data[field], 2, 10);
     else if (['stock', 'minStock'].includes(field)) result[field] = decimal(data[field], 3, 9);
@@ -36,6 +37,7 @@ function product(body, editing = false) {
     else if (field === 'taxRate') result[field] = decimal(data[field], 4, 3);
     else if (field === 'image') result[field] = image(data[field]);
     else { if (typeof data.active !== 'boolean') v.invalid(); result.active = data.active; }
+    } catch (error) { error.field = field; throw error; }
   }
   if (!editing) return { taxRate: '0.0000', image: null, active: true, ...result };
   return { ...result, revision: data.revision };
@@ -43,7 +45,8 @@ function product(body, editing = false) {
 function movement(body) {
   const data = v.body(body, ['type', 'quantity', 'reason']);
   if (!['ADJUSTMENT', 'WASTE'].includes(data.type)) v.invalid();
-  const quantity = decimal(data.quantity, 3, 9, data.type === 'ADJUSTMENT');
+  let quantity;
+  try { quantity = decimal(data.quantity, 3, 9, data.type === 'ADJUSTMENT'); } catch (error) { error.field = 'quantity'; throw error; }
   if (units(quantity) === 0n) v.invalid();
   return { type: data.type, quantity, reason: v.text(data.reason, 500) };
 }

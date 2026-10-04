@@ -351,6 +351,7 @@ test("Dashboard refleja ventas, crédito, abonos, compras, gastos, stock y anula
 
 test("Dashboard agrega muchos movimientos sin duplicarlos y refleja stock cero", async ({ page }) => {
   await iniciarSesion(page);
+  await abrirCaja(page);
   const barcode = "DASH-MANY-001";
   await crearProducto(page, barcode, "Producto movimientos Dashboard", 10, 1);
 

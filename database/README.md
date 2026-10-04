@@ -1,3 +1,7 @@
+# Estado actual de fase 5.3
+
+Ventas, lineas, stock, caja, secuencias y auditoria conectadas utilizan MySQL. [Migracion 002](migrations/002_sales_operations.sql) agrega idempotencia y efectivo/cambio, y [003](migrations/003_connected_cash_workflow.sql) agrega confirmacion no monetaria y pedidos opcionales para Caja central, sin modificar schema.sql. Las pruebas aplican migraciones solo en bases temporales; cualquier aplicacion a la base principal requiere aprobacion explicita. Ver [contrato](../backend/SALES.md). Las notas de compatibilidad originales son historicas.
+
 # POS database schema
 
 `schema.sql` creates an empty MySQL 8.0+ database named `pos_multitenant` and its tables. It does not create a business, users, or example operational data. The backend must create the initial business and administrator using a securely generated password hash.

@@ -111,7 +111,7 @@ const mediosPagoVenta = { cash: "Efectivo", card: "Tarjeta", transfer: "Transfer
 function obtenerMedioPagoVenta(venta) { return venta.medioPago || ({ "Contado": "cash", "Tarjeta": "card", "Transferencia": "transfer", "Crédito": "credit" }[venta.metodo] || "cash"); }
 const fechaLocalISO = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const esHoyTS = timestamp => new Date(timestamp).toLocaleDateString() === new Date().toLocaleDateString();
-const MSG_SIN_CAJA = "No hay una caja abierta. Un administrador debe abrir la caja en la sección Caja antes de cobrar en efectivo.";
+const MSG_SIN_CAJA = "Debes abrir caja antes de facturar o cobrar";
 let ultimoEscaneo = 0, camaraVentasBusy = false, reporteHastaManual = false;
 
 function blockPendingConnected() {
@@ -462,7 +462,7 @@ window.guardarConfiguracion = function() {
     const minStockInput = document.getElementById("confMinStock");
     if (!minStockInput.checkValidity()) { minStockInput.reportValidity(); return; }
     const prevConfig = JSON.stringify(sysConfig);
-    sysConfig = { name: document.getElementById("confName").value.trim() || "POS DISTRIBUIDORA", ruc: document.getElementById("confRuc").value.trim(), address: document.getElementById("confAddress").value.trim(), phone: document.getElementById("confPhone").value.trim(), currency: document.getElementById("confCurrency").value.trim() || "C$", header: document.getElementById("confHeader").value.trim(), footer: document.getElementById("confFooter").value.trim(), tax: 0, minStock: parseInt(minStockInput.value) || 5, logo: tempConfigLogoBase64 };
+    sysConfig = { name: document.getElementById("confName").value.trim() || "POS DISTRIBUIDORA", ruc: document.getElementById("confRuc").value.trim(), address: document.getElementById("confAddress").value.trim(), phone: document.getElementById("confPhone").value.trim(), currency: connectedMode ? "C$" : document.getElementById("confCurrency").value.trim() || "C$", header: document.getElementById("confHeader").value.trim(), footer: document.getElementById("confFooter").value.trim(), tax: 0, minStock: parseInt(minStockInput.value) || 5, logo: tempConfigLogoBase64 };
     localStorage.setItem(configStorageKey, JSON.stringify(sysConfig));
     if (prevConfig !== JSON.stringify(sysConfig)) registrarAuditoria('CONFIGURACION', 'ACTUALIZACION', 'Actualizó configuración del negocio');
     showAlert("Configuración guardada exitosamente.");
@@ -608,9 +608,16 @@ document.getElementById("toggleCameraBtn")?.addEventListener("click", async () =
 function procesarCodigoBarras(codigo) {
     codigo = (codigo || "").trim();
     if (!codigo) return;
-    const producto = products.find(p => (p.barcode || "").trim() === codigo && !p.deleted && p.active !== false);
-    if (producto) agregarAlCarrito(producto);
-    else showAlert("Producto no encontrado o inactivo.");
+    if (connectedMode) {
+        const producto = products.find(p => (p.barcode || "").trim() === codigo && !p.deleted);
+        if (!producto) showAlert("Producto no encontrado en el inventario conectado.");
+        else if (producto.active === false) showAlert("El producto est\u00e1 inactivo y no se puede agregar al carrito.");
+        else agregarAlCarrito(producto);
+    } else {
+        const producto = products.find(p => (p.barcode || "").trim() === codigo && !p.deleted && p.active !== false);
+        if (producto) agregarAlCarrito(producto);
+        else showAlert("Producto no encontrado o inactivo.");
+    }
     if (barcodeInput) barcodeInput.value = "";
 }
 
@@ -638,7 +645,8 @@ function agregarAlCarrito(producto) { const existe = cart.find(item => String(it
 
 window.cambiarCantidadManual = function(index, valorStr) {
     const item = cart[index]; if (!item) return;
-    let nuevaCant = parseInt(valorStr);
+    let nuevaCant = connectedMode ? Number(valorStr) : parseInt(valorStr);
+    if (connectedMode && (!/^\d+(?:\.\d{1,3})?$/.test(valorStr) || nuevaCant <= 0)) { showAlert("Ingresa una cantidad mayor que cero, con hasta tres decimales."); actualizarCarrito(); return; }
     if (isNaN(nuevaCant) || nuevaCant <= 0) nuevaCant = 1;
     const disp = stockReal(item);
     if (nuevaCant > disp) { showAlert(`❌ ¡STOCK INSUFICIENTE!\nSolo quedan ${disp} unidades de ${item.name}.`); actualizarCarrito(); return; }
@@ -695,15 +703,15 @@ async function registrarMovimientoKardex(productoId, tipoMovimiento, cantidadFis
 }
 
 document.getElementById("processSaleBtn")?.addEventListener("click", () => {
-    if (blockPendingConnected()) return;
+    if (connectedMode) { window.PosSales.checkout(); return; }
     if (procesandoVenta) return;
     if (cart.length === 0) {
         showAlert("El carrito está vacío. Agregue productos antes de cobrar.");
         return;
     }
 
+    if (cajaActual?.estado !== "abierta") { showAlert(MSG_SIN_CAJA); return; }
     if (paymentMethod === "cash") {
-        if (!cajaActual) { showAlert(MSG_SIN_CAJA); return; }
         const cDisp = document.getElementById("cashTotalDisplay");
         if (cDisp) cDisp.textContent = `${sysConfig.currency}${totalTemporal.toFixed(2)}`;
 
@@ -737,7 +745,7 @@ document.getElementById("processSaleBtn")?.addEventListener("click", () => {
 document.getElementById("confirmCashBtn")?.addEventListener("click", () => {
     if (blockPendingConnected()) return;
     if (procesandoVenta) return;
-    if (!cajaActual) { document.getElementById("cashModal")?.classList.add("hidden"); showAlert(MSG_SIN_CAJA); return; }
+    if (cajaActual?.estado !== "abierta") { document.getElementById("cashModal")?.classList.add("hidden"); showAlert(MSG_SIN_CAJA); return; }
     const montoPagado = r2(parseFloat(document.getElementById("cashReceivedInput")?.value));
     if (montoPagado < totalTemporal) {
         document.getElementById("cashError")?.classList.remove("hidden");
@@ -754,7 +762,7 @@ document.getElementById("confirmCashBtn")?.addEventListener("click", () => {
 async function registrarVenta(total, pago, vuelto) {
     if (blockPendingConnected()) return;
     try {
-    if (paymentMethod === "cash" && !cajaActual) { showAlert(MSG_SIN_CAJA); return; }
+    if (cajaActual?.estado !== "abierta") { showAlert(MSG_SIN_CAJA); return; }
     for (const item of cart) {
         const live = products.find(p => String(p.id) === String(item.id));
         if (!live || (live.stock || 0) < item.cantidad) {
@@ -809,7 +817,7 @@ window.reimprimirTicket = function(id) { ticketEsVentaNueva = false; const sale 
 
 function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
     let prods; let subtotalTicket = 0;
-    if (sale.items && sale.items.length > 0) { prods = sale.items.map(i => { const precio = sale.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); subtotalTicket += (precio * i.cantidad); return `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${i.cantidad}x ${escapeHtml(i.name)}</span><span>${sysConfig.currency}${(precio * i.cantidad).toFixed(2)}</span></div>`; }).join(""); } else { prods = `<div style="text-align:center; font-size:12px; color:#888;">(Detalle no disponible)</div>`; subtotalTicket = sale.total; }
+    if (sale.items && sale.items.length > 0) { prods = sale.items.map(i => { const precio = sale.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); const lineAmount = connectedMode && Number.isFinite(i.connectedSubtotal) ? i.connectedSubtotal : precio * i.cantidad; subtotalTicket += lineAmount; return `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${i.cantidad}x ${escapeHtml(i.name)}</span><span>${sysConfig.currency}${lineAmount.toFixed(2)}</span></div>`; }).join(""); } else { prods = `<div style="text-align:center; font-size:12px; color:#888;">(Detalle no disponible)</div>`; subtotalTicket = sale.total; }
     let saldoPendienteHtml = "";
     if (sale.metodo === "Crédito") { const c = clients.find(cl => String(cl.id) === String(sale.clienteId)) || clients.find(cl => cl.name === sale.cliente); if (c) { saldoPendienteHtml = `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top:5px; border-top:1px dashed #000; padding-top:5px; color:#d32f2f;"><span>Saldo Pendiente:</span><span>${sysConfig.currency}${obtenerSaldoFactura("cliente", sale).toFixed(2)}</span></div>`; } }
     let pagoH;
@@ -857,7 +865,7 @@ document.getElementById("pdfTicketBtn")?.addEventListener("click", () => {
 
 window.abrirAnularVenta = function(id) { if (!isAdmin('historyView')) { showAlert("No tiene permisos para anular ventas."); return; } const s = salesHistory.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("anularVentaId").value = s.id; document.getElementById("anularVentaNumero").textContent = '#' + String(s.numero).padStart(6, '0'); document.getElementById("anularVentaMotivo").value = ""; document.getElementById("anularVentaModal").classList.remove("hidden"); };
 window.confirmarAnularVenta = async function() {
-    if (blockPendingConnected()) return;
+    if (connectedMode) return window.PosSales.cancel();
     if (!isAdmin('historyView')) { showAlert("No tiene permisos para anular ventas."); return; }
     const id = document.getElementById("anularVentaId").value; const motivo = document.getElementById("anularVentaMotivo").value.trim(); const sale = salesHistory.find(x => String(x.id) === String(id)); if (!sale || sale.anulada) return;
     if ((calcFactura(sale.id)?.abonado || 0) > 0) { showAlert("Anule primero los abonos aplicados a esta factura antes de anular la venta."); return; }
@@ -888,7 +896,9 @@ function actualizarTablaHistorial() {
                 else if (v.metodo === "Crédito") crV += v.total;
                 if (v.items) v.items.forEach(i => { productSalesCounter[i.name] = (productSalesCounter[i.name] || 0) + i.cantidad; });
             }
-            const pagoHtml = v.metodo === "Crédito" ? `<span style="color:#d32f2f; font-weight:bold;">CRÉDITO</span><br><small style="color:#666;">Vence: ${escapeHtml(v.vencimiento)} · ${obtenerSaldoFactura("cliente", v) > 0 ? "Pendiente" : "Pagada"}</small>` : `<span style="color:#28a745; font-weight:bold;">${escapeHtml(mediosPagoVenta[obtenerMedioPagoVenta(v)] || "Efectivo").toUpperCase()}</span>`;
+            const medioPago = mediosPagoVenta[obtenerMedioPagoVenta(v)] || "Efectivo";
+            const estadoPago = v.anulada ? "ANULADA" : v.estadoCaja === "pendiente" ? "PENDIENTE DE CONFIRMACIÓN" : v.estadoCaja === "confirmado" ? "CONFIRMADO" : "";
+            const pagoHtml = v.metodo === "Crédito" ? '<span style="color:#d32f2f; font-weight:bold;">CRÉDITO</span><br><small style="color:#666;">Vence: ' + escapeHtml(v.vencimiento) + " · " + (obtenerSaldoFactura("cliente", v) > 0 ? "Pendiente" : "Pagada") + '</small>' : v.conectado ? '<span style="color:' + (v.anulada ? "#777" : v.estadoCaja === "pendiente" ? "#b45309" : "#166534") + '; font-weight:bold;">' + escapeHtml(medioPago.toUpperCase()) + '</span><br><small>' + estadoPago + '</small>' : '<span style="color:#28a745; font-weight:bold;">' + escapeHtml(medioPago.toUpperCase()) + '</span>';
             const detalleFormat = v.anulada ? `<strong>${escapeHtml(v.detalle)}</strong><br><span style="color:#d32f2f; font-size:10px; font-weight:bold;">❌ ANULADA</span>` : `<strong>${escapeHtml(v.detalle)}</strong> (${escapeHtml(v.tarifa)})`;
             const totalFormat = v.anulada ? `<del>${sysConfig.currency}${r2(v.total).toFixed(2)}</del>` : `${sysConfig.currency}${r2(v.total).toFixed(2)}`;
             const actionBtns = v.anulada ? `<button class="btn btn-sm btn-secondary" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-secondary" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.abrirAnularVenta('${v.id}')">Anular</button>`;
@@ -1284,7 +1294,7 @@ document.getElementById("paymentSaleForm")?.addEventListener("submit", async (e)
     if (!invoice || invoice.saldo <= 0) { showAlert("Esta factura ya está pagada."); return; }
     if (!Number.isFinite(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; }
     if (amount > invoice.saldo) { showAlert(`Máximo a abonar: ${sysConfig.currency}${invoice.saldo.toFixed(2)}`); return; }
-    if (metodoPago === "efectivo" && !cajaActual) { showAlert(MSG_SIN_CAJA); return; }
+    if (cajaActual?.estado !== "abierta") { showAlert(MSG_SIN_CAJA); return; }
 
     const fechaTS = Date.now();
     const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, tipo: "cliente", referenciaId: client.id, facturaId: sale.id, monto: amount, metodoPago, estado: "pendiente", fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
@@ -1319,7 +1329,7 @@ document.getElementById("paymentForm")?.addEventListener("submit", async (e) => 
     if (!client) return;
     if (!Number.isFinite(amount) || amount <= 0) { showAlert("Ingrese un monto de abono válido, mayor que cero."); return; }
     if (amount > r2(client.debt || 0)) { showAlert("El abono no puede ser mayor a la deuda total."); return; }
-    if (metodoPago === "efectivo" && !cajaActual) { showAlert(MSG_SIN_CAJA); return; }
+    if (cajaActual?.estado !== "abierta") { showAlert(MSG_SIN_CAJA); return; }
     const restoAbonosAnterior = saldosFacturasCliente(client).resto;
     const fechaTS = Date.now();
     const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, tipo: "cliente", referenciaId: client.id, monto: amount, metodoPago, fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
@@ -1766,6 +1776,7 @@ document.getElementById("payablePaymentForm")?.addEventListener("submit", async 
 
 async function initCaja() { const todasCajas = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID }).toArray(); cajaHistorial = todasCajas.sort((a, b) => b.fechaAperturaTS - a.fechaAperturaTS); cajaActual = todasCajas.find(s => s.estado === "abierta") || null; }
 function calcularResumenCaja(session) {
+    if (connectedMode) return { ventasContado: session.connectedSales || 0, entradas: 0, salidas: r2(session.movimientos.filter(m => m.tipo === "salida").reduce((sum, m) => sum + m.monto, 0)), esperado: session.connectedExpected };
     const desde = session.fechaAperturaTS;
     const hasta = session.fechaCierreTS || Date.now();
     const ventasContado = salesHistory.filter(venta => {
@@ -1778,7 +1789,7 @@ function calcularResumenCaja(session) {
     return { ventasContado: r2(ventasContado), entradas: r2(entradas), salidas: r2(salidas), esperado: r2(esperado) };
 }
 async function abrirCaja(efectivoInicial) {
-    if (blockPendingConnected()) return; if (cajaActual) { showAlert("Ya existe una caja abierta."); return; } if (isNaN(efectivoInicial) || efectivoInicial < 0) { showAlert("Ingrese un monto inicial válido."); return; } const nueva = { business_id: DEFAULT_BUSINESS_ID, estado: "abierta", usuarioApertura: currentUser.displayName, fechaAperturaTS: Date.now(), fechaApertura: new Date().toLocaleString(), efectivoInicial: efectivoInicial, movimientos: [], fechaCierreTS: null, fechaCierre: null, efectivoReal: null, efectivoEsperado: null, diferencia: null, usuarioCierre: null }; const id = await localDB.cajaSessions.add(nueva); nueva.id = id; cajaActual = nueva; cajaHistorial.unshift(nueva); await encolarSincronizacion("INSERT", "cajaSessions", nueva); await registrarAuditoria('CAJA', 'APERTURA', `Abrió caja con ${sysConfig.currency}${efectivoInicial.toFixed(2)}`); renderCajaView(); }
+    if (connectedMode) return window.PosSales.openCash(); if (cajaActual) { showAlert("Ya existe una caja abierta."); return; } if (isNaN(efectivoInicial) || efectivoInicial < 0) { showAlert("Ingrese un monto inicial válido."); return; } const nueva = { business_id: DEFAULT_BUSINESS_ID, estado: "abierta", usuarioApertura: currentUser.displayName, fechaAperturaTS: Date.now(), fechaApertura: new Date().toLocaleString(), efectivoInicial: efectivoInicial, movimientos: [], fechaCierreTS: null, fechaCierre: null, efectivoReal: null, efectivoEsperado: null, diferencia: null, usuarioCierre: null }; const id = await localDB.cajaSessions.add(nueva); nueva.id = id; cajaActual = nueva; cajaHistorial.unshift(nueva); await encolarSincronizacion("INSERT", "cajaSessions", nueva); await registrarAuditoria('CAJA', 'APERTURA', `Abrió caja con ${sysConfig.currency}${efectivoInicial.toFixed(2)}`); renderCajaView(); }
 async function registrarMovimientoCaja(tipo, monto, concepto) {
     if (blockPendingConnected()) return; monto = r2(monto); if (!cajaActual) { showAlert("No hay una caja abierta."); return; } if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (!concepto || !concepto.trim()) { showAlert("Ingrese un concepto."); return; } cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo, monto, concepto: concepto.trim(), fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", anulado: false }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); }
 window.anularMovimientoCaja = async function(indexOriginal, sessionId) {
@@ -1822,11 +1833,12 @@ document.getElementById("confirmCashCorrectionBtn")?.addEventListener("click", a
     showAlert("Corrección registrada; el valor original quedó en el historial.");
 });
 async function cerrarCaja(efectivoReal) {
-    if (blockPendingConnected()) return; if (!cajaActual) return; efectivoReal = r2(efectivoReal); const resumen = calcularResumenCaja(cajaActual); const diferencia = r2(efectivoReal - resumen.esperado); cajaActual.estado = "cerrada"; cajaActual.fechaCierreTS = Date.now(); cajaActual.fechaCierre = new Date().toLocaleString(); cajaActual.efectivoReal = efectivoReal; cajaActual.efectivoEsperado = resumen.esperado; cajaActual.diferencia = diferencia; cajaActual.usuarioCierre = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); cajaActual = null; await initCaja(); renderCajaView(); showAlert(`Caja cerrada exitosamente.`); }
-document.getElementById("abrirCajaBtn")?.addEventListener("click", () => { const inputEl = document.getElementById("cajaEfectivoInicialInput"); const inicial = parseFloat(inputEl?.value); if (isNaN(inicial) || inicial < 0) { showAlert("⚠️ Ingrese el monto de efectivo inicial con el que abre la caja."); inputEl?.focus(); return; } abrirCaja(inicial); if (inputEl) inputEl.value = ""; });
+    if (connectedMode) return window.PosSales.closeCash(); if (!cajaActual) return; efectivoReal = r2(efectivoReal); const resumen = calcularResumenCaja(cajaActual); const diferencia = r2(efectivoReal - resumen.esperado); cajaActual.estado = "cerrada"; cajaActual.fechaCierreTS = Date.now(); cajaActual.fechaCierre = new Date().toLocaleString(); cajaActual.efectivoReal = efectivoReal; cajaActual.efectivoEsperado = resumen.esperado; cajaActual.diferencia = diferencia; cajaActual.usuarioCierre = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); cajaActual = null; await initCaja(); renderCajaView(); showAlert(`Caja cerrada exitosamente.`); }
+document.getElementById("abrirCajaBtn")?.addEventListener("click", () => { if (connectedMode) { window.PosSales.openCash(); return; } const inputEl = document.getElementById("cajaEfectivoInicialInput"); const inicial = parseFloat(inputEl?.value); if (isNaN(inicial) || inicial < 0) { showAlert("⚠️ Ingrese el monto de efectivo inicial con el que abre la caja."); inputEl?.focus(); return; } abrirCaja(inicial); if (inputEl) inputEl.value = ""; });
 document.getElementById("registrarEntradaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("entrada", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
 document.getElementById("registrarSalidaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("salida", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
 document.getElementById("cerrarCajaBtn")?.addEventListener("click", () => {
+    if (connectedMode) { window.PosSales.closeDialog(); return; }
     if (!cajaActual) { showAlert("No hay ninguna caja abierta en este momento."); return; }
 
     const resumen = calcularResumenCaja(cajaActual);
@@ -1840,6 +1852,7 @@ document.getElementById("cerrarCajaBtn")?.addEventListener("click", () => {
 });
 
 document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () => {
+    if (connectedMode) { window.PosSales.closeCash(); return; }
     if (!cajaActual) return;
 
     const inputEl = document.getElementById("cajaEfectivoRealInput");
@@ -1856,7 +1869,7 @@ document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () =>
 
     if (inputEl) inputEl.value = "";
 });
-function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map(m => { const icon = m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${sysConfig.currency}${(s.efectivoInicial||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(s.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); } }
+function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map(m => { const icon = m.medioPago === "CASH" ? "Efectivo" : m.medioPago === "CARD" ? "Tarjeta" : m.medioPago === "TRANSFER" ? "Transferencia" : m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado === "pendiente" ? "Pendiente de confirmación" : m.estado === "confirmado" ? "Confirmado" : m.estado === "void" ? "Anulado" : m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${sysConfig.currency}${(s.efectivoInicial||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(s.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); } }
 
 window.confirmarAbonoCaja = async function(id) {
     if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar pagos."); return; } const abono = abonosHistory.find(item => String(item.id) === String(id)); if (!abono || abono.anulado || abono.estado !== "pendiente") return; abono.estado = "confirmado"; abono.usuarioConfirmacion = currentUser.displayName; abono.fechaConfirmacion = new Date().toLocaleString(); await localDB.abonos.put(abono); await encolarSincronizacion("UPDATE", "abonos", abono); for (const session of cajaHistorial) { let changed = false; (session.movimientos || []).forEach(mov => { if (String(mov.referenciaAbonoId) === String(abono.id) && mov.estado === "pendiente") { mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = abono.fechaConfirmacion; changed = true; } }); if (changed) { await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); } } await registrarAuditoria("CAJA", "CONFIRMAR_ABONO", `Confirmó ${abono.tipo === "cliente" ? "cobro" : "pago"} de ${sysConfig.currency}${r2(abono.monto).toFixed(2)} (${abono.metodoPago || "medio no registrado"})`); renderCajaView(); };
@@ -1929,7 +1942,7 @@ function renderCajaCentral() {
     }).join("") : `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`;
 }
 
-function renderCajaView() { renderCajaViewBase(); renderCajaCentral(); }
+function renderCajaView() { if (connectedMode) { window.PosSales?.renderCash(); return; } renderCajaViewBase(); renderCajaCentral(); }
 
 function renderGastosSelect() { const sel = document.getElementById("gastoCategoria"); if (sel && sel.options.length === 0) sel.innerHTML = GASTOS_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join(""); }
 window.registrarGastoSubmit = async function() {
@@ -2109,6 +2122,10 @@ window.generarExcelDashboard = function() {
 };
 // Puente de estado del POS: no concede permisos en la API.
 window.PosRuntime = Object.freeze({
+    salesInput() { return { businessId: DEFAULT_BUSINESS_ID, userId: currentUser?.id, role: currentUser?.role, items: cart.map(item => ({ productId: String(item.id), quantity: String(item.cantidad) })), priceType: buyerType === 'retail' ? 'RETAIL' : 'WHOLESALE', paymentMethod: paymentMethod.toUpperCase(), discountPercent: document.querySelector('input[name="descApplies"][value="si"]')?.checked ? document.getElementById('descuentoPct').value : '0', detail: document.getElementById('saleDetailInput').value.trim() }; },
+    setSales(values) { if (!connectedMode || values.some(value => value.businessId !== DEFAULT_BUSINESS_ID)) throw new Error('Negocio incorrecto'); salesHistory = values; actualizarTablaHistorial(); },
+    publishSale(value) { if (!connectedMode || value.businessId !== DEFAULT_BUSINESS_ID) throw new Error('Negocio incorrecto'); const index = salesHistory.findIndex(sale => sale.id === value.id); if (index < 0) salesHistory.push(value); else salesHistory[index] = value; actualizarTablaHistorial(); },
+    setCash(values) { if (!connectedMode || values.some(value => value.businessId !== DEFAULT_BUSINESS_ID)) throw new Error('Negocio incorrecto'); cajaHistorial = values; cajaActual = values.find(value => value.estado === 'abierta') || null; },
     setUser(user) { currentUser = user ? { ...user, displayName: user.fullName } : null; },
     setProducts(values) {
         if (!connectedMode || values.some(value => value.businessId !== DEFAULT_BUSINESS_ID)) throw new Error('Negocio incorrecto');
@@ -2125,6 +2142,8 @@ window.PosRuntime = Object.freeze({
         localDB = createPosDatabase('POS_ConnectedDB_' + scope);
         configStorageKey = 'posConnectedConfig_' + scope;
         sysConfig = JSON.parse(localStorage.getItem(configStorageKey)) || defaultSystemConfig();
+        // Moneda conectada de esta fase; no interpretar simbolos locales como conversiones.
+        sysConfig.currency = 'C$';
     },
     clearCart() { cart = []; resetearDescuentoVenta(); actualizarCarrito(); }
 });

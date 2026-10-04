@@ -1,4 +1,5 @@
 const { test, expect } = require("@playwright/test");
+const { openCash } = require("./cash-fixture.cjs");
 const { monitorRequests } = require("./browser-diagnostics.cjs");
 
 const browserErrors = new WeakMap();
@@ -74,6 +75,7 @@ test("Historial carga las ventas vacías, resúmenes y auditoría de sesión", a
 test("Historial muestra ventas, detalles, auditoría y anulaciones sin duplicar registros", async ({ page }) => {
   await iniciarSesion(page);
   await crearProductoDesdeUI(page, "HISTORY-SALE-001", "Producto de Historial", "8");
+  await openCash(page);
 
   await agregarVenta(page, "HISTORY-SALE-001", "card");
   await expect(page.locator("#ticketModal")).toBeVisible();
@@ -271,6 +273,7 @@ test("Historial muestra la auditoría de movimientos de Caja y abonos de crédit
 test("Historial identifica al vendedor y exige autorización para acceder con su rol", async ({ page }) => {
   await iniciarSesion(page);
   await crearProductoDesdeUI(page, "HISTORY-SELLER-001", "Producto de vendedor");
+  await openCash(page);
 
   await page.locator("#logoutBtn").click();
   await expect(page.locator("#loginScreen")).toBeVisible();
@@ -307,6 +310,7 @@ test("Historial identifica al vendedor y exige autorización para acceder con su
 test("Historial conserva todos los registros generados desde la interfaz sin duplicados", async ({ page }) => {
   await iniciarSesion(page);
   await crearProductoDesdeUI(page, "HISTORY-MANY-001", "Producto de muchas ventas", "12");
+  await openCash(page);
 
   for (let index = 0; index < 12; index += 1) {
     await agregarVenta(page, "HISTORY-MANY-001", "transfer");

@@ -493,6 +493,7 @@ test("anular abonos de clientes y proveedores restaura saldos y concilia Caja si
 test("Reportes aplica día, semana, mes, todo y rangos manuales incluidos los vacíos", async ({ page }) => {
   await iniciarSesion(page);
   await crearProducto(page, "REPORTS-PERIOD-001", "Producto períodos");
+  await abrirCaja(page, "0");
   await registrarVenta(page, "REPORTS-PERIOD-001", "card");
   await abrirReportes(page);
 
@@ -557,6 +558,7 @@ test("Reportes aplica día, semana, mes, todo y rangos manuales incluidos los va
 test("Reportes exporta ambos Excel con los datos actualmente visibles", async ({ page }) => {
   await iniciarSesion(page);
   await crearProducto(page, "REPORTS-EXPORT-001", "Producto exportado");
+  await abrirCaja(page, "0");
   await registrarVenta(page, "REPORTS-EXPORT-001", "card");
   await abrirReportes(page);
 

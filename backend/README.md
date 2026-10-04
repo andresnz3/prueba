@@ -1,3 +1,7 @@
+# Estado actual: fase 5.3
+
+Autenticacion, productos, fotografias, inventario, ventas de contado y caja estan conectados a MySQL. Credito, abonos y compras siguen pendientes. Ver [SALES.md](SALES.md) y [PHASE53.md](../PHASE53.md). Las notas anteriores sobre ventas Dexie en conectado quedan sustituidas por este contrato. Migracion 002 solo con aprobacion explicita; no se aplico sobre la base principal.
+
 # Backend POS: autenticacion y multiusuario
 
 Node.js >=22. Express 5, mysql2/promise, Helmet, CORS y Argon2 son las dependencias de ejecucion. Las pruebas usan node:test y fetch nativos. El frontend conserva el modo local y ofrece autenticacion conectada opcional; los datos operativos siguen en Dexie sin sincronizacion.

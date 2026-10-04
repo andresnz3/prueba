@@ -1,9 +1,46 @@
 'use strict';
 (() => {
   const messages = {
-    NETWORK_ERROR: 'No se pudo conectar con el servidor. Revisa la conexión e intenta de nuevo.',
+    CART_EMPTY: 'El carrito está vacío. Agrega productos antes de cobrar.',
+    QUANTITY_INVALID: 'Ingresa una cantidad mayor que cero, con hasta tres decimales.',
+    DISCOUNT_INVALID: 'El descuento debe estar entre 0 y 100, con hasta cuatro decimales.',
+    PAYMENT_METHOD_REQUIRED: 'Selecciona efectivo, tarjeta o transferencia. El crédito está pendiente.',
+    PRODUCT_INACTIVE: 'El producto está inactivo. Retíralo del carrito.',
+    CASH_CLOSED: 'Debes abrir caja antes de facturar o cobrar',
+    CASH_AMBIGUOUS: 'Hay más de una caja abierta. Requiere revisión antes de cobrar.',
+    CASH_ALREADY_OPEN: 'Ya hay una caja abierta en este negocio.',
+    CASH_OPEN: 'Cierra la caja actual antes de cambiar el flujo de ventas.',
+    PENDING_ORDERS_EXIST: 'Resuelve los pedidos pendientes antes de cambiar el flujo de ventas.',
+    CASH_INVALID: 'Ingresa un monto de efectivo válido, cero o mayor, con hasta dos decimales.',
+    CASH_INSUFFICIENT: 'El efectivo recibido es insuficiente para pagar esta venta.',
+    CASH_ORIGINAL_CLOSED: 'La caja original está cerrada. La devolución posterior al cierre está pendiente de integración.',
+    CASH_REFUND_INSUFFICIENT: 'La caja original no tiene efectivo suficiente para devolver esta venta.',
+    CASH_INCONSISTENT: 'El movimiento de efectivo requiere revisión antes de anular.',
+    QUOTE_CHANGED: 'Los precios o la caja cambiaron. Cancela este cobro y vuelve a comprobar los importes.',
+    SALES_FLOW_CHANGED: 'El flujo de ventas cambió. Actualiza la pantalla y vuelve a intentar.',
+    DIRECT_MODE_ACTIVE: 'La caja centralizada no está activa para este negocio.',
+    ORDER_NOT_FOUND: 'No se encontró ese pedido en este negocio.',
+    ORDER_NOT_PENDING: 'El pedido ya se cobró o canceló.',
+    PAYMENT_NOT_FOUND: 'No se encontró el movimiento de pago.',
+    PAYMENT_NOT_PENDING: 'Este pago ya fue confirmado, anulado o la venta fue cancelada.',
+    PAYMENT_METHOD_NOT_CONFIRMABLE: 'Solo se pueden confirmar pagos pendientes de tarjeta o transferencia.',
+    PAYMENT_ALREADY_CONFIRMED: 'El pago ya fue confirmado. Las devoluciones conectadas aún no están integradas.',
+    OPERATION_CONFLICT: 'Esta referencia ya fue usada con otros datos o quedó descartada. Comprueba la operación.',
+    OPERATION_NOT_FOUND: 'La operación todavía no está registrada. Comprueba su estado antes de volver a cobrar.',
+    OPERATION_KEY_INVALID: 'No se pudo identificar la operación. Recarga y comprueba el cobro.',
+    SALE_NOT_FOUND: 'No se encontró esa factura en este negocio.',
+    SALE_CANCELLED: 'La venta ya está anulada. Su historial se conserva.',
+    INVOICE_DUPLICATE: 'La factura ya existe. Comprueba la operación antes de cobrar nuevamente.',
+    INVOICE_LIMIT: 'La secuencia de facturas llegó a su límite.',
+    REASON_REQUIRED: 'Ingresa el motivo de anulación.',
+    TOTAL_LIMIT: 'El importe supera el límite permitido para una factura.',
+    PRICE_TYPE_INVALID: 'Selecciona la tarifa de menudeo o mayoreo.',
+    DETAIL_INVALID: 'El detalle admite hasta 500 caracteres, sin saltos de línea.',
+    CREDIT_BLOCKED: 'El crédito y los abonos están pendientes de integrar clientes y cuentas por cobrar.',
+    SALES_MIGRATION_REQUIRED: 'Ventas y caja requieren las migraciones 002 y 003 aprobadas. Consulta al administrador.',
+    NETWORK_ERROR: 'No se pudo conectar con el servidor. Comprueba tu conexión',
     INVALID_RESPONSE: 'El servidor devolvió una respuesta inesperada.',
-    INVALID_CREDENTIALS: 'Credenciales incorrectas o cuenta no disponible.',
+    INVALID_CREDENTIALS: 'El usuario o la contraseña son incorrectos (Credenciales incorrectas).',
     INVALID_SESSION: 'La sesión venció o fue revocada. Inicia sesión nuevamente.',
     CSRF_FAILED: 'No se pudo validar la solicitud. Intenta nuevamente.',
     MODULE_FORBIDDEN: 'Este módulo requiere autorización de un administrador.',
@@ -84,7 +121,12 @@
       if (response.status !== 204) {
         try { data = await response.json(); } catch { throw new ApiError('INVALID_RESPONSE', response.status); }
       }
-      if (!response.ok) throw new ApiError(data?.error?.code || 'INTERNAL_ERROR', response.status);
+      if (!response.ok) {
+        const error = new ApiError(data?.error?.code || 'INTERNAL_ERROR', response.status);
+        error.field = data?.error?.field;
+        if (error.code === 'TOO_MANY_ATTEMPTS') { error.retryAfter = Number(response.headers.get('Retry-After')) || 60; error.message = 'Demasiados intentos. Intenta nuevamente en ' + error.retryAfter + ' segundos.'; }
+        throw error;
+      }
       return data;
     }
     async csrf() {
@@ -105,6 +147,33 @@
       this.#pending = operation.then(() => undefined, () => undefined);
       return operation;
     }
+    #salesResult(value) {
+      const record = value?.sale || value?.cash || value?.order || value?.movement || value?.overview || value;
+      if (record.businessId !== this.#identity?.businessId) throw new ApiError('INVALID_RESPONSE');
+      if (value.sale) {
+        const sale = value.sale;
+        if (!/^[1-9]\d*$/.test(sale.id || '') || !/^\d{6,20}$/.test(sale.invoiceNumber || '') || !['COMPLETED', 'CANCELLED'].includes(sale.status) || !['CASH', 'CARD', 'TRANSFER'].includes(sale.paymentMethod) || !['NOT_APPLICABLE', 'PENDING', 'CONFIRMED'].includes(sale.cashStatus) || !Array.isArray(sale.items) || !Number.isFinite(Date.parse(sale.createdAt)) || !['subtotal','discount','total','tax'].every(field => /^\d+\.\d{2}$/.test(sale[field]))) throw new ApiError('INVALID_RESPONSE');
+      }
+      return value;
+    }
+    async quoteSale(data) { const value = await this.#write('/sales/quote', 'POST', data); if (!value?.quote || value.quote.businessId !== this.#identity?.businessId || !/^[a-f0-9]{64}$/.test(value.quote.quoteToken) || !/^\d+\.\d{2}$/.test(value.quote.total) || !Array.isArray(value.quote.items)) throw new ApiError('INVALID_RESPONSE'); return value.quote; }
+    async createSale(data) { return this.#salesResult(await this.#write('/sales','POST',data)); }
+    async cancelSale(id,data) { return this.#salesResult(await this.#write('/sales/'+encodeURIComponent(id)+'/cancel','POST',data)); }
+    async operation(key) { return this.#salesResult(await this.#request('/operations/'+encodeURIComponent(key))); }
+    async resolveOperation(key) { return this.#salesResult(await this.#write('/operations/'+encodeURIComponent(key)+'/resolve','POST',{})); }
+    async sales(offset=0,maxId=null) { const value=await this.#request('/sales?limit=100&offset='+offset+(maxId ? '&maxId='+encodeURIComponent(maxId) : '')); if(!Array.isArray(value?.sales)) throw new ApiError('INVALID_RESPONSE'); return value.sales.map(sale=>this.#salesResult({sale}).sale); }
+    async currentCash(full=false) { const value=await this.#request('/cash/current'+(full?'?full=true':'')); if(value?.cash===null) return null; return this.#salesResult(value).cash; }
+    async cashSessions(offset=0) { const value=await this.#request('/cash/sessions?limit=100&offset='+offset); if(!Array.isArray(value?.sessions)) throw new ApiError('INVALID_RESPONSE'); return value.sessions.map(cash=>this.#salesResult({cash}).cash); }
+    async openCash(data) { return this.#salesResult(await this.#write('/cash/sessions','POST',data)); }
+    async closeCash(id,data) { return this.#salesResult(await this.#write('/cash/sessions/'+encodeURIComponent(id)+'/close','POST',data)); }
+    async salesFlow() { const value=await this.#request('/business-settings/sales-flow'); if(value?.businessId!==this.#identity?.businessId||!['DIRECT','CENTRALIZED'].includes(value.salesFlow)) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async setSalesFlow(salesFlow) { const value=await this.#write('/business-settings/sales-flow','PUT',{salesFlow}); if(value?.businessId!==this.#identity?.businessId||value.salesFlow!==salesFlow) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async cashOverview() { const value=await this.#request('/cash/overview'); if(!value?.overview) throw new ApiError('INVALID_RESPONSE'); return this.#salesResult({overview:value.overview}).overview; }
+    async confirmPayment(id,data) { return this.#salesResult(await this.#write('/cash/payments/'+encodeURIComponent(id)+'/confirm','POST',data)); }
+    async prepareOrder(data) { return this.#salesResult(await this.#write('/sales/orders','POST',data)); }
+    async quoteOrder(id,paymentMethod) { const value=await this.#write('/cash/orders/'+encodeURIComponent(id)+'/quote','POST',{paymentMethod}); if(!value?.quote||value.quote.businessId!==this.#identity?.businessId||value.quote.orderId!==String(id)||!/^[a-f0-9]{64}$/.test(value.quote.quoteToken)||!/^\d+\.\d{2}$/.test(value.quote.total)||!/^\d+\.\d{2}$/.test(value.quote.estimatedTotal)) throw new ApiError('INVALID_RESPONSE'); return value.quote; }
+    async chargeOrder(id,data) { return this.#salesResult(await this.#write('/cash/orders/'+encodeURIComponent(id)+'/charge','POST',data)); }
+    async cancelOrder(id,data) { return this.#salesResult(await this.#write('/cash/orders/'+encodeURIComponent(id)+'/cancel','POST',data)); }
     async uploadImage(file) {
       const value = await this.#write('/product-images','POST',file,file.type);
       const match = typeof value?.image === 'string' && /^\/api\/product-images\/([1-9]\d{0,19})\/[a-f0-9]{32}\.jpg$/.exec(value.image);

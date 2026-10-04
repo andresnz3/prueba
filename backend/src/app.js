@@ -26,6 +26,7 @@ function createApp({ config, checkDatabase, authentication }) {
   app.use('/api', healthRoutes(checkDatabase));
   if (authentication) {
     app.use('/api', require('./routes/inventory').inventoryRoutes(authentication,inventory));
+    app.use('/api', require('./routes/sales').salesRoutes(authentication, require('./services/sales').createSalesService(authentication)));
     app.use('/api', require('./routes/auth').authRoutes(authentication));
   }
   app.use((req, res, next) => next(httpError(404, 'NOT_FOUND')));

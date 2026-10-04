@@ -1,4 +1,5 @@
 const { test, expect } = require("@playwright/test");
+const { openCash } = require("./cash-fixture.cjs");
 const { Buffer } = require("node:buffer");
 const { monitorRequests } = require("./browser-diagnostics.cjs");
 
@@ -235,6 +236,7 @@ test("Configuración guarda todos los campos, logo y efectos visibles tras recar
   await cerrarAviso(page);
   const productRow = page.locator("#inventoryTableBody tr").filter({ hasText: "CONFIG-LOW-001" });
   await expect(productRow).toContainText("Bajo");
+  await openCash(page);
 
   await page.locator("#navSalesBtn").click();
   await page.locator('input[name="paymentMethod"][value="card"]').check();
