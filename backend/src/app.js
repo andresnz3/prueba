@@ -26,7 +26,9 @@ function createApp({ config, checkDatabase, authentication }) {
   app.use('/api', healthRoutes(checkDatabase));
   if (authentication) {
     app.use('/api', require('./routes/inventory').inventoryRoutes(authentication,inventory));
-    app.use('/api', require('./routes/sales').salesRoutes(authentication, require('./services/sales').createSalesService(authentication)));
+    const customers = require('./services/customer-accounts').createCustomerService(authentication);
+    const sales = require('./services/sales').createSalesService({ ...authentication, creditSnapshot: customers.creditSnapshot });
+    app.use('/api', require('./routes/sales').salesRoutes(authentication, sales, customers));
     app.use('/api', require('./routes/auth').authRoutes(authentication));
   }
   app.use((req, res, next) => next(httpError(404, 'NOT_FOUND')));

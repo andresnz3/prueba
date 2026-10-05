@@ -29,7 +29,7 @@
     window.PosRuntime.setProductImage(photoPreview);
     preview.src = photoPreview; preview.style.display = 'block';
   }
-  const blockedForms = new Set(['purchaseForm', 'paymentSaleForm', 'paymentForm', 'paymentInvoiceForm', 'payablePaymentForm', 'clientForm', 'supplierForm']);
+  const blockedForms = new Set(['purchaseForm', 'paymentForm', 'paymentInvoiceForm', 'payablePaymentForm', 'supplierForm']);
   const blockedButtons = new Set(['confirmCashBtn', 'addNewPurchaseBtn', 'quickAddProductFromPurchBtn', 'quickEditProductFromPurchBtn', 'confirmCashCorrectionBtn', 'registrarEntradaBtn', 'registrarSalidaBtn']);
   // Capture impide ejecutar los handlers locales cuando el modulo aun no tiene API.
   document.addEventListener('submit', event => {

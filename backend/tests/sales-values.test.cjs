@@ -25,7 +25,7 @@ test('ventas: distribucion del descuento reconcilia lineas, incluso centavos y 1
   }
 });
 test('ventas: mensajes distintos para carrito, cantidades, descuento y pago', () => {
-  for (const [change, code] of [[{items:[]},'CART_EMPTY'], [{items:[{productId:'1',quantity:'0'}]},'QUANTITY_INVALID'], [{items:[{productId:'1',quantity:'1.0001'}]},'QUANTITY_INVALID'], [{discountPercent:'101'},'DISCOUNT_INVALID'], [{discountPercent:'-1'},'DISCOUNT_INVALID'], [{paymentMethod:''},'PAYMENT_METHOD_REQUIRED'], [{paymentMethod:'CREDIT'},'PAYMENT_METHOD_REQUIRED']]) assert.throws(() => values.quote(cart(change)), {publicCode: code});
+  for (const [change, code] of [[{items:[]},'CART_EMPTY'], [{items:[{productId:'1',quantity:'0'}]},'QUANTITY_INVALID'], [{items:[{productId:'1',quantity:'1.0001'}]},'QUANTITY_INVALID'], [{discountPercent:'101'},'DISCOUNT_INVALID'], [{discountPercent:'-1'},'DISCOUNT_INVALID'], [{paymentMethod:''},'PAYMENT_METHOD_REQUIRED'], [{paymentMethod:'CREDIT'},'CREDIT_CLIENT_REQUIRED']]) assert.throws(() => values.quote(cart(change)), {publicCode: code});
 });
 test('ventas: producto inexistente, inactivo y stock insuficiente se distinguen', () => {
   const data=values.quote(cart());
@@ -54,7 +54,7 @@ test('caja central: pedidos, flujo y confirmacion tienen cuerpos estrictos', () 
   assert.equal(values.orderCharge({ operationKey: randomUUID(), quoteToken: 'a'.repeat(64), paymentMethod: 'TRANSFER', cashReceived: null }).cashReceived, null);
   assert.equal(values.salesFlow({ salesFlow: 'CENTRALIZED' }), 'CENTRALIZED');
   assert.equal(values.paymentConfirmation({ operationKey: randomUUID() }).operationKey.length, 36);
-  assert.throws(() => values.orderQuote({ paymentMethod: 'CREDIT' }), { publicCode: 'PAYMENT_METHOD_REQUIRED' });
+  assert.equal(values.orderQuote({ paymentMethod: 'CREDIT' }).paymentMethod, 'CREDIT');
   assert.throws(() => values.salesFlow({ salesFlow: 'OTHER' }), { publicCode: 'INVALID_INPUT' });
   assert.throws(() => values.order({ items: cart().items, priceType: 'RETAIL', discountPercent: '10', detail: '', operationKey: randomUUID(), total: '1.00' }), { publicCode: 'INVALID_INPUT' });
 });

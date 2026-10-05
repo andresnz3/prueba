@@ -9,7 +9,7 @@
   function pending() {
     const value = localStorage.getItem(scope());
     if (!value) return null;
-    try { const result = JSON.parse(value); if (/^[a-f0-9-]{36}$/.test(result.key) && ['SALE', 'CANCEL', 'OPEN_CASH', 'CLOSE_CASH', 'PREPARE_ORDER', 'ORDER_CHARGE', 'ORDER_CANCEL', 'PAYMENT_CONFIRM'].includes(result.kind)) return result; } catch { /* Invalid marker stays blocked until checked. */ }
+    try { const result = JSON.parse(value); if (/^[a-f0-9-]{36}$/.test(result.key) && ['SALE', 'CANCEL', 'OPEN_CASH', 'CLOSE_CASH', 'PREPARE_ORDER', 'ORDER_CHARGE', 'ORDER_CANCEL', 'PAYMENT_CONFIRM', 'CUSTOMER_PAYMENT'].includes(result.kind)) return result; } catch { /* Invalid marker stays blocked until checked. */ }
     throw new Error('No se pudo leer la referencia de la operación pendiente.');
   }
   function notice(text = '') { el('saleOperationMessage').textContent = text; el('saleOperationMessage').classList.toggle('hidden', !text); el('recoverSaleBtn').classList.toggle('hidden', !text); }
@@ -27,22 +27,32 @@
     });
   }
   function mappedSale(sale) {
-    return { id: sale.id, businessId: sale.businessId, numero: sale.invoiceNumber, vendedor: sale.seller, fecha: new Date(sale.createdAt).toLocaleString(), fechaTS: Date.parse(sale.createdAt), detalle: sale.detail || '-', metodo: 'Contado', medioPago: sale.paymentMethod.toLowerCase(), cliente: '-', clienteId: null, tarifa: sale.priceType === 'RETAIL' ? 'Menudeo' : 'Mayoreo', subtotal: Number(sale.subtotal), descuentoPct: Number(sale.discountPercent), descuentoMonto: Number(sale.discount), total: Number(sale.total), anulada: sale.status === 'CANCELLED', motivoAnulacion: sale.cancelReason, conectado: true, estadoCaja: sale.cashStatus === 'PENDING' ? 'pendiente' : sale.cashStatus === 'CONFIRMED' ? 'confirmado' : 'no_aplica', cajaSessionId: sale.cashSessionId, items: sale.items.map(item => ({ id: item.productId, name: item.name, barcode: item.barcode, cantidad: Number(item.quantity), connectedSubtotal: Number(item.subtotal), retailPrice: Number(item.unitPrice), wholesalePrice: Number(item.unitPrice) })) };
+    const credit = sale.paymentMethod === 'CREDIT';
+    return { id: sale.id, businessId: sale.businessId, numero: sale.invoiceNumber, vendedor: sale.seller, fecha: new Date(sale.createdAt).toLocaleString(), fechaTS: Date.parse(sale.createdAt), detalle: sale.detail || '-', metodo: credit ? 'Crédito' : 'Contado', medioPago: sale.paymentMethod.toLowerCase(), cliente: credit ? sale.clientName : '-', clienteId: sale.clientId, vencimiento: sale.dueAt ? new Date(sale.dueAt).toLocaleDateString() : null, vencimientoTS: sale.dueAt ? Date.parse(sale.dueAt) : null, saldoPendiente: credit && sale.status === 'COMPLETED' ? Number(sale.total) : 0, tarifa: sale.priceType === 'RETAIL' ? 'Menudeo' : 'Mayoreo', subtotal: Number(sale.subtotal), descuentoPct: Number(sale.discountPercent), descuentoMonto: Number(sale.discount), total: Number(sale.total), anulada: sale.status === 'CANCELLED', motivoAnulacion: sale.cancelReason, conectado: true, estadoCaja: sale.cashStatus === 'PENDING' ? 'pendiente' : sale.cashStatus === 'CONFIRMED' ? 'confirmado' : 'no_aplica', cajaSessionId: sale.cashSessionId, items: sale.items.map(item => ({ id: item.productId, name: item.name, barcode: item.barcode, cantidad: Number(item.quantity), connectedSubtotal: Number(item.subtotal), retailPrice: Number(item.unitPrice), wholesalePrice: Number(item.unitPrice) })) };
   }
   async function completed(result, recovered = false) {
-    if (result.kind === 'CONFIRM_PAYMENT' && result.sale) {
+    if (result.kind === 'CONFIRM_PAYMENT' && result.payment) {
+      const payment = result.payment, method = payment.paymentMethod === 'CARD' ? 'Tarjeta' : 'Transferencia';
+      showAlert(method + ' confirmado para la factura #' + payment.invoiceNumber + ' por ' + result.movement.confirmedBy + '. No suma al efectivo físico esperado.');
+      if (!el('clientsView').classList.contains('hidden')) await window.PosClients.load('clientsView');
+    } else if (result.kind === 'CONFIRM_PAYMENT' && result.sale) {
       window.PosRuntime.publishSale(mappedSale(result.sale)); activeOrderId = null; quote = quoteInput = null;
       showAlert((result.movement.paymentMethod === 'CARD' ? 'Tarjeta' : 'Transferencia') + ' confirmado por ' + (result.movement.confirmedBy || result.sale.cashier) + ' el ' + new Date(result.movement.confirmedAt).toLocaleString() + '. No suma al efectivo físico esperado.');
+    } else if (result.kind === 'CUSTOMER_PAYMENT' && result.payment) {
+      el('paymentSaleModal').classList.add('hidden');
+      const method = result.payment.paymentMethod === 'CASH' ? 'Efectivo registrado en Caja' : result.payment.paymentMethod === 'CARD' ? 'Tarjeta pendiente de confirmar en Caja' : 'Transferencia pendiente de confirmar en Caja';
+      showAlert('Abono registrado para la factura #' + result.payment.invoiceNumber + '. ' + method + '.');
+      if (!el('clientsView').classList.contains('hidden')) await window.PosClients.load('clientsView');
     } else if (result.sale) {
       const sale = mappedSale(result.sale);
       window.PosRuntime.publishSale(sale);
       if (result.kind === 'SALE') {
         window.PosRuntime.clearCart(); el('connectedCheckoutModal').classList.add('hidden'); quote = quoteInput = null; activeOrderId = null;
         generarVisualizacionTicket(sale, Number(result.sale.cashReceived || result.sale.total), Number(result.sale.changeAmount || 0), recovered);
-      } else { el('anularVentaModal').classList.add('hidden'); showAlert(result.sale.paymentMethod === 'CASH' ? 'Venta anulada en MySQL. Stock y efectivo revertidos.' : 'Venta anulada en MySQL. Stock repuesto. La devolución por tarjeta o transferencia debe realizarse por el mismo medio fuera del POS.'); }
+      } else { el('anularVentaModal').classList.add('hidden'); showAlert(result.sale.paymentMethod === 'CASH' ? 'Venta anulada en MySQL. Stock y efectivo revertidos.' : result.sale.paymentMethod === 'CREDIT' ? 'Venta a crédito anulada en MySQL. El saldo y el inventario fueron revertidos.' : 'Venta anulada en MySQL. Stock repuesto. La devolución por tarjeta o transferencia debe realizarse por el mismo medio fuera del POS.'); }
       try { await window.PosInventory.load('salesView'); } catch (error) { if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else showAlert('La operación está confirmada. No se pudo actualizar el catálogo; vuelve a Ventas para consultarlo.'); }
     }
-    if (result.kind === 'ABANDONED') showAlert('La operación no estaba registrada y quedó descartada en el servidor. Una solicitud tardía con esa referencia será rechazada. Puedes preparar el cobro nuevamente.');
+    if (result.kind === 'ABANDONED') showAlert('La operación no estaba registrada y quedó descartada en el servidor. Puedes preparar el cobro nuevamente.');
     if (result.order && !result.sale) {
       activeOrderId = null; quote = quoteInput = null; el('connectedCheckoutModal').classList.add('hidden');
       if (result.kind === 'ORDER') { window.PosRuntime.clearCart(); showAlert('Pedido #' + result.order.id + ' enviado a Caja. No se generó factura ni se descontó inventario.'); }
@@ -91,40 +101,37 @@
   }
   function cartData() {
     const input = state();
-    return { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, paymentMethod: input.paymentMethod };
+    return { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, paymentMethod: input.paymentMethod, clientId: input.clientId };
   }
   async function checkout() {
     if (busy) return;
     if (pending()) { showPending(); showAlert('Comprueba la operación pendiente antes de cobrar nuevamente.'); return; }
-    if (!state().items.length) { showAlert('El carrito está vacío. Agrega productos antes de cobrar.'); el('barcodeInput').focus(); return; }
-    if (state().paymentMethod === 'CREDIT') { showAlert('Las ventas a crédito están pendientes de integrar clientes y cuentas por cobrar.'); return; }
+    const input = state();
+    if (!input.items.length) { showAlert('El carrito está vacío. Agrega productos antes de cobrar.'); el('barcodeInput').focus(); return; }
+    if (input.paymentMethod === 'CREDIT' && !input.clientId) { showAlert('Selecciona un cliente para vender a crédito'); return; }
     if (document.querySelector('input[name="descApplies"][value="si"]').checked && !window.PosValidation.validate(el('descuentoBox'), true)) return;
     if (salesFlow === 'CENTRALIZED') {
-      const input = state();
-      await perform('PREPARE_ORDER', { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, detail: input.detail }, (client, data) => client.prepareOrder(data));
+      await perform('PREPARE_ORDER', { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, detail: input.detail, clientId: input.clientId }, (client, data) => client.prepareOrder(data));
       return;
     }
-    activeOrderId = null;
-    busy = true;
+    activeOrderId = null; busy = true;
     try {
       quoteInput = cartData(); quote = await api(client => client.quoteSale(quoteInput));
       el('connectedCheckoutTotal').textContent = 'C$' + quote.total;
-      el('connectedCheckoutDetail').textContent = (quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : 'Transferencia') + ' · Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
+      const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : quote.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Crédito';
+      el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · No genera movimiento de efectivo.' : method + ' · Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
       el('connectedCheckoutItems').replaceChildren();
       for (const item of quote.items) { const row = document.createElement('p'); row.textContent = item.name + ' × ' + Number(item.quantity) + ' — C$' + item.total; el('connectedCheckoutItems').append(row); }
       el('connectedOrderMethodGroup').classList.add('hidden'); el('connectedPriceChangeMessage').classList.add('hidden');
-      el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH');
-      el('connectedCashReceived').value = ''; window.PosValidation.clear(el('connectedCheckoutModal'));
-      if (quote.paymentMethod !== 'CASH') {
-        const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: null, detail: state().detail };
-        busy = false;
-        await perform('SALE', data, (client, input) => client.createSale(input));
-        return;
+      el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; window.PosValidation.clear(el('connectedCheckoutModal'));
+      if (quote.paymentMethod === 'CARD' || quote.paymentMethod === 'TRANSFER') {
+        const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: null, detail: input.detail };
+        busy = false; await perform('SALE', data, (client, saleInput) => client.createSale(saleInput)); return;
       }
-      el('connectedCheckoutTitle').textContent = 'Cobrar venta en efectivo';
-      el('confirmConnectedSaleBtn').textContent = 'Confirmar venta';
+      el('connectedCheckoutTitle').textContent = quote.paymentMethod === 'CREDIT' ? 'Confirmar venta a crédito' : 'Cobrar venta en efectivo';
+      el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : 'Confirmar venta';
       el('connectedCheckoutModal').classList.remove('hidden');
-      el('connectedCashReceived').focus();
+      (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus();
     } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { busy = false; }
   }
@@ -154,12 +161,14 @@
   }
   async function startOrderCharge(id) {
     if (busy || pending()) { showPending(); showAlert('Comprueba la operación pendiente antes de continuar.'); return; }
-    activeOrderId = String(id); quoteInput = null; el('connectedOrderPaymentMethod').value = 'CASH';
+    activeOrderId = String(id); quoteInput = null; const order = pendingOrderDetails.get(String(id));
+    const methodSelect = el('connectedOrderPaymentMethod'), creditOption = [...methodSelect.options].find(option => option.value === 'CREDIT');
+    methodSelect.value = order?.clientId ? 'CREDIT' : 'CASH'; methodSelect.disabled = Boolean(order?.clientId); if (creditOption) creditOption.disabled = !order?.clientId;
     await refreshOrderQuote();
   }
   async function refreshOrderQuote() {
     if (!activeOrderId || busy) return;
-    busy = true; el("confirmConnectedSaleBtn").disabled = true;
+    busy = true; el('confirmConnectedSaleBtn').disabled = true;
     let refreshed = false;
     try {
       quote = await api(client => client.quoteOrder(activeOrderId, el('connectedOrderPaymentMethod').value));
@@ -167,22 +176,16 @@
       el('connectedCheckoutItems').replaceChildren();
       for (const item of quote.items) { const row = document.createElement('p'); row.textContent = item.name + ' × ' + Number(item.quantity) + ' — C$' + item.total; el('connectedCheckoutItems').append(row); }
       el('connectedCheckoutTotal').textContent = 'C$' + quote.total;
-      const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : 'Transferencia';
-      el('connectedCheckoutDetail').textContent = method + ' · Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
+      const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : quote.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Crédito';
+      el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · Sin ingreso de efectivo.' : method + ' · Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
       const difference = Number(quote.priceDelta), priceMessage = el('connectedPriceChangeMessage');
       priceMessage.textContent = quote.priceChanged ? 'El precio cambió desde que se preparó el pedido: estimado C$' + quote.estimatedTotal + '; precio vigente C$' + quote.total + ' (' + (difference > 0 ? '+' : '') + 'C$' + quote.priceDelta + '). Confirma este precio vigente para continuar.' : 'Precio vigente comprobado. Total estimado al preparar: C$' + quote.estimatedTotal + '.';
-      priceMessage.classList.remove('hidden');
-      el('connectedOrderMethodGroup').classList.remove('hidden');
-      el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH');
-      el('connectedCashReceived').value = ''; window.PosValidation.clear(el('connectedCheckoutModal'));
-      el('confirmConnectedSaleBtn').textContent = quote.priceChanged ? 'Confirmar precio y cobrar' : 'Confirmar y cobrar pedido';
-      el('connectedCheckoutModal').classList.remove('hidden');
-      refreshed = true;
+      priceMessage.classList.remove('hidden'); el('connectedOrderMethodGroup').classList.remove('hidden');
+      el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; window.PosValidation.clear(el('connectedCheckoutModal'));
+      el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : quote.priceChanged ? 'Confirmar precio y cobrar' : 'Confirmar y cobrar pedido';
+      el('connectedCheckoutModal').classList.remove('hidden'); refreshed = true;
     } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
-    finally {
-      busy = false; el('confirmConnectedSaleBtn').disabled = false;
-      if (refreshed) (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus();
-    }
+    finally { busy = false; el('confirmConnectedSaleBtn').disabled = false; if (refreshed) (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus(); }
   }
   async function confirmPayment(id) {
     await perform('PAYMENT_CONFIRM', {}, (client, input) => client.confirmPayment(id, input));
@@ -224,9 +227,10 @@
       }
     }
     pendingOrderDetails = new Map([...overview.pendingOrders, ...(overview.pendingHistoricalOrders || [])].map(order => [order.id, order]));
-    const paymentRows = payments => payments.map(payment => ({ kind: 'payment', id: payment.id, date: payment.createdAt, reference: 'Factura #' + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta pendiente' : 'Transferencia pendiente', amount: payment.amount }));
-    const orderRows = orders => orders.map(order => ({ kind: 'order', id: order.id, date: order.createdAt, reference: 'Pedido #' + order.id, user: order.seller, method: 'Por cobrar', amount: order.estimatedTotal }));
-    const saleRows = sales => (sales || []).map(sale => ({ kind: 'sale', id: sale.id, date: sale.createdAt, reference: 'Factura #' + sale.invoiceNumber, user: sale.seller, method: sale.paymentMethod === 'CARD' ? 'Tarjeta' : sale.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Efectivo', amount: sale.amount }));
+    const paymentRows = payments => payments.map(payment => ({ kind: 'payment', id: payment.id, date: payment.createdAt, reference: (payment.kind === 'CUSTOMER_PAYMENT' ? 'Abono factura #' : 'Factura #') + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta pendiente' : 'Transferencia pendiente', amount: payment.amount }));
+    const orderRows = orders => orders.map(order => ({ kind: 'order', id: order.id, date: order.createdAt, reference: 'Pedido #' + order.id + (order.clientName ? ' · ' + order.clientName : ''), user: order.seller, method: order.clientId ? 'Crédito' : 'Por cobrar', amount: order.estimatedTotal }));
+    const saleRows = sales => (sales || []).map(sale => ({ kind: 'sale', id: sale.id, date: sale.createdAt, reference: 'Factura #' + sale.invoiceNumber, user: sale.seller, method: sale.paymentMethod === 'CARD' ? 'Tarjeta' : sale.paymentMethod === 'TRANSFER' ? 'Transferencia' : sale.paymentMethod === 'CREDIT' ? 'Crédito' : 'Efectivo', amount: sale.amount }));
+    const collectionRows = payments => (payments || []).map(payment => ({ kind: 'collection', id: payment.id, date: payment.createdAt, reference: 'Abono factura #' + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta' : payment.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Efectivo', amount: payment.amount }));
     const renderOperationRows = (body, payments, orders, historical = false, additionalRows = []) => {
       if (!body) return;
       const rows = [...additionalRows, ...paymentRows(payments), ...orderRows(orders)].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
@@ -236,6 +240,7 @@
         const row = document.createElement('tr');
         for (const value of [new Date(item.date).toLocaleString(), item.reference, item.user, item.method, money(item.amount), item.kind === 'payment' ? 'Pendiente de confirmación' : (historical ? 'Pendiente histórico · sin factura' : 'Pedido pendiente · sin factura ni descuento de inventario')]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
         if (item.kind === 'sale') row.cells[5].textContent = 'Venta registrada';
+        if (item.kind === 'collection') row.cells[5].textContent = 'Cobro registrado';
         const actions = document.createElement('td');
         const addAction = (label, action, danger = false) => { const button = document.createElement('button'); button.type = 'button'; button.className = danger ? 'btn btn-sm btn-danger' : 'btn btn-sm btn-success'; button.textContent = label; button.dataset.action = action; button.dataset.id = item.id; actions.append(button); };
         if (item.kind === 'payment') addAction('Confirmar recibido', 'confirm-payment');
@@ -244,7 +249,7 @@
       }
     };
     const hasOpenSession = Boolean(overview.currentCashSessionId);
-    renderOperationRows(el('cajaOperacionesBody'), overview.pendingPayments, overview.pendingOrders, false, saleRows(overview.operationSales));
+    renderOperationRows(el('cajaOperacionesBody'), overview.pendingPayments, overview.pendingOrders, false, [...saleRows(overview.operationSales), ...collectionRows(overview.operationCollections)]);
     const historicalPayments = hasOpenSession ? (overview.pendingHistoricalPayments || []) : [], historicalOrders = hasOpenSession ? (overview.pendingHistoricalOrders || []) : [];
     renderOperationRows(el('cajaPendientesHistoricosBody'), historicalPayments, historicalOrders, true);
     el('cajaPendientesHistoricosSection')?.classList.toggle('hidden', !hasOpenSession || (historicalPayments.length === 0 && historicalOrders.length === 0));
@@ -274,6 +279,8 @@
     if (view === 'salesView' || view === 'cajaView') {
       const settings = await api(client => client.salesFlow()); salesFlow = settings.salesFlow; renderCheckoutMode();
     }
+    if (view === 'salesView') await window.PosClients.loadCreditClients();
+    if (view === 'clientsView') await window.PosClients.load(view);
     if (view === 'historyView') window.PosRuntime.setSales((await pages('sales')).map(mappedSale).reverse());
     if (view === 'cajaView') {
       const sessions = await pages('cashSessions');
@@ -297,7 +304,6 @@
     await perform('CLOSE_CASH', { countedAmount: value }, (client, input) => client.closeCash(currentCash.id, input));
   }
   for (const id of ['registrarEntradaBtn', 'registrarSalidaBtn']) { el(id).disabled = true; el(id).title = 'Movimientos manuales pendientes de integración'; }
-  document.querySelector('input[name="paymentMethod"][value="credit"]').disabled = true;
   el('descuentoPct').step = '0.0001';
   el('confCurrency').disabled = true; el('confCurrency').title = 'Moneda conectada C$. Configuración monetaria por negocio pendiente.';
   for (const id of ['summaryCreditSales', 'summaryTotalExpenses']) el(id).closest('.summary-card').classList.add('hidden');
@@ -331,5 +337,5 @@
     finally { button.disabled = false; }
   });
   window.addEventListener('storage', event => { if (event.key === activeScope) showPending(); });
-  window.PosSales = Object.freeze({ checkout, confirm, cancel, openCash, closeCash, closeDialog, load, renderCash });
+  window.PosSales = Object.freeze({ checkout, confirm, cancel, openCash, closeCash, closeDialog, load, renderCash, payReceivable: (id, data) => perform('CUSTOMER_PAYMENT', data, (client, input) => client.payReceivable(id, input)) });
 })();

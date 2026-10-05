@@ -76,6 +76,8 @@ test("solo permite iniciar sesión con usuarios registrados y valida todos los c
   const registeredUsers = [
     ["andres", "4321", "Administrador"],
     ["gestor", "4321", "Administrador"],
+    ["sergio", "4321", "Administrador"],
+    ["sergio", "1234", "Usuario"],
     ["vendedor1", "1234", "Usuario"]
   ];
   for (const [username, password, role] of registeredUsers) {

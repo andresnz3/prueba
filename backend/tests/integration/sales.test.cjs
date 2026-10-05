@@ -105,7 +105,7 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     assert.deepEqual(responses.map(r=>r.status).sort(),[201,409]);assert.equal(await stock(last.id),'0.000');
   });
   await t.test('carrito, cantidad, descuento, pago y autoridad devuelven errores específicos',async()=>{
-    for(const [change,code] of [[{items:[]},'CART_EMPTY'],[{items:[{productId:product.id,quantity:'0'}]},'QUANTITY_INVALID'],[{discountPercent:'101'},'DISCOUNT_INVALID'],[{paymentMethod:'CREDIT'},'PAYMENT_METHOD_REQUIRED'],[{business_id:businessB},'INVALID_INPUT'],[{total:'0.01'},'INVALID_INPUT']]) assert.equal((await one.request('/sales/quote','POST',cart(change))).data.error.code,code);
+    for(const [change,code] of [[{items:[]},'CART_EMPTY'],[{items:[{productId:product.id,quantity:'0'}]},'QUANTITY_INVALID'],[{discountPercent:'101'},'DISCOUNT_INVALID'],[{paymentMethod:'CREDIT'},'CREDIT_CLIENT_REQUIRED'],[{business_id:businessB},'INVALID_INPUT'],[{total:'0.01'},'INVALID_INPUT']]) assert.equal((await one.request('/sales/quote','POST',cart(change))).data.error.code,code);
     const inactive=await createProduct({active:false});assert.equal((await one.request('/sales/quote','POST',cart({items:[{productId:inactive.id,quantity:'1'}]}))).data.error.code,'PRODUCT_INACTIVE');
     assert.equal((await one.request('/sales/quote','POST',cart({items:[{productId:'18446744073709551615',quantity:'1'}]}))).data.error.code,'PRODUCT_NOT_FOUND');
   });

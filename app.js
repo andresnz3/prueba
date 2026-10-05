@@ -28,6 +28,8 @@ let localDB = connectedMode ? null : createPosDatabase('POS_OfflineDB');
 const USERS = [
     { username: "andres", password: "4321", role: "gestor" },
     { username: "gestor", password: "4321", role: "gestor" },
+    { username: "sergio", password: "4321", role: "gestor" },
+    { username: "sergio", password: "1234", role: "vendedor" },
     { username: "vendedor1", password: "1234", role: "vendedor" }
 ];
 
@@ -536,6 +538,7 @@ function renderDashboard() {
 
 document.getElementsByName("buyerType").forEach(radio => { radio.addEventListener("change", (e) => { buyerType = e.target.value; const applied = document.getElementById("appliedRate"); if(applied) applied.textContent = buyerType === "retail" ? "Menudeo" : "Mayoreo"; actualizarCarrito(); actualizarCatalogo(); }); });
 function refrescarSelectClientesCredito(seleccionarId) {
+    if (connectedMode) { window.PosClients?.refreshCreditClients(seleccionarId || ""); return; }
     const sel = document.getElementById("creditClientSelect");
     if (!sel) return;
     const actual = seleccionarId !== undefined ? seleccionarId : sel.value;
@@ -795,7 +798,11 @@ function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
     let prods; let subtotalTicket = 0;
     if (sale.items && sale.items.length > 0) { prods = sale.items.map(i => { const precio = sale.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); const lineAmount = connectedMode && Number.isFinite(i.connectedSubtotal) ? i.connectedSubtotal : precio * i.cantidad; subtotalTicket += lineAmount; return `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${i.cantidad}x ${escapeHtml(i.name)}</span><span>${sysConfig.currency}${lineAmount.toFixed(2)}</span></div>`; }).join(""); } else { prods = `<div style="text-align:center; font-size:12px; color:#888;">(Detalle no disponible)</div>`; subtotalTicket = sale.total; }
     let saldoPendienteHtml = "";
-    if (sale.metodo === "Crédito") { const c = clients.find(cl => String(cl.id) === String(sale.clienteId)) || clients.find(cl => cl.name === sale.cliente); if (c) { saldoPendienteHtml = `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top:5px; border-top:1px dashed #000; padding-top:5px; color:#d32f2f;"><span>Saldo Pendiente:</span><span>${sysConfig.currency}${obtenerSaldoFactura("cliente", sale).toFixed(2)}</span></div>`; } }
+    if (sale.metodo === "Crédito") {
+        const c = clients.find(cl => String(cl.id) === String(sale.clienteId)) || clients.find(cl => cl.name === sale.cliente);
+        const saldo = connectedMode && Number.isFinite(sale.saldoPendiente) ? sale.saldoPendiente : (c ? obtenerSaldoFactura("cliente", sale) : 0);
+        if (c || connectedMode) saldoPendienteHtml = `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top:5px; border-top:1px dashed #000; padding-top:5px; color:#d32f2f;"><span>Saldo Pendiente:</span><span>${sysConfig.currency}${saldo.toFixed(2)}</span></div>`;
+    }
     let pagoH;
     if (sale.metodo === "Contado") {
         const medio = obtenerMedioPagoVenta(sale);
@@ -1118,7 +1125,7 @@ document.getElementById("quickAddClientBtn")?.addEventListener("click", () => {
     document.getElementById("clientModal")?.classList.remove("hidden");
 });
 document.getElementById("clientForm")?.addEventListener("submit", async (e) => { 
-    e.preventDefault(); const id = document.getElementById("clientId").value;
+    e.preventDefault(); if (connectedMode) return window.PosClients?.save(); const id = document.getElementById("clientId").value;
     const existingClient = id ? clients.find(c => String(c.id) === String(id)) : null;
     const nuevaDeuda = existingClient ? (existingClient.debt || 0) : r2(parseFloat(document.getElementById("clientDebt").value));
     const nuevoLimite = r2(parseFloat(document.getElementById("clientLimit").value));
@@ -1148,6 +1155,7 @@ function actualizarTablaClientes() {
 }
 
 window.toggleEstadoCliente = async function(id) {
+    if (connectedMode) return window.PosClients?.toggle(id);
     if (!isAdmin('clientsView')) { showAlert("No tiene permisos."); return; }
     const c = clients.find(x => String(x.id) === String(id)); if(!c) return;
     const nuevoEstado = c.active === false ? true : false;
@@ -1157,7 +1165,7 @@ window.toggleEstadoCliente = async function(id) {
     });
 };
 
-window.editarCliente = function(id) { const c = clients.find(x => String(x.id) === String(id)); if(!c) return; document.getElementById("clientId").value = c.id; document.getElementById("clientName").value = c.name; document.getElementById("clientPhone").value = c.phone || ""; document.getElementById("clientRuc").value = c.ruc || ""; document.getElementById("clientAddress").value = c.address || ""; document.getElementById("clientLimit").value = c.creditLimit||0; document.getElementById("clientDebt").value = c.debt||0; prepararCampoDeudaCliente(true); document.getElementById("clientModal")?.classList.remove("hidden"); };
+window.editarCliente = function(id) { if (connectedMode) return window.PosClients?.edit(id); const c = clients.find(x => String(x.id) === String(id)); if(!c) return; document.getElementById("clientId").value = c.id; document.getElementById("clientName").value = c.name; document.getElementById("clientPhone").value = c.phone || ""; document.getElementById("clientRuc").value = c.ruc || ""; document.getElementById("clientAddress").value = c.address || ""; document.getElementById("clientLimit").value = c.creditLimit||0; document.getElementById("clientDebt").value = c.debt||0; prepararCampoDeudaCliente(true); document.getElementById("clientModal")?.classList.remove("hidden"); };
 function obtenerAbonosDeFactura(tipo, facturaId) {
     return abonosHistory.filter(abono => abono.tipo === tipo && String(abono.facturaId) === String(facturaId) && !abono.anulado);
 }
@@ -1253,6 +1261,7 @@ function registrarMovimientoAbonoEnCaja(tipo, monto, concepto, abono) {
 }
 
 window.abrirAbonoVenta = function(id) {
+    if (connectedMode) return window.PosClients?.openPayment(id);
     const sale = salesHistory.find(item => String(item.id) === String(id));
     if (!sale || sale.anulada || sale.metodo !== "Crédito") return;
     const client = clients.find(item => String(item.id) === String(sale.clienteId)) || clients.find(item => item.name === sale.cliente);
@@ -1265,7 +1274,7 @@ window.abrirAbonoVenta = function(id) {
 };
 
 document.getElementById("paymentSaleForm")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
+    e.preventDefault(); if (connectedMode) return window.PosClients?.submitPayment();
     const saleId = document.getElementById("paySaleId").value;
     const sale = salesHistory.find(item => String(item.id) === String(saleId));
     const client = sale && (clients.find(item => String(item.id) === String(sale.clienteId)) || clients.find(item => item.name === sale.cliente));
@@ -1335,6 +1344,7 @@ document.getElementById("paymentForm")?.addEventListener("submit", async (e) => 
 });
 
 window.verEstadoCuentaCliente = function(id) { 
+    if (connectedMode) return window.PosClients?.statement(id);
     const c = clients.find(x => String(x.id) === String(id)); if(!c) return; 
     document.getElementById("statementModalTitle").textContent = `Historial: ${c.name}`; 
     document.getElementById("statementModalSubtitle").textContent = `Límite: ${sysConfig.currency}${(c.creditLimit||0).toFixed(2)} | Deuda Actual: ${sysConfig.currency}${(c.debt||0).toFixed(2)}`; 
@@ -2159,7 +2169,7 @@ window.generarExcelDashboard = function() {
 };
 // Puente de estado del POS: no concede permisos en la API.
 window.PosRuntime = Object.freeze({
-    salesInput() { return { businessId: DEFAULT_BUSINESS_ID, userId: currentUser?.id, role: currentUser?.role, items: cart.map(item => ({ productId: String(item.id), quantity: String(item.cantidad) })), priceType: buyerType === 'retail' ? 'RETAIL' : 'WHOLESALE', paymentMethod: paymentMethod.toUpperCase(), discountPercent: document.querySelector('input[name="descApplies"][value="si"]')?.checked ? document.getElementById('descuentoPct').value : '0', detail: document.getElementById('saleDetailInput').value.trim() }; },
+    salesInput() { return { businessId: DEFAULT_BUSINESS_ID, userId: currentUser?.id, role: currentUser?.role, items: cart.map(item => ({ productId: String(item.id), quantity: String(item.cantidad) })), priceType: buyerType === 'retail' ? 'RETAIL' : 'WHOLESALE', paymentMethod: paymentMethod.toUpperCase(), clientId: paymentMethod === 'credit' ? (document.getElementById('creditClientSelect')?.value || null) : null, discountPercent: document.querySelector('input[name="descApplies"][value="si"]')?.checked ? document.getElementById('descuentoPct').value : '0', detail: document.getElementById('saleDetailInput').value.trim() }; },
     setSales(values) { if (!connectedMode || values.some(value => value.businessId !== DEFAULT_BUSINESS_ID)) throw new Error('Negocio incorrecto'); salesHistory = values; actualizarTablaHistorial(); },
     publishSale(value) { if (!connectedMode || value.businessId !== DEFAULT_BUSINESS_ID) throw new Error('Negocio incorrecto'); const index = salesHistory.findIndex(sale => sale.id === value.id); if (index < 0) salesHistory.push(value); else salesHistory[index] = value; actualizarTablaHistorial(); },
     setCash(values) { if (!connectedMode || values.some(value => value.businessId !== DEFAULT_BUSINESS_ID)) throw new Error('Negocio incorrecto'); cajaHistorial = values; cajaActual = values.find(value => value.estado === 'abierta') || null; },

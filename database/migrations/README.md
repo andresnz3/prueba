@@ -15,3 +15,8 @@ Crea pos_operations y agrega cash_received/change_amount a sales, con CHECK de e
 # Migracion 003: confirmacion y flujo de Caja central
 
 Agrega ventas/cajero, actor y fecha de confirmacion de tarjeta/transferencia, la configuracion DIRECT/CENTRALIZED por negocio y las tablas de pedidos pendientes. Mantiene DIRECT como valor predeterminado. No altera schema.sql. Requiere 002. Para aplicarla a la base seleccionada hace falta aprobacion explicita: npm.cmd run migrate:cash-workflow --prefix backend -- --apply. El ejecutor rechaza estados parciales y DDL no transaccional; no repetir sin revisar information_schema. La integracion automatizada la aplica solo a su base pos_auth_test_* temporal y la elimina al finalizar.
+Migration 004: clientes, credito y cuentas por cobrar
+
+Agrega el plazo de credito por cliente, la referencia opcional de cliente/plazo para pedidos centralizados y el estado PENDING para abonos bancarios en conciliacion. No modifica schema.sql; requiere migraciones 002 y 003. Las cuentas se calculan desde ventas de credito completadas y abonos POSTED. Abonos PENDING reservan saldo de factura para evitar doble pago, pero solo se aplican a deuda al confirmar en Caja.
+
+Para aplicar manualmente tras aprobacion explicita: npm.cmd run migrate:credit --prefix backend -- --apply. El ejecutor comprueba prerrequisitos y rechaza una aplicacion previa/parcial. DDL no es transaccional: una interrupcion requiere revisar information_schema antes de continuar. Las pruebas automatizadas aplican 004 solo a su base aleatoria pos_auth_test_* y la eliminan.

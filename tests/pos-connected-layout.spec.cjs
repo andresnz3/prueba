@@ -15,6 +15,7 @@ async function connectedFixture(page, closed = false, loseResponse = false) {
     else if(path === '/api/auth/modules/sales/enter') body = {module:'sales',allowed:true};
     else if(path === '/api/auth/access/sales') body = {module:'sales',allowed:true};
     else if(path === '/api/business-settings/sales-flow') body = {businessId:'1',salesFlow:'DIRECT'};
+    else if(path === '/api/sales/clients') body = {clients:[]};
     else if(path === '/api/catalog/products') body = {products:[product]};
     else if(path === '/api/cash/sessions') body = {sessions:[]};
     else if(path === '/api/cash/overview') body = {overview:{businessId:'1',salesFlow:'DIRECT',salesByUser:[],pendingPayments:[],pendingOrders:[],movements:[],expectedAmount:'0.00',customerCollections:'0.00',lastDifference:'0.00'}};

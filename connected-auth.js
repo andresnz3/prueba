@@ -59,7 +59,7 @@
     el('roleBadge').textContent = identity.role === 'ADMIN' ? 'Administrador' : 'Usuario';
     el('businessContext').textContent = 'Conectado · Negocio ' + identity.businessId;
     el('businessContext').classList.remove('hidden');
-    el('connectedNotice').textContent = 'Ventas de contado, caja, productos e inventario en MySQL. Crédito, abonos, compras y movimientos manuales pendientes. Requiere conexión; no hay sincronización offline.';
+    el('connectedNotice').textContent = 'Ventas, clientes, crédito, cuentas por cobrar y Caja en MySQL. Compras y movimientos manuales pendientes. Requiere conexión; no hay sincronización offline.';
     el('connectedNotice').classList.remove('hidden');
     el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN'); el('renewSessionBtn').classList.remove('hidden');
     el('loginBusinessId').value = identity.businessId; el('loginBusinessId').disabled = true;

@@ -24,15 +24,18 @@ function cart(data) {
     return { productId, quantity };
   }).sort((a, b) => BigInt(a.productId) < BigInt(b.productId) ? -1 : 1);
   if (!['RETAIL', 'WHOLESALE'].includes(data.priceType)) fail('PRICE_TYPE_INVALID', 'priceType');
-  if (!['CASH', 'CARD', 'TRANSFER'].includes(data.paymentMethod)) fail('PAYMENT_METHOD_REQUIRED', 'paymentMethod');
+  if (!['CASH', 'CARD', 'TRANSFER', 'CREDIT'].includes(data.paymentMethod)) fail('PAYMENT_METHOD_REQUIRED', 'paymentMethod');
+  const clientId = data.paymentMethod === 'CREDIT' ? (data.clientId ? v.id(data.clientId) : null) : null;
+  if (data.paymentMethod === 'CREDIT' && !clientId) fail('CREDIT_CLIENT_REQUIRED', 'clientId');
   const discountPercent = number(data.discountPercent, 4, 3, 'DISCOUNT_INVALID', 'discountPercent');
   if (units(discountPercent) > 1000000n) fail('DISCOUNT_INVALID', 'discountPercent');
-  return { items, priceType: data.priceType, paymentMethod: data.paymentMethod, discountPercent };
+  return { items, priceType: data.priceType, paymentMethod: data.paymentMethod, discountPercent, clientId };
 }
-const quoteFields = ['items', 'priceType', 'paymentMethod', 'discountPercent'];
-function quote(body) { return cart(v.body(body, quoteFields)); }
+const quoteFields = ['items', 'priceType', 'paymentMethod', 'discountPercent', 'clientId'];
+function quote(body) { return cart(v.body(body, quoteFields, ['items', 'priceType', 'paymentMethod', 'discountPercent'])); }
 function sale(body) {
-  const data = v.body(body, [...quoteFields, 'operationKey', 'quoteToken', 'cashReceived', 'detail']);
+  const fields = [...quoteFields, 'operationKey', 'quoteToken', 'cashReceived', 'detail'];
+  const data = v.body(body, fields, fields.filter(field => field !== 'clientId'));
   const result = { ...cart(data), operationKey: operationKey(data.operationKey) };
   if (typeof data.quoteToken !== 'string' || !/^[a-f0-9]{64}$/.test(data.quoteToken)) fail('QUOTE_CHANGED', 'quoteToken');
   result.quoteToken = data.quoteToken;
@@ -43,21 +46,22 @@ function sale(body) {
   return result;
 }
 function order(body) {
-  const fields = ['items', 'priceType', 'discountPercent', 'detail', 'operationKey'];
-  const data = v.body(body, fields);
+  const fields = ['items', 'priceType', 'discountPercent', 'detail', 'operationKey', 'clientId'];
+  const data = v.body(body, fields, fields.filter(field => field !== 'clientId'));
   const items = cart({ ...data, paymentMethod: 'CASH' });
   if (typeof data.detail !== 'string' || data.detail.length > 500 || [...data.detail].some(character => character.charCodeAt(0) <= 31)) fail('DETAIL_INVALID', 'detail');
-  return { ...items, detail: data.detail.trim(), operationKey: operationKey(data.operationKey) };
+  const clientId = data.clientId === undefined || data.clientId === null ? null : v.id(data.clientId);
+  return { ...items, clientId, detail: data.detail.trim(), operationKey: operationKey(data.operationKey) };
 }
 function orderQuote(body) {
   const data = v.body(body, ['paymentMethod']);
-  if (!['CASH', 'CARD', 'TRANSFER'].includes(data.paymentMethod)) fail('PAYMENT_METHOD_REQUIRED', 'paymentMethod');
+  if (!['CASH', 'CARD', 'TRANSFER', 'CREDIT'].includes(data.paymentMethod)) fail('PAYMENT_METHOD_REQUIRED', 'paymentMethod');
   return { paymentMethod: data.paymentMethod };
 }
 function orderCharge(body) {
   const data = v.body(body, ['operationKey', 'quoteToken', 'paymentMethod', 'cashReceived']);
   if (typeof data.quoteToken !== 'string' || !/^[a-f0-9]{64}$/.test(data.quoteToken)) fail('QUOTE_CHANGED', 'quoteToken');
-  if (!['CASH', 'CARD', 'TRANSFER'].includes(data.paymentMethod)) fail('PAYMENT_METHOD_REQUIRED', 'paymentMethod');
+  if (!['CASH', 'CARD', 'TRANSFER', 'CREDIT'].includes(data.paymentMethod)) fail('PAYMENT_METHOD_REQUIRED', 'paymentMethod');
   const cashReceived = data.paymentMethod === 'CASH' ? number(data.cashReceived, 2, 10, 'CASH_INVALID', 'cashReceived') : null;
   if (data.paymentMethod !== 'CASH' && data.cashReceived !== null) fail('CASH_INVALID', 'cashReceived');
   return { operationKey: operationKey(data.operationKey), quoteToken: data.quoteToken, paymentMethod: data.paymentMethod, cashReceived };

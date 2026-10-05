@@ -5,9 +5,9 @@ const v = require('../middleware/validation');
 const values = require('../services/sales-values');
 const { page } = require('../services/inventory-values');
 const { httpError } = require('../middleware/errors');
-function salesRoutes(authentication, service) {
+function salesRoutes(authentication, service, customers) {
   const router = Router(), m = authMiddleware(authentication.repo, authentication.config);
-  router.use(['/sales', '/cash', '/operations', '/business-settings'], m.authenticate, (req, res, next) => {
+  router.use(['/sales', '/cash', '/operations', '/business-settings', '/clients', '/receivables'], m.authenticate, (req, res, next) => {
     res.set('Cache-Control', 'no-store');
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       if (!req.is('application/json')) throw httpError(415, 'JSON_REQUIRED');
@@ -15,6 +15,14 @@ function salesRoutes(authentication, service) {
     }
     next();
   });
+  router.get('/clients', async (req, res) => { v.body(req.query, ['limit', 'offset', 'q'], []); const options = page({ limit: req.query.limit, offset: req.query.offset }); const q = req.query.q === undefined ? null : v.text(req.query.q, 100); res.json({ clients: await customers.listClients(req.auth, { ...options, q }) }); });
+  router.post('/clients', async (req, res) => res.status(201).json(await customers.createClient(req.auth, require('../services/client-values').client(req.body))));
+  router.patch('/clients/:id', async (req, res) => res.json(await customers.updateClient(req.auth, v.id(req.params.id), require('../services/client-values').client(req.body, true))));
+  router.patch('/clients/:id/active', async (req, res) => res.json(await customers.setClientActive(req.auth, v.id(req.params.id), require('../services/client-values').active(req.body))));
+  router.get('/clients/:id/statement', async (req, res) => { v.body(req.query, ['limit', 'offset'], []); const options = page(req.query); res.json(await customers.statement(req.auth, v.id(req.params.id), options)); });
+  router.get('/receivables', async (req, res) => { v.body(req.query, ['limit', 'offset', 'q'], []); const options = page({ limit: req.query.limit, offset: req.query.offset }); const q = req.query.q === undefined ? null : v.text(req.query.q, 100); res.json({ receivables: await customers.receivables(req.auth, { ...options, q }) }); });
+  router.post('/receivables/:id/payments', async (req, res) => res.status(201).json(await customers.pay(req.auth, v.id(req.params.id), require('../services/client-values').payment(req.body, values.operationKey))));
+  router.get('/sales/clients', async (req, res) => { v.body(req.query, ['limit', 'offset', 'q'], []); const options = page({ limit: req.query.limit, offset: req.query.offset }); const q = req.query.q === undefined ? null : v.text(req.query.q, 100); res.json({ clients: await customers.clientOptions(req.auth, { ...options, q }) }); });
   router.post('/sales/quote', async (req, res) => res.json({ quote: await service.quote(req.auth, values.quote(req.body)) }));
   router.post('/sales', async (req, res) => res.status(201).json(await service.create(req.auth, values.sale(req.body))));
   router.get('/business-settings/sales-flow', async (req, res) => res.json(await service.getSalesFlow(req.auth)));

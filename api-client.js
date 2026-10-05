@@ -4,7 +4,7 @@
     CART_EMPTY: 'El carrito está vacío. Agrega productos antes de cobrar.',
     QUANTITY_INVALID: 'Ingresa una cantidad mayor que cero, con hasta tres decimales.',
     DISCOUNT_INVALID: 'El descuento debe estar entre 0 y 100, con hasta cuatro decimales.',
-    PAYMENT_METHOD_REQUIRED: 'Selecciona efectivo, tarjeta o transferencia. El crédito está pendiente.',
+    PAYMENT_METHOD_REQUIRED: 'Selecciona efectivo, tarjeta, transferencia o cr\u00e9dito.',
     PRODUCT_INACTIVE: 'El producto está inactivo. Retíralo del carrito.',
     CASH_CLOSED: 'Debes abrir caja antes de facturar o cobrar',
     CASH_AMBIGUOUS: 'Hay más de una caja abierta. Requiere revisión antes de cobrar.',
@@ -36,7 +36,19 @@
     TOTAL_LIMIT: 'El importe supera el límite permitido para una factura.',
     PRICE_TYPE_INVALID: 'Selecciona la tarifa de menudeo o mayoreo.',
     DETAIL_INVALID: 'El detalle admite hasta 500 caracteres, sin saltos de línea.',
-    CREDIT_BLOCKED: 'El crédito y los abonos están pendientes de integrar clientes y cuentas por cobrar.',
+    CREDIT_BLOCKED: 'No se puede anular una factura de cr\u00e9dito que ya tiene abonos.',
+    CREDIT_CLIENT_REQUIRED: 'Selecciona un cliente para vender a cr\u00e9dito',
+    CREDIT_LIMIT_EXCEEDED: 'El cliente supera el l\u00edmite de cr\u00e9dito disponible',
+    CLIENT_DUPLICATE: 'Ya existe un cliente con ese nombre, tel\u00e9fono o identificaci\u00f3n.',
+    CLIENT_NOT_FOUND: 'No se encontr\u00f3 ese cliente en este negocio.',
+    CLIENT_INACTIVE: 'El cliente est\u00e1 inactivo y no puede comprar a cr\u00e9dito.',
+    RECEIVABLE_NOT_CREDIT: 'La factura no tiene una cuenta por cobrar.',
+    RECEIVABLE_ALREADY_PAID: 'La factura ya est\u00e1 pagada.',
+    PAYMENT_EXCEEDS_BALANCE: 'El abono no puede superar el saldo de la factura.',
+    PAYMENT_CONFIRMATION_PENDING: 'Hay un abono pendiente de confirmar para esta factura.',
+    ORDER_PAYMENT_CHANGED: 'El medio de pago del pedido cambi\u00f3. Vuelve a cotizarlo.',
+    CREDIT_HAS_PAYMENTS: 'No se puede anular la factura mientras tenga abonos registrados.',
+    CREDIT_MIGRATION_REQUIRED: 'Clientes y cuentas por cobrar requieren la migraci\u00f3n 004 aprobada. Consulta al administrador.',
     SALES_MIGRATION_REQUIRED: 'Ventas y caja requieren las migraciones 002 y 003 aprobadas. Consulta al administrador.',
     NETWORK_ERROR: 'No se pudo conectar con el servidor. Comprueba tu conexión',
     INVALID_RESPONSE: 'El servidor devolvió una respuesta inesperada.',
@@ -148,12 +160,13 @@
       return operation;
     }
     #salesResult(value) {
-      const record = value?.sale || value?.cash || value?.order || value?.movement || value?.overview || value;
+      const record = value?.sale || value?.cash || value?.order || value?.movement || value?.payment || value?.overview || value;
       if (record.businessId !== this.#identity?.businessId) throw new ApiError('INVALID_RESPONSE');
       if (value.sale) {
         const sale = value.sale;
-        if (!/^[1-9]\d*$/.test(sale.id || '') || !/^\d{6,20}$/.test(sale.invoiceNumber || '') || !['COMPLETED', 'CANCELLED'].includes(sale.status) || !['CASH', 'CARD', 'TRANSFER'].includes(sale.paymentMethod) || !['NOT_APPLICABLE', 'PENDING', 'CONFIRMED'].includes(sale.cashStatus) || !Array.isArray(sale.items) || !Number.isFinite(Date.parse(sale.createdAt)) || !['subtotal','discount','total','tax'].every(field => /^\d+\.\d{2}$/.test(sale[field]))) throw new ApiError('INVALID_RESPONSE');
+        if (!/^[1-9]\d*$/.test(sale.id || '') || !/^\d{6,20}$/.test(sale.invoiceNumber || '') || !['COMPLETED', 'CANCELLED'].includes(sale.status) || !['CASH', 'CARD', 'TRANSFER', 'CREDIT'].includes(sale.paymentMethod) || !['NOT_APPLICABLE', 'PENDING', 'CONFIRMED'].includes(sale.cashStatus) || !Array.isArray(sale.items) || !Number.isFinite(Date.parse(sale.createdAt)) || !['subtotal','discount','total','tax'].every(field => /^\d+\.\d{2}$/.test(sale[field]))) throw new ApiError('INVALID_RESPONSE');
       }
+      if (value.payment) { const payment = value.payment; if (!/^[1-9]\d*$/.test(payment.id || '') || !/^[1-9]\d*$/.test(payment.saleId || '') || !/^[1-9]\d*$/.test(payment.clientId || '') || payment.businessId !== this.#identity?.businessId || !/^\d+\.\d{2}$/.test(payment.amount || '') || !['CASH','CARD','TRANSFER'].includes(payment.paymentMethod) || !['PENDING','POSTED'].includes(payment.status)) throw new ApiError('INVALID_RESPONSE'); }
       return value;
     }
     async quoteSale(data) { const value = await this.#write('/sales/quote', 'POST', data); if (!value?.quote || value.quote.businessId !== this.#identity?.businessId || !/^[a-f0-9]{64}$/.test(value.quote.quoteToken) || !/^\d+\.\d{2}$/.test(value.quote.total) || !Array.isArray(value.quote.items)) throw new ApiError('INVALID_RESPONSE'); return value.quote; }
@@ -216,6 +229,26 @@
       if (value?.module !== module || !Number.isFinite(Date.parse(value.expiresAt)) || !/^[1-9]\d*$/.test(value.grantedByUserId)) throw new ApiError('INVALID_RESPONSE'); return value;
     }
     leave(module) { return this.#write('/auth/authorizations/' + encodeURIComponent(module), 'DELETE', {}); }
+    async creditClients(offset = 0, q = '') { const value = await this.#request('/sales/clients?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : '')); if (!Array.isArray(value?.clients) || value.clients.length > 100) throw new ApiError('INVALID_RESPONSE'); return value.clients; }
+    async clients(offset = 0, q = '') {
+      const value = await this.#request('/clients?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : ''));
+      if (!Array.isArray(value?.clients) || value.clients.length > 100) throw new ApiError('INVALID_RESPONSE');
+      return value.clients.map(item => {
+        if (!/^[1-9]\d{0,19}$/.test(item.id || '') || item.businessId !== this.#identity?.businessId || typeof item.name !== 'string' || typeof item.active !== 'boolean' || !Number.isInteger(item.creditDays) || item.creditDays < 1 || item.creditDays > 3650 || !['creditLimit','debt','availableCredit','pendingPayments'].every(key => /^-?\d+\.\d{2}$/.test(item[key] || ''))) throw new ApiError('INVALID_RESPONSE');
+        return item;
+      });
+    }
+    async createClient(data) { const value = await this.#write('/clients', 'POST', data); if (value?.client?.businessId !== this.#identity?.businessId) throw new ApiError('INVALID_RESPONSE'); return value.client; }
+    async updateClient(id, data) { const value = await this.#write('/clients/' + encodeURIComponent(id), 'PATCH', data); if (value?.client?.businessId !== this.#identity?.businessId) throw new ApiError('INVALID_RESPONSE'); return value.client; }
+    async setClientActive(id, active) { const value = await this.#write('/clients/' + encodeURIComponent(id) + '/active', 'PATCH', { active }); if (value?.businessId !== this.#identity?.businessId || value.id !== String(id) || value.active !== active) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async receivables(offset = 0, q = '') {
+      const value = await this.#request('/receivables?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : ''));
+      if (!Array.isArray(value?.receivables) || value.receivables.length > 100) throw new ApiError('INVALID_RESPONSE');
+      for (const item of value.receivables) if (item.businessId !== this.#identity?.businessId || !['OPEN','OVERDUE','PAID','CANCELLED','PENDING_CONFIRMATION'].includes(item.status)) throw new ApiError('INVALID_RESPONSE');
+      return value.receivables;
+    }
+    async clientStatement(id) { const value = await this.#request('/clients/' + encodeURIComponent(id) + '/statement?limit=100&offset=0'); if (value?.client?.businessId !== this.#identity?.businessId || !Array.isArray(value.invoices) || !Array.isArray(value.payments)) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async payReceivable(id, data) { return this.#salesResult(await this.#write('/receivables/' + encodeURIComponent(id) + '/payments', 'POST', data)); }
     async users(offset = 0) {
       const value = await this.#request('/users?limit=100&offset=' + encodeURIComponent(offset));
       if (!Array.isArray(value?.users)) throw new ApiError('INVALID_RESPONSE');
