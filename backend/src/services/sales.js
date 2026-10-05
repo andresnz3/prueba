@@ -46,6 +46,20 @@ function createSalesService({ repo, auth, config }) {
     const movements = await repo.rows(db, 'SELECT m.id, m.business_id, m.type, m.direction, m.amount, m.sale_id, m.reversal_of_movement_id, m.description, m.status, m.created_at, m.confirmed_at, m.confirmed_by_user_id, u.full_name AS user_name, z.full_name AS confirmed_by_name, s.payment_method FROM cash_movements m JOIN users u ON u.business_id = m.business_id AND u.id = m.user_id LEFT JOIN users z ON z.business_id = m.business_id AND z.id = m.confirmed_by_user_id LEFT JOIN sales s ON s.business_id = m.business_id AND s.id = m.sale_id WHERE m.business_id = ? AND m.cash_session_id = ? ORDER BY m.id', [current.business_id, String(row.id)]);
     const balance = units(row.opening_amount) + movements.filter(m => m.status === 'CONFIRMED' && (!m.payment_method || m.payment_method === 'CASH')).reduce((sum, m) => sum + units(m.amount) * (m.direction === 'IN' ? 1n : -1n), 0n);
     const result = { id: String(row.id), businessId: String(row.business_id), status: row.status, openingAmount: row.opening_amount, expectedAmount: fixed(balance, 2), countedAmount: row.counted_amount, difference: row.difference, openedAt: row.opened_at, closedAt: row.closed_at, openedBy: row.opened_by_name, closedBy: row.closed_by_name };
+    if (row.status === 'CLOSED') result.expectedAmount = row.expected_amount;
+    if (full) {
+      const sales = await repo.rows(db, "SELECT payment_method, total FROM sales WHERE business_id = ? AND cash_session_id = ? AND status <> 'CANCELLED'", [current.business_id, String(row.id)]);
+      const total = list => fixed(list.reduce((sum, item) => sum + units(item.amount ?? item.total), 0n), 2);
+      const physical = movements.filter(m => m.status === 'CONFIRMED' && (!m.payment_method || m.payment_method === 'CASH'));
+      const out = type => total(physical.filter(m => m.direction === 'OUT' && m.type === type));
+      const [actor] = await repo.rows(db, 'SELECT full_name FROM users WHERE business_id = ? AND id = ?', [current.business_id, row.closed_by || current.user_id]);
+      result.closingBy = actor?.full_name || row.closed_by_name || null;
+      result.summary = { cashSales: total(physical.filter(m => m.direction === 'IN' && m.type === 'SALE')), creditSales: '0.00', cardSales: total(sales.filter(s => s.payment_method === 'CARD')), transferSales: total(sales.filter(s => s.payment_method === 'TRANSFER')), expenses: out('EXPENSE'), purchases: out('PURCHASE'), withdrawals: total(physical.filter(m => m.direction === 'OUT' && !['EXPENSE','PURCHASE','REVERSAL'].includes(m.type))), cashReturns: out('REVERSAL'), cashCollections: '0.00', otherCash: total(physical.filter(m => m.direction === 'IN' && m.type !== 'SALE')) };
+      if (row.status === 'CLOSED') {
+        const [saved] = await repo.rows(db, "SELECT result FROM pos_operations WHERE business_id = ? AND kind = 'CLOSE_CASH' AND JSON_UNQUOTE(JSON_EXTRACT(result, '$.cash.id')) = ? ORDER BY created_at DESC LIMIT 1", [current.business_id, String(row.id)]);
+        if (saved) { const value = typeof saved.result === 'string' ? JSON.parse(saved.result) : saved.result; if (value.cash?.summary) result.summary = value.cash.summary; }
+      }
+    }
     if (full) result.movements = movements.map(m => ({ ...m, id: String(m.id), businessId: String(m.business_id), saleId: m.sale_id === null ? null : String(m.sale_id) }));
     return result;
   }
@@ -164,6 +178,7 @@ function createSalesService({ repo, auth, config }) {
   });
   const createOrder = (session, data) => work(session, 'sales', (db, current) => once(db, current, 'PREPARE_ORDER', data, async () => {
     if (await flow(db, current) !== 'CENTRALIZED') throw httpError(409, 'DIRECT_MODE_ACTIVE');
+    if (!await cashRow(db, current)) throw httpError(409, 'CASH_CLOSED');
     const products = [];
     for (const item of data.items) {
       const [product] = await repo.rows(db, 'SELECT * FROM products WHERE business_id = ? AND id = ? FOR UPDATE', [current.business_id, item.productId]);
@@ -223,26 +238,37 @@ function createSalesService({ repo, auth, config }) {
   }));
   const cashOverview = (session) => work(session, 'cash', async (db, current) => {
     const salesFlow = await flow(db, current);
-    const grouped = await repo.rows(db, "SELECT u.id AS user_id, u.full_name, COUNT(*) AS sale_count, SUM(CASE WHEN s.payment_method = 'CASH' THEN s.total ELSE 0 END) AS cash_total, SUM(CASE WHEN s.payment_method = 'CARD' THEN s.total ELSE 0 END) AS card_total, SUM(CASE WHEN s.payment_method = 'TRANSFER' THEN s.total ELSE 0 END) AS transfer_total, SUM(s.total) AS total_sales FROM sales s JOIN users u ON u.business_id = s.business_id AND u.id = s.user_id WHERE s.business_id = ? AND s.status = 'COMPLETED' GROUP BY u.id, u.full_name ORDER BY u.full_name", [current.business_id]);
-    const salesByUser = grouped.map(row => ({ userId: String(row.user_id), userName: row.full_name, saleCount: Number(row.sale_count), cash: row.cash_total || '0.00', card: row.card_total || '0.00', transfer: row.transfer_total || '0.00', credit: '0.00', collections: '0.00', total: row.total_sales || '0.00' }));
     const openCash = await cashRow(db, current);
-    const [lastClosed] = await repo.rows(db, "SELECT expected_amount, difference FROM cash_sessions WHERE business_id = ? AND status = 'CLOSED' ORDER BY id DESC LIMIT 1", [current.business_id]);
-    const currentSummary = openCash ? await cashPublic(db, current, openCash, false) : null;
-    const [pendingRows, orderRows, movements] = await Promise.all([
-      repo.rows(db, "SELECT m.id, m.cash_session_id, m.sale_id, m.amount, m.created_at, s.invoice_number, s.payment_method, s.cash_status, seller.full_name AS seller FROM cash_movements m JOIN sales s ON s.business_id = m.business_id AND s.id = m.sale_id JOIN users seller ON seller.business_id = s.business_id AND seller.id = s.user_id WHERE m.business_id = ? AND m.type = 'SALE' AND m.status = 'PENDING' AND s.status = 'COMPLETED' ORDER BY m.id DESC LIMIT 100", [current.business_id]),
-      repo.rows(db, "SELECT id FROM sale_orders WHERE business_id = ? AND status = 'PENDING' ORDER BY id LIMIT 100", [current.business_id]),
-      repo.rows(db, 'SELECT m.id, m.cash_session_id, m.type, m.direction, m.amount, m.sale_id, m.description, m.status, m.created_at, m.confirmed_at, u.full_name AS user_name, z.full_name AS confirmed_by_name, s.payment_method, s.invoice_number FROM cash_movements m JOIN users u ON u.business_id = m.business_id AND u.id = m.user_id LEFT JOIN users z ON z.business_id = m.business_id AND z.id = m.confirmed_by_user_id LEFT JOIN sales s ON s.business_id = m.business_id AND s.id = m.sale_id WHERE m.business_id = ? ORDER BY m.id DESC LIMIT 100', [current.business_id])
+    const sessionId = openCash ? String(openCash.id) : null;
+    const openedAt = openCash?.opened_at || null;
+    const currentSession = openCash ? [String(openCash.id)] : [];
+    const historicalSession = openCash ? [String(openCash.id)] : [];
+    const [grouped, operationSales, pendingSales, historicalPendingSales, orderRows, historicalOrderRows, movements] = await Promise.all([
+      openCash ? repo.rows(db, "SELECT u.id AS user_id, u.full_name, COUNT(*) AS sale_count, SUM(CASE WHEN s.payment_method = 'CASH' THEN s.total ELSE 0 END) AS cash_total, SUM(CASE WHEN s.payment_method = 'CARD' THEN s.total ELSE 0 END) AS card_total, SUM(CASE WHEN s.payment_method = 'TRANSFER' THEN s.total ELSE 0 END) AS transfer_total, SUM(s.total) AS total_sales FROM sales s JOIN users u ON u.business_id = s.business_id AND u.id = s.user_id WHERE s.business_id = ? AND s.cash_session_id = ? AND s.status = 'COMPLETED' GROUP BY u.id, u.full_name ORDER BY u.full_name", [current.business_id, ...currentSession]) : Promise.resolve([]),
+      repo.rows(db, openCash ? "SELECT s.id, s.cash_session_id, s.invoice_number, s.payment_method, s.total, s.cash_status, s.created_at, u.full_name AS seller FROM sales s JOIN users u ON u.business_id = s.business_id AND u.id = s.user_id WHERE s.business_id = ? AND s.cash_session_id = ? AND s.status = 'COMPLETED' AND s.cash_status <> 'PENDING' ORDER BY s.id DESC LIMIT 200" : "SELECT s.id, s.cash_session_id, s.invoice_number, s.payment_method, s.total, s.cash_status, s.created_at, u.full_name AS seller FROM sales s JOIN users u ON u.business_id = s.business_id AND u.id = s.user_id WHERE s.business_id = ? AND s.status = 'COMPLETED' AND s.cash_status <> 'PENDING' ORDER BY s.id DESC LIMIT 200", openCash ? [current.business_id, ...currentSession] : [current.business_id]),
+      openCash ? repo.rows(db, "SELECT m.id, m.cash_session_id, m.sale_id, m.amount, m.created_at, s.invoice_number, s.payment_method, seller.full_name AS seller FROM cash_movements m JOIN sales s ON s.business_id = m.business_id AND s.id = m.sale_id JOIN users seller ON seller.business_id = s.business_id AND seller.id = s.user_id WHERE m.business_id = ? AND m.cash_session_id = ? AND m.type = 'SALE' AND m.status = 'PENDING' AND s.status = 'COMPLETED' ORDER BY m.id DESC LIMIT 100", [current.business_id, ...currentSession]) : Promise.resolve([]),
+      openCash ? repo.rows(db, "SELECT m.id, m.cash_session_id, m.sale_id, m.amount, m.created_at, s.invoice_number, s.payment_method, seller.full_name AS seller FROM cash_movements m JOIN sales s ON s.business_id = m.business_id AND s.id = m.sale_id JOIN users seller ON seller.business_id = s.business_id AND seller.id = s.user_id WHERE m.business_id = ? AND (m.cash_session_id IS NULL OR m.cash_session_id <> ?) AND m.type = 'SALE' AND m.status = 'PENDING' AND s.status = 'COMPLETED' ORDER BY m.id DESC LIMIT 100", [current.business_id, ...historicalSession]) : repo.rows(db, "SELECT m.id, m.cash_session_id, m.sale_id, m.amount, m.created_at, s.invoice_number, s.payment_method, seller.full_name AS seller FROM cash_movements m JOIN sales s ON s.business_id = m.business_id AND s.id = m.sale_id JOIN users seller ON seller.business_id = s.business_id AND seller.id = s.user_id WHERE m.business_id = ? AND m.type = 'SALE' AND m.status = 'PENDING' AND s.status = 'COMPLETED' ORDER BY m.id DESC LIMIT 100", [current.business_id]),
+      openCash ? repo.rows(db, "SELECT id FROM sale_orders WHERE business_id = ? AND status = 'PENDING' AND created_at >= ? ORDER BY id LIMIT 100", [current.business_id, openedAt]) : Promise.resolve([]),
+      openCash ? repo.rows(db, "SELECT id FROM sale_orders WHERE business_id = ? AND status = 'PENDING' AND created_at < ? ORDER BY id LIMIT 100", [current.business_id, openedAt]) : repo.rows(db, "SELECT id FROM sale_orders WHERE business_id = ? AND status = 'PENDING' ORDER BY id LIMIT 100", [current.business_id]),
+      repo.rows(db, openCash ? 'SELECT m.id, m.cash_session_id, m.type, m.direction, m.amount, m.sale_id, m.description, m.status, m.created_at, m.confirmed_at, u.full_name AS user_name, z.full_name AS confirmed_by_name, s.payment_method, s.invoice_number FROM cash_movements m JOIN users u ON u.business_id = m.business_id AND u.id = m.user_id LEFT JOIN users z ON z.business_id = m.business_id AND z.id = m.confirmed_by_user_id LEFT JOIN sales s ON s.business_id = m.business_id AND s.id = m.sale_id WHERE m.business_id = ? AND m.cash_session_id = ? ORDER BY m.id DESC LIMIT 100' : 'SELECT m.id, m.cash_session_id, m.type, m.direction, m.amount, m.sale_id, m.description, m.status, m.created_at, m.confirmed_at, u.full_name AS user_name, z.full_name AS confirmed_by_name, s.payment_method, s.invoice_number FROM cash_movements m JOIN users u ON u.business_id = m.business_id AND u.id = m.user_id LEFT JOIN users z ON z.business_id = m.business_id AND z.id = m.confirmed_by_user_id LEFT JOIN sales s ON s.business_id = m.business_id AND s.id = m.sale_id WHERE m.business_id = ? ORDER BY m.id DESC LIMIT 200', openCash ? [current.business_id, ...currentSession] : [current.business_id])
     ]);
-    const pendingPayments = pendingRows.map(row => ({ id: String(row.id), cashSessionId: String(row.cash_session_id), saleId: String(row.sale_id), invoiceNumber: row.invoice_number, paymentMethod: row.payment_method, amount: row.amount, seller: row.seller, createdAt: row.created_at, status: 'PENDING' }));
+    const salesByUser = grouped.map(row => ({ userId: String(row.user_id), userName: row.full_name, saleCount: Number(row.sale_count), cash: row.cash_total || '0.00', card: row.card_total || '0.00', transfer: row.transfer_total || '0.00', credit: '0.00', collections: '0.00', total: row.total_sales || '0.00' }));
+    const currentSummary = openCash ? await cashPublic(db, current, openCash, false) : null;
+    const mapPending = rows => rows.map(row => ({ id: String(row.id), cashSessionId: row.cash_session_id === null ? null : String(row.cash_session_id), saleId: String(row.sale_id), invoiceNumber: row.invoice_number, paymentMethod: row.payment_method, amount: row.amount, seller: row.seller, createdAt: row.created_at, status: 'PENDING' }));
+    const mapOperationSales = rows => rows.map(row => ({ id: String(row.id), cashSessionId: row.cash_session_id === null ? null : String(row.cash_session_id), invoiceNumber: row.invoice_number, paymentMethod: row.payment_method, amount: row.total, cashStatus: row.cash_status, seller: row.seller, createdAt: row.created_at, status: 'COMPLETED', kind: 'SALE' }));
+    const pendingPayments = mapPending(openCash ? pendingSales : historicalPendingSales);
+    const pendingHistoricalPayments = openCash ? mapPending(historicalPendingSales) : [];
     const pendingOrders = [];
     for (const row of orderRows) pendingOrders.push(await getOrder(db, current, String(row.id)));
-    return {
-      businessId: String(current.business_id), salesFlow, salesByUser, pendingPayments, pendingOrders,
-      movements: movements.map(row => ({ id: String(row.id), cashSessionId: String(row.cash_session_id), type: row.type, direction: row.direction, amount: row.amount, saleId: row.sale_id === null ? null : String(row.sale_id), description: row.description, status: row.status, paymentMethod: row.payment_method, invoiceNumber: row.invoice_number, userName: row.user_name, confirmedBy: row.confirmed_by_name, createdAt: row.created_at, confirmedAt: row.confirmed_at })),
-      expectedAmount: currentSummary?.expectedAmount || lastClosed?.expected_amount || '0.00',
-      customerCollections: '0.00', lastDifference: lastClosed?.difference || '0.00'
-    };
+    const pendingHistoricalOrders = [];
+    for (const row of historicalOrderRows) pendingHistoricalOrders.push(await getOrder(db, current, String(row.id)));
+    if (!openCash) { pendingOrders.push(...pendingHistoricalOrders); pendingHistoricalOrders.length = 0; }
+    return { businessId: String(current.business_id), salesFlow, salesByUser, operationSales: mapOperationSales(operationSales), pendingPayments, pendingOrders,
+      pendingHistoricalPayments, pendingHistoricalOrders, currentCashSessionId: sessionId, currentSessionOpenedAt: openedAt,
+      movements: movements.map(row => ({ id: String(row.id), cashSessionId: row.cash_session_id === null ? null : String(row.cash_session_id), type: row.type, direction: row.direction, amount: row.amount, saleId: row.sale_id === null ? null : String(row.sale_id), description: row.description, status: row.status, paymentMethod: row.payment_method, invoiceNumber: row.invoice_number, userName: row.user_name, confirmedBy: row.confirmed_by_name, createdAt: row.created_at, confirmedAt: row.confirmed_at })),
+      expectedAmount: currentSummary?.expectedAmount || '0.00', customerCollections: '0.00', lastDifference: '0.00' };
   });
+
   const currentCash = (session, full = false) => work(session, full ? 'cash' : 'sales', async (db, current) => cashPublic(db, current, await cashRow(db, current), full));
   const cashHistory = (session, options) => work(session, 'cash', async (db, current) => {
     const rows = await repo.rows(db, 'SELECT id FROM cash_sessions WHERE business_id = ? ORDER BY id DESC LIMIT ? OFFSET ?', [current.business_id, options.limit, options.offset]);

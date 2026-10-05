@@ -222,7 +222,7 @@ function topOpenModal() {
 }
 
 function focusModal(modal) {
-    const focusTarget = modalFocusableElements(modal)[0] || modal.querySelector(".modal-card, .ticket-modal");
+    const focusTarget = modal.querySelector('[data-initial-focus]') || modalFocusableElements(modal)[0] || modal.querySelector(".modal-card, .ticket-modal");
     focusTarget?.focus();
 }
 
@@ -292,7 +292,7 @@ document.addEventListener("keydown", event => {
 
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+    if (event.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement))) {
         event.preventDefault();
         last.focus();
     } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
@@ -310,7 +310,7 @@ document.querySelectorAll(".close-modal-btn").forEach(btn => {
     btn.addEventListener("click", (e) => { 
         const modal = e.target.closest(".modal"); 
         if (!modal) return;
-        const modalesLectura = ["customAlertModal", "customConfirmModal", "strictConfirmModal", "ticketModal", "statementModal", "kardexModal", "authModal", "supplierModal"];
+        const modalesLectura = ["customAlertModal", "customConfirmModal", "strictConfirmModal", "ticketModal", "statementModal", "kardexModal", "authModal", "supplierModal", "cierreCajaModal", "detalleCierreCajaModal"];
         if (modalesLectura.includes(modal.id)) {
             modal.classList.add("hidden");
             if (modal.id === "supplierModal") modal.style.zIndex = ""; 
@@ -1248,7 +1248,7 @@ function pintarModalAbonoVenta(sale) {
 
 function registrarMovimientoAbonoEnCaja(tipo, monto, concepto, abono) {
     if (!cajaActual) return false;
-    cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo, monto, concepto, fechaTS: abono.fechaTS, fecha: new Date(abono.fechaTS).toLocaleString(), usuario: abono.usuario, estado: "pendiente", referenciaAbonoId: abono.id, anulado: false });
+    cajaActual.movimientos.push({ id: Date.now() + Math.random(), cajaSessionId: cajaActual.id, tipo, monto, concepto, fechaTS: abono.fechaTS, fecha: new Date(abono.fechaTS).toLocaleString(), usuario: abono.usuario, estado: "pendiente", referenciaAbonoId: abono.id, anulado: false });
     return true;
 }
 
@@ -1279,7 +1279,7 @@ document.getElementById("paymentSaleForm")?.addEventListener("submit", async (e)
     if (cajaActual?.estado !== "abierta") { showAlert(MSG_SIN_CAJA); return; }
 
     const fechaTS = Date.now();
-    const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, tipo: "cliente", referenciaId: client.id, facturaId: sale.id, monto: amount, metodoPago, estado: "pendiente", fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
+    const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, cajaSessionId: cajaActual.id, tipo: "cliente", referenciaId: client.id, facturaId: sale.id, monto: amount, metodoPago, estado: "pendiente", fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
     abonosHistory.push(newAbono);
     await localDB.abonos.put(newAbono);
     await encolarSincronizacion("INSERT", "abonos", newAbono);
@@ -1314,7 +1314,7 @@ document.getElementById("paymentForm")?.addEventListener("submit", async (e) => 
     if (cajaActual?.estado !== "abierta") { showAlert(MSG_SIN_CAJA); return; }
     const restoAbonosAnterior = saldosFacturasCliente(client).resto;
     const fechaTS = Date.now();
-    const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, tipo: "cliente", referenciaId: client.id, monto: amount, metodoPago, fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
+    const newAbono = { id: fechaTS, business_id: DEFAULT_BUSINESS_ID, cajaSessionId: cajaActual.id, tipo: "cliente", referenciaId: client.id, monto: amount, metodoPago, fecha: new Date(fechaTS).toLocaleDateString(), fechaTS, usuario: currentUser.displayName, anulado: false };
     abonosHistory.push(newAbono);
     await localDB.abonos.put(newAbono);
     await encolarSincronizacion("INSERT", "abonos", newAbono);
@@ -1403,7 +1403,7 @@ window.anularAbonoCliente = async function(abonoId) {
             await localDB.clients.put(cliente);
             await encolarSincronizacion('UPDATE', 'clients', cliente);
         }
-        if (cajaActual && (!abono.metodoPago || abono.metodoPago === "efectivo")) { cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo: "salida", monto: abono.monto, concepto: `Anulación Abono Cliente: ${cliente ? cliente.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", referenciaAbonoId: abono.id }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion('UPDATE', 'cajaSessions', cajaActual); }
+        if (cajaActual && (!abono.metodoPago || abono.metodoPago === "efectivo")) { cajaActual.movimientos.push({ id: Date.now() + Math.random(), cajaSessionId: cajaActual.id, tipo: "salida", monto: abono.monto, concepto: `Anulación Abono Cliente: ${cliente ? cliente.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", referenciaAbonoId: abono.id }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion('UPDATE', 'cajaSessions', cajaActual); }
         await localDB.abonos.put(abono); await encolarSincronizacion('UPDATE', 'abonos', abono); await registrarAuditoria('CLIENTES', 'ANULAR_ABONO', `Anuló abono de ${sysConfig.currency}${abono.monto.toFixed(2)} del cliente ${cliente ? cliente.name : ''}. Motivo: ${motivo}`);
         const factura = abono.facturaId && salesHistory.find(sale => String(sale.id) === String(abono.facturaId));
         if (factura && !document.getElementById("paymentSaleModal")?.classList.contains("hidden")) pintarModalAbonoVenta(factura);
@@ -1533,8 +1533,8 @@ window.anularAbonoProveedor = async function(abonoId) {
         if (!abono.metodoPago || abono.metodoPago === "efectivo") {
             const session = cajaHistorial.find(item => item.movimientos?.some(mov => String(mov.referenciaAbonoId) === String(abono.id))) || cajaActual;
             if (session) {
-                session.movimientos.push({ id: Date.now() + Math.random(), tipo: "entrada", monto: abono.monto, concepto: `Anulación Pago Proveedor: ${proveedor ? proveedor.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", referenciaAbonoId: abono.id });
-                if (session.estado === "cerrada") {
+                session.movimientos.push({ id: Date.now() + Math.random(), cajaSessionId: session.id, tipo: "entrada", monto: abono.monto, concepto: `Anulación Pago Proveedor: ${proveedor ? proveedor.name : ''} - ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", referenciaAbonoId: abono.id });
+                if (session.estado === "cerrada" && !session.resumenCierre) {
                     const summary = calcularResumenCaja(session);
                     session.efectivoEsperado = summary.esperado;
                     session.diferencia = r2((session.efectivoReal || 0) - summary.esperado);
@@ -1773,9 +1773,9 @@ function calcularResumenCaja(session) {
 async function abrirCaja(efectivoInicial) {
     if (connectedMode) return window.PosSales.openCash(); if (cajaActual) { showAlert("Ya existe una caja abierta."); return; } if (isNaN(efectivoInicial) || efectivoInicial < 0) { showAlert("Ingrese un monto inicial válido."); return; } const nueva = { business_id: DEFAULT_BUSINESS_ID, estado: "abierta", usuarioApertura: currentUser.displayName, fechaAperturaTS: Date.now(), fechaApertura: new Date().toLocaleString(), efectivoInicial: efectivoInicial, movimientos: [], fechaCierreTS: null, fechaCierre: null, efectivoReal: null, efectivoEsperado: null, diferencia: null, usuarioCierre: null }; const id = await localDB.cajaSessions.add(nueva); nueva.id = id; cajaActual = nueva; cajaHistorial.unshift(nueva); await encolarSincronizacion("INSERT", "cajaSessions", nueva); await registrarAuditoria('CAJA', 'APERTURA', `Abrió caja con ${sysConfig.currency}${efectivoInicial.toFixed(2)}`); renderCajaView(); }
 async function registrarMovimientoCaja(tipo, monto, concepto) {
-    if (blockPendingConnected()) return; monto = r2(monto); if (!cajaActual) { showAlert("No hay una caja abierta."); return; } if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (!concepto || !concepto.trim()) { showAlert("Ingrese un concepto."); return; } cajaActual.movimientos.push({ id: Date.now() + Math.random(), tipo, monto, concepto: concepto.trim(), fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", anulado: false }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); }
+    if (blockPendingConnected()) return; monto = r2(monto); if (!cajaActual) { showAlert("No hay una caja abierta."); return; } if (isNaN(monto) || monto <= 0) { showAlert("Ingrese un monto válido."); return; } if (!concepto || !concepto.trim()) { showAlert("Ingrese un concepto."); return; } cajaActual.movimientos.push({ id: Date.now() + Math.random(), cajaSessionId: cajaActual.id, tipo, monto, concepto: concepto.trim(), fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, estado: "pendiente", anulado: false }); await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); renderCajaView(); }
 window.anularMovimientoCaja = async function(indexOriginal, sessionId) {
-    if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos."); return; } const session = sessionId ? cajaHistorial.find(item => String(item.id) === String(sessionId)) : cajaActual; const mov = session?.movimientos[indexOriginal]; if (!mov || mov.anulado) return; showAnularRegistro("Anular Movimiento de Caja", `${mov.tipo.toUpperCase()}: ${mov.concepto} (${sysConfig.currency}${mov.monto.toFixed(2)})`, async (motivo) => { mov.anulado = true; mov.motivoAnulacion = motivo; mov.usuarioAnulacion = currentUser.displayName; mov.fechaAnulacion = new Date().toLocaleString(); if (session.estado === "cerrada") { const summary = calcularResumenCaja(session); session.efectivoEsperado = summary.esperado; session.diferencia = r2((session.efectivoReal || 0) - summary.esperado); } await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); renderCajaView(); showAlert("Movimiento anulado."); }); };
+    if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos."); return; } const session = sessionId ? cajaHistorial.find(item => String(item.id) === String(sessionId)) : cajaActual; const mov = session?.movimientos[indexOriginal]; if (!mov || mov.anulado) return; showAnularRegistro("Anular Movimiento de Caja", `${mov.tipo.toUpperCase()}: ${mov.concepto} (${sysConfig.currency}${mov.monto.toFixed(2)})`, async (motivo) => { mov.anulado = true; mov.motivoAnulacion = motivo; mov.usuarioAnulacion = currentUser.displayName; mov.fechaAnulacion = new Date().toLocaleString(); if (session.estado === "cerrada" && !session.resumenCierre) { const summary = calcularResumenCaja(session); session.efectivoEsperado = summary.esperado; session.diferencia = r2((session.efectivoReal || 0) - summary.esperado); } await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); renderCajaView(); showAlert("Movimiento anulado."); }); };
 window.confirmarMovimientoCaja = async function(sessionId, index) {
     if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar movimientos."); return; } const session = cajaHistorial.find(item => String(item.id) === String(sessionId)); const mov = session?.movimientos[index]; if (mov?.saleId) return window.PosLocalFlow.confirmSale(mov.saleId); if (!mov || mov.anulado || mov.estado !== "pendiente") return; mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = new Date().toLocaleString(); await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); await registrarAuditoria("CAJA", "CONFIRMAR_MOVIMIENTO", `Confirmó ${mov.tipo} de ${sysConfig.currency}${r2(mov.monto).toFixed(2)}: ${mov.concepto}`); renderCajaView(); };
 window.confirmarVentaCaja = async function(id) {
@@ -1805,7 +1805,7 @@ document.getElementById("confirmCashCorrectionBtn")?.addEventListener("click", a
     mov.correcciones.push(correction);
     mov.monto = newAmount;
     mov.estadoCorreccion = correction.estado;
-    if (session.estado === "cerrada") {
+    if (session.estado === "cerrada" && !session.resumenCierre) {
         const summary = calcularResumenCaja(session);
         session.efectivoEsperado = summary.esperado;
         session.diferencia = r2((session.efectivoReal || 0) - summary.esperado);
@@ -1817,8 +1817,42 @@ document.getElementById("confirmCashCorrectionBtn")?.addEventListener("click", a
     renderCajaView();
     showAlert("Corrección registrada; el valor original quedó en el historial.");
 });
+
+function detalleResumenLocal(session) {
+    if (session.resumenCierre) return session.resumenCierre;
+    const belongs = venta => venta.cajaSessionId ? String(venta.cajaSessionId) === String(session.id) : (venta.fechaTS || venta.id) >= session.fechaAperturaTS && (venta.fechaTS || venta.id) <= (session.fechaCierreTS || Date.now());
+    const sales = salesHistory.filter(v => belongs(v) && !v.anulada);
+    const sum = rows => r2(rows.reduce((n, v) => n + Number(v.monto ?? v.total ?? 0), 0));
+    const movements = (session.movimientos || []).filter(m => !m.anulado && m.estado !== 'void' && (!m.medioPago || m.medioPago === 'CASH'));
+    const out = movements.filter(m => m.tipo === 'salida');
+    const expenses = out.filter(m => (m.concepto || '').startsWith('Gasto:'));
+    const purchases = out.filter(m => m.referenciaCompraId);
+    const collections = movements.filter(m => m.tipo === 'entrada' && m.referenciaAbonoId);
+    return { cashSales: sum(sales.filter(v => v.metodo === 'Contado' && obtenerMedioPagoVenta(v) === 'cash')), creditSales: sum(sales.filter(v => v.metodo === 'Crédito')), cardSales: sum(sales.filter(v => obtenerMedioPagoVenta(v) === 'card')), transferSales: sum(sales.filter(v => obtenerMedioPagoVenta(v) === 'transfer')), expenses: sum(expenses), purchases: sum(purchases), withdrawals: sum(out.filter(m => !expenses.includes(m) && !purchases.includes(m))), cashReturns: 0, cashCollections: sum(collections), otherCash: sum(movements.filter(m => m.tipo === 'entrada' && !collections.includes(m))) };
+}
+const cashCloseMoney = value => 'C$ ' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function pintarResumenCierre(target, data, details = false) {
+    const root = document.getElementById(target); root.replaceChildren();
+    const add = (label, value) => { const row = document.createElement('div'); row.className = 'cash-close-row'; const name = document.createElement('span'); name.textContent = label; const amount = document.createElement('strong'); amount.textContent = value; row.append(name, amount); root.append(row); };
+    add('Fecha y hora de apertura', data.openedAt); add(details ? 'Fecha y hora de cierre' : 'Fecha y hora de cierre (prevista)', data.closedAt); add('Gestor que cierra', data.closedBy);
+    const summary = data.summary;
+    for (const [label, key, sign] of [['Efectivo inicial','openingAmount','+'],['Ventas de contado en efectivo','cashSales','+'],['Ventas de crédito','creditSales',''],['Ventas por transferencia','transferSales',''],['Ventas por tarjeta','cardSales',''],['Abonos en efectivo','cashCollections','+'],['Otras entradas en efectivo','otherCash','+'],['Gastos en efectivo','expenses','−'],['Salidas manuales / pagos en efectivo','withdrawals','−'],['Compras en efectivo','purchases','−'],['Devoluciones en efectivo','cashReturns','−']]) add(label, (sign ? '(' + sign + ') ' : '') + cashCloseMoney(key === 'openingAmount' ? data.openingAmount : summary[key]));
+    add('Efectivo final esperado', cashCloseMoney(data.expectedAmount));
+    if (details) { add('Efectivo real contado', cashCloseMoney(data.countedAmount)); add('Diferencia', cashCloseMoney(data.difference)); }
+    const note = document.createElement('p'); note.className = 'cash-close-note'; note.textContent = 'Crédito, tarjeta y transferencia son informativos y no suman al efectivo físico. Compras muestra únicamente salidas de efectivo registradas en Caja; compras conectadas pendiente.'; root.append(note);
+}
+function datosCierreLocal(session) { return { summary: detalleResumenLocal(session), openingAmount: session.efectivoInicial, expectedAmount: session.efectivoEsperado ?? calcularResumenCaja(session).esperado, countedAmount: session.efectivoReal, difference: session.diferencia, openedAt: session.fechaApertura, closedAt: session.fechaCierre || new Date().toLocaleString(), closedBy: session.usuarioCierre || currentUser.displayName }; }
+window.PosCashSummary = { open(data) { pintarResumenCierre('cajaCierreResumen', data); document.getElementById('cajaEsperadoDisplay').textContent = cashCloseMoney(data.expectedAmount); document.getElementById('cajaEfectivoRealInput').value = ''; document.getElementById('cajaEfectivoRealInput').dataset.expected = data.expectedAmount; actualizarDiferenciaCierre(); document.getElementById('cierreCajaModal').classList.remove('hidden'); document.getElementById('cierreCajaModal').querySelector('[data-initial-focus]').focus(); document.getElementById('cierreCajaModal').querySelector('.modal-card').scrollTop = 0; } };
+function actualizarDiferenciaCierre() {
+    const input = document.getElementById('cajaEfectivoRealInput'); const valid = /^\d+(?:\.\d{1,2})?$/.test(input.value) && Number.isFinite(Number(input.value));
+    document.getElementById('confirmCierreCajaBtn').disabled = !valid;
+    const difference = r2(Number(input.value) - Number(input.dataset.expected)); const status = document.getElementById('cajaCierreDiferencia'); status.textContent = valid ? 'Diferencia: ' + (difference > 0 ? '+' : '') + cashCloseMoney(difference) + (difference < 0 ? ' · Faltante' : difference > 0 ? ' · Sobrante' : ' · Sin diferencia') : 'Ingrese el efectivo real contado.';
+}
+document.getElementById('cajaEfectivoRealInput').addEventListener('input', actualizarDiferenciaCierre);
+document.getElementById('cajaHistorialBody').addEventListener('click', event => { const button = event.target.closest('[data-cash-detail]'); if (!button) return; const session = cajaHistorial.find(s => String(s.id) === button.dataset.cashDetail); if (!session) return; pintarResumenCierre('cajaDetalleResumen', connectedMode ? session.connectedCloseData : datosCierreLocal(session), true); document.getElementById('detalleCierreCajaModal').classList.remove('hidden'); });
+
 async function cerrarCaja(efectivoReal) {
-    if (connectedMode) return window.PosSales.closeCash(); if (!cajaActual) return; efectivoReal = r2(efectivoReal); const resumen = calcularResumenCaja(cajaActual); const diferencia = r2(efectivoReal - resumen.esperado); cajaActual.estado = "cerrada"; cajaActual.fechaCierreTS = Date.now(); cajaActual.fechaCierre = new Date().toLocaleString(); cajaActual.efectivoReal = efectivoReal; cajaActual.efectivoEsperado = resumen.esperado; cajaActual.diferencia = diferencia; cajaActual.usuarioCierre = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); cajaActual = null; await initCaja(); renderCajaView(); showAlert(`Caja cerrada exitosamente.`); }
+    if (connectedMode) return window.PosSales.closeCash(); if (!cajaActual) return; efectivoReal = r2(efectivoReal); const resumen = calcularResumenCaja(cajaActual); const diferencia = r2(efectivoReal - resumen.esperado); cajaActual.resumenCierre = detalleResumenLocal(cajaActual); cajaActual.estado = "cerrada"; cajaActual.fechaCierreTS = Date.now(); cajaActual.fechaCierre = new Date().toLocaleString(); cajaActual.efectivoReal = efectivoReal; cajaActual.efectivoEsperado = resumen.esperado; cajaActual.diferencia = diferencia; cajaActual.usuarioCierre = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); cajaActual = null; await initCaja(); renderCajaView(); showAlert(`Caja cerrada exitosamente.`); }
 document.getElementById("abrirCajaBtn")?.addEventListener("click", () => { if (connectedMode) { window.PosSales.openCash(); return; } const inputEl = document.getElementById("cajaEfectivoInicialInput"); const inicial = parseFloat(inputEl?.value); if (isNaN(inicial) || inicial < 0) { showAlert("⚠️ Ingrese el monto de efectivo inicial con el que abre la caja."); inputEl?.focus(); return; } abrirCaja(inicial); if (inputEl) inputEl.value = ""; });
 document.getElementById("registrarEntradaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("entrada", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
 document.getElementById("registrarSalidaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("salida", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
@@ -1826,14 +1860,7 @@ document.getElementById("cerrarCajaBtn")?.addEventListener("click", () => {
     if (connectedMode) { window.PosSales.closeDialog(); return; }
     if (!cajaActual) { showAlert("No hay ninguna caja abierta en este momento."); return; }
 
-    const resumen = calcularResumenCaja(cajaActual);
-    document.getElementById("cajaEsperadoDisplay").textContent =
-        `${sysConfig.currency}${resumen.esperado.toFixed(2)}`;
-
-    const inputEl = document.getElementById("cajaEfectivoRealInput");
-    if (inputEl) inputEl.value = "";
-
-    document.getElementById("cierreCajaModal")?.classList.remove("hidden");
+    window.PosCashSummary.open(datosCierreLocal(cajaActual));
 });
 
 document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () => {
@@ -1843,7 +1870,7 @@ document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () =>
     const inputEl = document.getElementById("cajaEfectivoRealInput");
     const real = parseFloat(inputEl?.value);
 
-    if (isNaN(real) || real < 0) {
+    if (!Number.isFinite(real) || real < 0 || !/^\d+(?:\.\d{1,2})?$/.test(inputEl.value)) {
         showAlert("Ingrese el monto real de efectivo contado.");
         inputEl?.focus();
         return;
@@ -1854,22 +1881,30 @@ document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () =>
 
     if (inputEl) inputEl.value = "";
 });
-function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map(m => { const icon = m.medioPago === "CASH" ? "Efectivo" : m.medioPago === "CARD" ? "Tarjeta" : m.medioPago === "TRANSFER" ? "Transferencia" : m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado === "pendiente" ? "Pendiente de confirmación" : m.estado === "confirmado" ? "Confirmado" : m.estado === "void" ? "Anulado" : m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="7" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${sysConfig.currency}${(s.efectivoInicial||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoEsperado||0).toFixed(2)}</td><td>${sysConfig.currency}${(s.efectivoReal||0).toFixed(2)}</td><td style="color:${difColor}; font-weight:bold;">${sysConfig.currency}${(s.diferencia||0).toFixed(2)}</td></tr>`; }).join(""); } }
+function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map(m => { const icon = m.medioPago === "CASH" ? "Efectivo" : m.medioPago === "CARD" ? "Tarjeta" : m.medioPago === "TRANSFER" ? "Transferencia" : m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado === "pendiente" ? "Pendiente de confirmación" : m.estado === "confirmado" ? "Confirmado" : m.estado === "void" ? "Anulado" : m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="8" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${cashCloseMoney(s.efectivoInicial)}</td><td>${cashCloseMoney(s.efectivoEsperado)}</td><td>${cashCloseMoney(s.efectivoReal)}</td><td style="color:${difColor}; font-weight:bold;">${cashCloseMoney(s.diferencia)}</td><td><button type="button" class="btn btn-sm btn-secondary" data-cash-detail="${escapeHtml(String(s.id))}">Detalles</button></td></tr>`; }).join(""); } }
 
 window.confirmarAbonoCaja = async function(id) {
     if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar pagos."); return; } const abono = abonosHistory.find(item => String(item.id) === String(id)); if (!abono || abono.anulado || abono.estado !== "pendiente") return; abono.estado = "confirmado"; abono.usuarioConfirmacion = currentUser.displayName; abono.fechaConfirmacion = new Date().toLocaleString(); await localDB.abonos.put(abono); await encolarSincronizacion("UPDATE", "abonos", abono); for (const session of cajaHistorial) { let changed = false; (session.movimientos || []).forEach(mov => { if (String(mov.referenciaAbonoId) === String(abono.id) && mov.estado === "pendiente") { mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = abono.fechaConfirmacion; changed = true; } }); if (changed) { await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); } } await registrarAuditoria("CAJA", "CONFIRMAR_ABONO", `Confirmó ${abono.tipo === "cliente" ? "cobro" : "pago"} de ${sysConfig.currency}${r2(abono.monto).toFixed(2)} (${abono.metodoPago || "medio no registrado"})`); renderCajaView(); };
 
 function renderCajaCentral() {
-    const validSales = salesHistory.filter(sale => !sale.anulada);
-    const validClientPayments = abonosHistory.filter(abono => abono.tipo === "cliente" && !abono.anulado);
-    const lastClosed = cajaHistorial.find(session => session.estado === "cerrada");
+    const sessionId = cajaActual?.id;
+    const inCurrentSession = record => {
+        if (!cajaActual || !record) return false;
+        if (record.cajaSessionId !== undefined && record.cajaSessionId !== null) return String(record.cajaSessionId) === String(sessionId);
+        const timestamp = Number(record.fechaTS || record.createdAt || 0);
+        return timestamp >= Number(cajaActual.fechaAperturaTS || 0);
+    };
+    const validSales = cajaActual ? salesHistory.filter(sale => !sale.anulada && inCurrentSession(sale)) : [];
+    const validClientPayments = cajaActual ? abonosHistory.filter(abono => abono.tipo === "cliente" && !abono.anulado && inCurrentSession(abono)) : [];
+    const scopedSales = cajaActual ? validSales : salesHistory.filter(sale => !sale.anulada);
+    const scopedAbonos = cajaActual ? abonosHistory.filter(abono => !abono.anulado && inCurrentSession(abono)) : abonosHistory.filter(abono => !abono.anulado);
     const activeSummary = cajaActual ? calcularResumenCaja(cajaActual) : null;
     const set = (id, value) => { const element = document.getElementById(id); if (element) element.textContent = value; };
     const money = value => `${sysConfig.currency}${r2(value).toFixed(2)}`;
     set("cajaCentralVentas", money(validSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)));
     set("cajaCentralCobros", money(validClientPayments.reduce((sum, abono) => sum + (Number(abono.monto) || 0), 0)));
-    set("cajaCentralEsperado", money(activeSummary ? activeSummary.esperado : (lastClosed?.efectivoEsperado || 0)));
-    set("cajaCentralDiferencia", money(lastClosed?.diferencia || 0));
+    set("cajaCentralEsperado", money(activeSummary?.esperado || 0));
+    set("cajaCentralDiferencia", money(activeSummary?.diferencia || 0));
 
     const userTotals = new Map();
     validSales.forEach(sale => {
@@ -1892,9 +1927,23 @@ function renderCajaCentral() {
         userBody.innerHTML = rows.length ? rows.map(([name, totals]) => `<tr><td><strong>${escapeHtml(name)}</strong></td><td>${totals.count}</td><td>${money(totals.cash)}</td><td>${money(totals.card)}</td><td>${money(totals.transfer)}</td><td>${money(totals.credit)}</td><td>${money(totals.collections)}</td><td><strong>${money(totals.total)}</strong></td></tr>`).join("") : `<tr><td colspan="8" class="text-center">Sin operaciones registradas.</td></tr>`;
     }
 
+    const scopeLabel = cajaActual ? "sesión actual" : "historial general";
+    set("cajaOperacionesTitulo", `Operaciones para revisión (${scopeLabel})`);
+    set("cajaMovimientosTitulo", `Movimientos de efectivo (${scopeLabel})`);
+    const accurateScopeLabel = cajaActual ? "sesión actual" : "historial general";
+    set("cajaOperacionesTitulo", `Operaciones para revisión (${accurateScopeLabel})`);
+    set("cajaMovimientosTitulo", `Movimientos de efectivo (${accurateScopeLabel})`);
+    const displayScopeLabel = cajaActual ? "sesi\u00f3n actual" : "historial general";
+    set("cajaOperacionesTitulo", `Operaciones para revisi\u00f3n (${displayScopeLabel})`);
+    set("cajaMovimientosTitulo", `Movimientos de efectivo (${displayScopeLabel})`);
+    const visibleOperationTitle = [...document.querySelectorAll("#cajaCentralBox h3")].find(element => element !== document.getElementById("cajaOperacionesTitulo") && element.textContent.trim().startsWith("Operaciones"));
+    if (visibleOperationTitle) visibleOperationTitle.textContent = `Operaciones para revisi\u00f3n (${displayScopeLabel})`;
+    if (visibleOperationTitle) visibleOperationTitle.textContent = `Operaciones para revisión (${accurateScopeLabel})`;
+    if (visibleOperationTitle) visibleOperationTitle.textContent = `Operaciones para revisi\u00f3n (${displayScopeLabel})`;
     const operations = [
         ...validSales.filter(sale => sale.metodo !== "Crédito").map(sale => ({ type: "Venta", reference: `Factura #${sale.numero}`, date: sale.fecha, ts: sale.fechaTS || sale.id, user: sale.vendedor, method: mediosPagoVenta[obtenerMedioPagoVenta(sale)] || sale.metodo, amount: sale.total, status: sale.estadoCaja || "registrada", id: sale.id, kind: "sale" })),
-        ...abonosHistory.filter(abono => !abono.anulado).map(abono => {
+        ...scopedSales.filter(sale => obtenerMedioPagoVenta(sale) === "credit" || !validSales.includes(sale)).map(sale => ({ type: "Venta", reference: `Factura #${sale.numero}`, date: sale.fecha, ts: sale.fechaTS || sale.id, user: sale.vendedor, method: mediosPagoVenta[obtenerMedioPagoVenta(sale)] || sale.metodo, amount: sale.total, status: sale.estadoCaja || "registrada", id: sale.id, kind: "sale" })),
+        ...scopedAbonos.map(abono => {
             const isClientPayment = abono.tipo === "cliente";
             const invoice = isClientPayment
                 ? salesHistory.find(sale => String(sale.id) === String(abono.facturaId))
@@ -1915,7 +1964,10 @@ function renderCajaCentral() {
 
     const movementBody = document.getElementById("cajaMovimientosBody");
     if (!movementBody) return;
-    const movements = cajaHistorial.flatMap(session => (session.movimientos || []).map((movement, index) => ({ session, movement, index }))).sort((a, b) => (b.movement.fechaTS || 0) - (a.movement.fechaTS || 0));
+    const movements = cajaActual
+        ? (cajaActual.movimientos || []).map((movement, index) => ({ session: cajaActual, movement, index }))
+        : cajaHistorial.flatMap(session => (session.movimientos || []).map((movement, index) => ({ session, movement, index })));
+    movements.sort((a, b) => (b.movement.fechaTS || 0) - (a.movement.fechaTS || 0));
     movementBody.innerHTML = movements.length ? movements.map(({ session, movement, index }) => {
         const status = movement.anulado ? "Anulado" : movement.estado === "pendiente" ? "Pendiente" : movement.estado === "confirmado" ? "Confirmado" : "Registrado";
         const value = movement.anulado ? `<del>${money(movement.monto)}</del>` : money(movement.monto);
@@ -1945,7 +1997,7 @@ window.registrarGastoSubmit = async function() {
     await localDB.gastos.put(nuevoGasto);
     await encolarSincronizacion("INSERT", "gastos", nuevoGasto);
     if (metodo === "caja") {
-        cajaActual.movimientos.push({ tipo: "salida", monto, concepto: `Gasto: ${categoria} - ${descripcion}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" });
+        cajaActual.movimientos.push({ tipo: "salida", monto, cajaSessionId: cajaActual.id, concepto: `Gasto: ${categoria} - ${descripcion}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" });
         await localDB.cajaSessions.put(cajaActual);
         await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual);
         renderCajaView();
@@ -1965,8 +2017,8 @@ window.eliminarGasto = function(id) {
         if (gasto.metodo === "caja" && gasto.sessionId !== null && gasto.sessionId !== undefined) {
             const session = cajaHistorial.find(item => String(item.id) === String(gasto.sessionId));
             if (session) {
-                session.movimientos.push({ tipo: "entrada", monto: gasto.monto, concepto: `Anulación Gasto: ${gasto.descripcion} (${motivo})`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" });
-                if (session.estado === "cerrada") {
+                session.movimientos.push({ tipo: "entrada", monto: gasto.monto, cajaSessionId: session.id, concepto: `Anulación Gasto: ${gasto.descripcion} (${motivo})`, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser ? currentUser.displayName : "Sistema" });
+                if (session.estado === "cerrada" && !session.resumenCierre) {
                     const summary = calcularResumenCaja(session);
                     session.efectivoEsperado = summary.esperado;
                     session.diferencia = r2((session.efectivoReal || 0) - summary.esperado);

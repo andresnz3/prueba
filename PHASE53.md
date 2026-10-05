@@ -282,3 +282,8 @@ El modo conectado conserva configuración y operaciones MySQL con autoridad del 
 
 El informe actualizado, archivos, revisión Before/After/Why, pruebas y pasos manuales están en CASH_WORKFLOW.md. Skill utilizada: .agents/skills/emil-design-eng/SKILL.md. No se hicieron commits, despliegues, cambios de cuentas ni migraciones sobre la base principal.
 Validación completada: ESLint 0 errores/advertencias; backend 57/57; MySQL aislado 90/90; suite local y fixtures HTTP 169/169; regresión final local/configuración 22/22; conectado 65/65; build público de 12 archivos idénticos; git diff --check sin errores; schema.sql sin diferencias. Bases temporales eliminadas. Capturas de escritorio y móvil revisadas.
+
+
+## Continuación: resumen previo y detalles del cierre (4 de octubre de 2026)
+
+Se implementa la revisión del corte antes de confirmar, conteo obligatorio, diferencia automática y Detalles de solo lectura en ambos modos y flujos de venta. No requiere migración nueva ni se aplicó ninguna en la base principal. Informe, límites, archivos, cambios justificados de expectativas y validación: [CASH_CLOSE_SUMMARY.md](CASH_CLOSE_SUMMARY.md). No se avanza a compras conectadas; se conserva el trabajo previo del workspace. Skill utilizada: .agents/skills/emil-design-eng/SKILL.md.

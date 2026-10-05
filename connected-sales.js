@@ -48,8 +48,9 @@
       if (result.kind === 'ORDER') { window.PosRuntime.clearCart(); showAlert('Pedido #' + result.order.id + ' enviado a Caja. No se generó factura ni se descontó inventario.'); }
       else if (result.kind === 'CANCEL_ORDER') showAlert('Pedido #' + result.order.id + ' cancelado. No se generó factura ni movimiento de caja.');
     }
-    if (result.cash) { el('cierreCajaModal').classList.add('hidden'); showAlert(result.kind === 'OPEN_CASH' ? 'Caja abierta en MySQL.' : 'Caja cerrada en MySQL.'); }
+    if (result.cash) el('cierreCajaModal').classList.add('hidden');
     if (window.PosConnected.canManageModule('cajaView')) await load('cajaView');
+    if (result.cash) showAlert(result.kind === 'OPEN_CASH' ? 'Caja abierta en MySQL.' : 'Caja cerrada en MySQL.');
   }
   const uncertain = error => error.status >= 500 || ['NETWORK_ERROR', 'INVALID_RESPONSE', 'STALE_REQUEST', 'INVALID_SESSION'].includes(error.code);
   async function perform(kind, data, action) {
@@ -197,6 +198,15 @@
     if (!overview || overview.businessId !== state().businessId) throw new window.PosApiError('INVALID_RESPONSE');
     salesFlow = overview.salesFlow; renderCheckoutMode();
     el('cajaCentralBox').classList.remove('hidden');
+    const scopeLabel = overview.currentCashSessionId ? 'sesión actual' : 'historial general';
+    el('cajaOperacionesTitulo').textContent = 'Operaciones para revisión (' + scopeLabel + ')';
+    el('cajaMovimientosTitulo').textContent = 'Movimientos de efectivo (' + scopeLabel + ')';
+    const visibleOperationTitle = [...document.querySelectorAll('#cajaCentralBox h3')].find(element => element !== el('cajaOperacionesTitulo') && element.textContent.trim().startsWith('Operaciones'));
+    if (visibleOperationTitle) visibleOperationTitle.textContent = 'Operaciones para revisión (' + scopeLabel + ')';
+    const displayScopeLabel = overview.currentCashSessionId ? 'sesi\u00f3n actual' : 'historial general';
+    el('cajaOperacionesTitulo').textContent = 'Operaciones para revisi\u00f3n (' + displayScopeLabel + ')';
+    el('cajaMovimientosTitulo').textContent = 'Movimientos de efectivo (' + displayScopeLabel + ')';
+    if (visibleOperationTitle) visibleOperationTitle.textContent = 'Operaciones para revisi\u00f3n (' + displayScopeLabel + ')';
     el('cajaCentralVentas').textContent = money(overview.salesByUser.reduce((sum, item) => sum + Number(item.total), 0));
     el('cajaCentralCobros').textContent = money(overview.customerCollections);
     el('cajaCentralEsperado').textContent = money(overview.expectedAmount);
@@ -213,23 +223,31 @@
         users.append(row);
       }
     }
-    const operations = el('cajaOperacionesBody'); pendingOrderDetails = new Map(overview.pendingOrders.map(order => [order.id, order]));
-    const paymentRows = overview.pendingPayments.map(payment => ({ kind: 'payment', id: payment.id, date: payment.createdAt, reference: 'Factura #' + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta pendiente' : 'Transferencia pendiente', amount: payment.amount }));
-    const orderRows = overview.pendingOrders.map(order => ({ kind: 'order', id: order.id, date: order.createdAt, reference: 'Pedido #' + order.id, user: order.seller, method: 'Por cobrar', amount: order.estimatedTotal }));
-    const rows = [...paymentRows, ...orderRows].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
-    if (!rows.length) fillEmpty(operations, 7, 'No hay pagos pendientes ni pedidos por cobrar.');
-    else {
-      operations.replaceChildren();
+    pendingOrderDetails = new Map([...overview.pendingOrders, ...(overview.pendingHistoricalOrders || [])].map(order => [order.id, order]));
+    const paymentRows = payments => payments.map(payment => ({ kind: 'payment', id: payment.id, date: payment.createdAt, reference: 'Factura #' + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta pendiente' : 'Transferencia pendiente', amount: payment.amount }));
+    const orderRows = orders => orders.map(order => ({ kind: 'order', id: order.id, date: order.createdAt, reference: 'Pedido #' + order.id, user: order.seller, method: 'Por cobrar', amount: order.estimatedTotal }));
+    const saleRows = sales => (sales || []).map(sale => ({ kind: 'sale', id: sale.id, date: sale.createdAt, reference: 'Factura #' + sale.invoiceNumber, user: sale.seller, method: sale.paymentMethod === 'CARD' ? 'Tarjeta' : sale.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Efectivo', amount: sale.amount }));
+    const renderOperationRows = (body, payments, orders, historical = false, additionalRows = []) => {
+      if (!body) return;
+      const rows = [...additionalRows, ...paymentRows(payments), ...orderRows(orders)].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+      if (!rows.length) { fillEmpty(body, 7, historical ? 'Sin pendientes de sesiones anteriores.' : 'No hay pagos pendientes ni pedidos por cobrar.'); return; }
+      body.replaceChildren();
       for (const item of rows) {
         const row = document.createElement('tr');
-        for (const value of [new Date(item.date).toLocaleString(), item.reference, item.user, item.method, money(item.amount), item.kind === 'payment' ? 'Pendiente de confirmación' : 'Pedido pendiente · sin factura ni descuento de inventario']) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
+        for (const value of [new Date(item.date).toLocaleString(), item.reference, item.user, item.method, money(item.amount), item.kind === 'payment' ? 'Pendiente de confirmación' : (historical ? 'Pendiente histórico · sin factura' : 'Pedido pendiente · sin factura ni descuento de inventario')]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
+        if (item.kind === 'sale') row.cells[5].textContent = 'Venta registrada';
         const actions = document.createElement('td');
-        const addAction = (label, action) => { const button = document.createElement('button'); button.type = 'button'; button.className = action === 'cancel-order' ? 'btn btn-sm btn-danger' : 'btn btn-sm btn-success'; button.textContent = label; button.dataset.action = action; button.dataset.id = item.id; actions.append(button); };
+        const addAction = (label, action, danger = false) => { const button = document.createElement('button'); button.type = 'button'; button.className = danger ? 'btn btn-sm btn-danger' : 'btn btn-sm btn-success'; button.textContent = label; button.dataset.action = action; button.dataset.id = item.id; actions.append(button); };
         if (item.kind === 'payment') addAction('Confirmar recibido', 'confirm-payment');
-        else { addAction('Detalle', 'order-detail'); addAction('Cobrar', 'charge-order'); addAction('Cancelar', 'cancel-order'); }
-        row.append(actions); operations.append(row);
+        else if (item.kind === 'order') { addAction('Detalle', 'order-detail'); addAction('Cobrar', 'charge-order'); addAction('Cancelar', 'cancel-order', true); }
+        row.append(actions); body.append(row);
       }
-    }
+    };
+    const hasOpenSession = Boolean(overview.currentCashSessionId);
+    renderOperationRows(el('cajaOperacionesBody'), overview.pendingPayments, overview.pendingOrders, false, saleRows(overview.operationSales));
+    const historicalPayments = hasOpenSession ? (overview.pendingHistoricalPayments || []) : [], historicalOrders = hasOpenSession ? (overview.pendingHistoricalOrders || []) : [];
+    renderOperationRows(el('cajaPendientesHistoricosBody'), historicalPayments, historicalOrders, true);
+    el('cajaPendientesHistoricosSection')?.classList.toggle('hidden', !hasOpenSession || (historicalPayments.length === 0 && historicalOrders.length === 0));
     const movementsBody = el('cajaMovimientosBody');
     if (!overview.movements.length) fillEmpty(movementsBody, 7, 'Sin movimientos registrados.');
     else {
@@ -247,7 +265,7 @@
     }
   }
   function mappedCash(value) {
-    return { id: value.id, businessId: value.businessId, estado: value.status === 'OPEN' ? 'abierta' : 'cerrada', efectivoInicial: Number(value.openingAmount), efectivoEsperado: Number(value.expectedAmount), efectivoReal: Number(value.countedAmount), diferencia: Number(value.difference), usuarioApertura: value.openedBy, usuarioCierre: value.closedBy, fechaApertura: new Date(value.openedAt).toLocaleString(), fechaAperturaTS: Date.parse(value.openedAt), fechaCierre: value.closedAt ? new Date(value.closedAt).toLocaleString() : null, fechaCierreTS: value.closedAt ? Date.parse(value.closedAt) : null, movimientos: (value.movements || []).map(m => ({ id: m.id, tipo: m.direction === 'IN' ? 'entrada' : 'salida', medioPago: m.payment_method, monto: Number(m.amount), concepto: m.description, usuario: m.user_name, fecha: new Date(m.created_at).toLocaleString(), fechaTS: Date.parse(m.created_at), estado: m.status === 'PENDING' ? 'pendiente' : m.status === 'CONFIRMED' ? 'confirmado' : 'void' })), connectedSales: (value.movements || []).filter(m => m.type === 'SALE' && m.status === 'CONFIRMED').reduce((sum, m) => sum + Number(m.amount), 0), connectedExpected: Number(value.expectedAmount) };
+    return { connectedCloseData: { ...value, openedAt: new Date(value.openedAt).toLocaleString(), closedAt: value.closedAt ? new Date(value.closedAt).toLocaleString() : new Date().toLocaleString(), closedBy: value.closedBy || value.closingBy }, id: value.id, businessId: value.businessId, estado: value.status === 'OPEN' ? 'abierta' : 'cerrada', efectivoInicial: Number(value.openingAmount), efectivoEsperado: Number(value.expectedAmount), efectivoReal: Number(value.countedAmount), diferencia: Number(value.difference), usuarioApertura: value.openedBy, usuarioCierre: value.closedBy, fechaApertura: new Date(value.openedAt).toLocaleString(), fechaAperturaTS: Date.parse(value.openedAt), fechaCierre: value.closedAt ? new Date(value.closedAt).toLocaleString() : null, fechaCierreTS: value.closedAt ? Date.parse(value.closedAt) : null, movimientos: (value.movements || []).map(m => ({ id: m.id, tipo: m.direction === 'IN' ? 'entrada' : 'salida', medioPago: m.payment_method, monto: Number(m.amount), concepto: m.description, usuario: m.user_name, fecha: new Date(m.created_at).toLocaleString(), fechaTS: Date.parse(m.created_at), estado: m.status === 'PENDING' ? 'pendiente' : m.status === 'CONFIRMED' ? 'confirmado' : 'void' })), connectedSales: (value.movements || []).filter(m => m.type === 'SALE' && m.status === 'CONFIRMED').reduce((sum, m) => sum + Number(m.amount), 0), connectedExpected: Number(value.expectedAmount) };
   }
   function renderCash(overview) { renderCajaViewBase(); if (overview) renderCentral(overview); }
   async function load(view) {
@@ -269,7 +287,7 @@
     await perform('OPEN_CASH', { openingAmount: value }, (client, input) => client.openCash(input));
   }
   async function closeDialog() {
-    try { currentCash = await api(client => client.currentCash(true)); if (!currentCash) throw new window.PosApiError('CASH_CLOSED', 409); el('cajaEsperadoDisplay').textContent = 'C$' + currentCash.expectedAmount; el('cajaEfectivoRealInput').value = ''; el('cierreCajaModal').classList.remove('hidden'); el('cajaEfectivoRealInput').focus(); }
+    try { currentCash = await api(client => client.currentCash(true)); if (!currentCash) throw new window.PosApiError('CASH_CLOSED', 409); window.PosCashSummary.open(mappedCash(currentCash).connectedCloseData); }
     catch (error) { showAlert(error.message); }
   }
   async function closeCash() {
@@ -289,7 +307,7 @@
   el('confirmConnectedSaleBtn').addEventListener('click', confirm); el('recoverSaleBtn').addEventListener('click', recover);
   el('connectedOrderPaymentMethod').addEventListener('change', refreshOrderQuote);
   el('connectedCheckoutModal').querySelector('.close-modal-btn').addEventListener('click', () => { activeOrderId = null; quote = quoteInput = null; });
-  el('cajaOperacionesBody').addEventListener('click', event => {
+  const handleOperationAction = event => {
     const button = event.target.closest('button[data-action]'); if (!button) return;
     const id = button.dataset.id, action = button.dataset.action;
     if (action === 'confirm-payment') confirmPayment(id);
@@ -300,7 +318,8 @@
       const detail = order.items.map(item => item.name + ' × ' + Number(item.quantity) + ' · C$' + item.estimatedSubtotal).join('\n');
       showAlert('Pedido #' + order.id + ' · ' + order.seller + '\n' + detail + '\nEstimado al preparar: C$' + order.estimatedTotal + '. Precio y stock se volverán a validar al cobrar.');
     }
-  });
+  };
+  for (const id of ['cajaOperacionesBody', 'cajaPendientesHistoricosBody']) el(id)?.addEventListener('click', handleOperationAction);
   el('cajaMovimientosBody').addEventListener('click', event => { const button = event.target.closest('button[data-action="confirm-payment"]'); if (button) confirmPayment(button.dataset.id); });
   el('saveConnectedSalesFlow').addEventListener('click', async () => {
     const button = el('saveConnectedSalesFlow'); button.disabled = true;

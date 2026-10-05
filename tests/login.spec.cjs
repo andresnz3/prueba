@@ -3040,7 +3040,7 @@ test.describe("CAJA:", () => {
       await expect(page.locator("#statementTableBody")).toContainText("C$7.25");
     });
 
-    test("pago efectivo enlaza una sola salida a Caja; cancelar anulación conserva datos y anular después del cierre corrige historial", async ({ page }) => {
+    test("pago efectivo enlaza una sola salida a Caja; cancelar anulación conserva datos y anular después del cierre conserva el arqueo original", async ({ page }) => {
       await iniciarSesion(page);
       await crearProductoParaPayables(page, "PAYABLES-CASH-001", "Producto para pago efectivo");
       await registrarCompraPayables(page, {
@@ -3112,10 +3112,10 @@ test.describe("CAJA:", () => {
       await page.locator("#statementModal .close-modal-btn").click();
       await page.locator("#navCajaBtn").click();
       const closedSession = page.locator("#cajaHistorialBody tr").first();
-      await expect(closedSession.locator("td").nth(3)).toHaveText("C$100.00");
-      await expect(closedSession.locator("td").nth(4)).toHaveText("C$100.00");
-      await expect(closedSession.locator("td").nth(5)).toHaveText("C$95.00");
-      await expect(closedSession.locator("td").nth(6)).toHaveText("C$-5.00");
+      await expect(closedSession.locator("td").nth(3)).toHaveText("C$ 100.00");
+      await expect(closedSession.locator("td").nth(4)).toHaveText("C$ 95.00");
+      await expect(closedSession.locator("td").nth(5)).toHaveText("C$ 95.00");
+      await expect(closedSession.locator("td").nth(6)).toHaveText("C$ 0.00");
 
       await page.reload();
       await iniciarSesion(page);
@@ -3126,7 +3126,7 @@ test.describe("CAJA:", () => {
       await page.locator("#navReportesBtn").click();
       await expect(page.locator("#repCxP")).toHaveText("C$20.00");
       await page.locator("#navCajaBtn").click();
-      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$-5.00");
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$ 0.00");
     });
   });
 
@@ -3348,9 +3348,9 @@ test.describe("CAJA:", () => {
       await page.locator("#customAlertModal .close-modal-btn").click();
       await page.locator("#navCajaBtn").click();
       await expect(page.locator("#cajaAbrirBox")).toBeVisible();
-      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$20.00");
-      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$17.00");
-      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$-3.00");
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$ 20.00");
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$ 17.00");
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$ 0.00");
 
       await page.reload();
       await iniciarSesion(page);
@@ -3366,8 +3366,8 @@ test.describe("CAJA:", () => {
       await page.locator('.rep-subtab[data-target="repGastosBox"]').click();
       await expect(page.locator("#repGastosCategoriaBody")).toContainText("C$2.50");
       await page.locator("#navCajaBtn").click();
-      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$20.00");
-      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$-3.00");
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$ 20.00");
+      await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$ 0.00");
     });
   });
 
@@ -3409,11 +3409,11 @@ test.describe("CAJA:", () => {
     await expect(page.locator("#cajaResumenInicial")).toHaveText("C$0.00");
     await expect(page.locator("#cajaAbrirBox")).toBeHidden();
     await page.locator("#cerrarCajaBtn").click();
-    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$0.00");
+    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$ 0.00");
     await page.locator("#cajaEfectivoRealInput").fill("0");
     await page.locator("#confirmCierreCajaBtn").click();
     await expect(page.locator("#cajaAbiertaBox")).toBeHidden();
-    await expect(page.locator("#cajaHistorialBody")).toContainText("C$0.00");
+    await expect(page.locator("#cajaHistorialBody")).toContainText("C$ 0.00");
   });
 
   test("valida movimientos manuales, calcula decimales y confirma movimientos", async ({ page }) => {
@@ -3695,7 +3695,7 @@ test.describe("CAJA:", () => {
     await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Pago Factura FACT-CAJA-001: Proveedor pago Caja");
   });
 
-  test("cierra con validación y diferencia, permite corregir y anular movimientos del historial, conserva sesiones y reporta cierres", async ({ page }) => {
+  test("cierra con validación y diferencia, separa movimientos del historial y reporta cierres", async ({ page }) => {
     await iniciarSesion(page);
     await abrirCajaDesdeUI(page, "100.10");
 
@@ -3703,30 +3703,29 @@ test.describe("CAJA:", () => {
     await page.locator("#cajaMovimientoMonto").fill("20.20");
     await page.locator("#registrarEntradaBtn").click();
     await page.locator("#cerrarCajaBtn").click();
-    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$120.30");
+    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$ 120.30");
 
-    await page.locator("#confirmCierreCajaBtn").click();
-    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese el monto real de efectivo contado");
-    await page.locator("#customAlertModal .close-modal-btn").click();
+    await expect(page.locator("#confirmCierreCajaBtn")).toBeDisabled();
+    await expect(page.locator("#cajaCierreDiferencia")).toContainText("Ingrese el efectivo real contado");
     await page.locator("#cajaEfectivoRealInput").fill("-1");
-    await page.locator("#confirmCierreCajaBtn").click();
-    await expect(page.locator("#customAlertMessage")).toContainText("Ingrese el monto real de efectivo contado");
-    await page.locator("#customAlertModal .close-modal-btn").click();
+    await expect(page.locator("#confirmCierreCajaBtn")).toBeDisabled();
+    await expect(page.locator("#cajaCierreDiferencia")).toContainText("Ingrese el efectivo real contado");
     await page.locator("#cajaEfectivoRealInput").fill("125.30");
     await page.locator("#confirmCierreCajaBtn").click();
     await expect(page.locator("#cajaAbiertaBox")).toBeHidden();
     await expect(page.locator("#cajaAbrirBox")).toBeVisible();
     await expect(page.locator("#cajaHistorialBody tr")).toHaveCount(1);
     const firstClosedRow = page.locator("#cajaHistorialBody tr").first();
-    await expect(firstClosedRow).toContainText("C$100.10");
-    await expect(firstClosedRow).toContainText("C$120.30");
-    await expect(firstClosedRow).toContainText("C$125.30");
-    await expect(firstClosedRow).toContainText("C$5.00");
+    await expect(firstClosedRow).toContainText("C$ 100.10");
+    await expect(firstClosedRow).toContainText("C$ 120.30");
+    await expect(firstClosedRow).toContainText("C$ 125.30");
+    await expect(firstClosedRow).toContainText("C$ 5.00");
     await page.locator("#customAlertModal .close-modal-btn").click();
 
-    let movementRow = page.locator("#cajaCentralBox #cajaMovimientosBody tr").filter({
-      hasText: "Ingreso registrado"
-    });
+    await expect(page.locator("#cajaOperacionesTitulo")).toContainText("historial general");
+    await expect(page.locator("#cajaMovimientosTitulo")).toContainText("historial general");
+    await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Ingreso registrado");
+    let movementRow = page.locator("#cajaCentralBox #cajaMovimientosBody tr").filter({ hasText: "Ingreso registrado" });
     await movementRow.getByRole("button", { name: "Corregir" }).click();
     await page.locator("#cashCorrectionNewAmount").fill("0");
     await page.locator("#cashCorrectionReason").fill("Corrección inválida");
@@ -3741,13 +3740,8 @@ test.describe("CAJA:", () => {
     await page.locator("#cashCorrectionReason").fill("Conteo revisado");
     await page.locator("#confirmCashCorrectionBtn").click();
     await expect(page.locator("#customAlertMessage")).toContainText("Corrección registrada");
-    await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$125.30");
-    await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$0.00");
     await page.locator("#customAlertModal .close-modal-btn").click();
-
-    movementRow = page.locator("#cajaCentralBox #cajaMovimientosBody tr").filter({
-      hasText: "Ingreso registrado"
-    });
+    movementRow = page.locator("#cajaCentralBox #cajaMovimientosBody tr").filter({ hasText: "Ingreso registrado" });
     await movementRow.getByRole("button", { name: "Anular" }).click();
     await page.locator("#anularRegistroForm button[type='submit']").click();
     await expect(page.locator("#anularRegistroModal")).toBeVisible();
@@ -3755,18 +3749,16 @@ test.describe("CAJA:", () => {
     await page.locator("#anularRegistroMotivo").fill("Movimiento duplicado");
     await page.locator("#anularRegistroForm button[type='submit']").click();
     await expect(page.locator("#customAlertMessage")).toContainText("Movimiento anulado");
-    await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$100.10");
-    await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$25.20");
     await page.locator("#customAlertModal .close-modal-btn").click();
 
     await abrirCajaDesdeUI(page, "10.50");
     await page.locator("#cerrarCajaBtn").click();
-    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$10.50");
+    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$ 10.50");
     await page.locator("#cajaEfectivoRealInput").fill("10.50");
     await page.locator("#confirmCierreCajaBtn").click();
     await expect(page.locator("#cajaHistorialBody tr")).toHaveCount(2);
-    await expect(page.locator("#cajaHistorialBody tr").nth(1)).toContainText("C$100.10");
-    await expect(page.locator("#cajaHistorialBody tr").nth(1)).toContainText("C$25.20");
+    await expect(page.locator("#cajaHistorialBody tr").nth(1)).toContainText("C$ 100.10");
+    await expect(page.locator("#cajaHistorialBody tr").nth(1)).toContainText("C$ 5.00");
     await expect(page.locator("#customAlertModal .close-modal-btn")).toBeVisible();
     await page.locator("#customAlertModal .close-modal-btn").click();
 
@@ -3780,8 +3772,8 @@ test.describe("CAJA:", () => {
     await expect(page.locator("#reportesView")).toBeVisible();
     await page.locator('.rep-subtab[data-target="repCajaBox"]').click();
     await expect(page.locator("#repCajaBody tr")).toHaveCount(2);
-    await expect(page.locator("#repCajaBody")).toContainText("C$100.10");
-    await expect(page.locator("#repCajaBody")).toContainText("C$25.20");
+    await expect(page.locator("#repCajaBody")).toContainText("C$120.30");
+    await expect(page.locator("#repCajaBody")).toContainText("C$5.00");
     await expect(page.locator("#repCajaBody")).toContainText("C$10.50");
   });
 });

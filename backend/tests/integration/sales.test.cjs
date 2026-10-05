@@ -88,9 +88,9 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     assert.equal((await one.request('/operations/'+input.operationKey)).status,404);
   });
   await t.test('tarjeta y transferencia registran turno sin aumentar efectivo',async()=>{
-    const before=(await admin.request('/cash/current?full=true')).data.cash.expectedAmount, movements=await count('cash_movements');
+    const before=(await admin.request('/cash/current?full=true')).data.cash.expectedAmount, movements=await count('cash_movements'), movementMax=(await rows(pool,'SELECT COALESCE(MAX(id),0) AS id FROM cash_movements WHERE business_id = ?',[business]))[0].id;
     for(const paymentMethod of ['CARD','TRANSFER']) {const r=await one.request('/sales','POST',await body(one,{paymentMethod,priceType:'WHOLESALE'}));assert.equal(r.status,201);assert.equal(r.data.sale.total,'11.48');assert.equal(r.data.sale.cashReceived,null);assert.equal(r.data.sale.cashSessionId,cash.id);assert.equal(r.data.sale.cashStatus,'PENDING');}
-    const added=await rows(pool,"SELECT s.payment_method, m.status, m.amount FROM cash_movements m JOIN sales s ON s.business_id=m.business_id AND s.id=m.sale_id WHERE m.business_id = ? AND m.id > ? ORDER BY m.id",[business,movements]);assert.deepEqual(added.map(m=>[m.payment_method,m.status,m.amount]),[['CARD','PENDING','11.48'],['TRANSFER','PENDING','11.48']]);
+    const added=await rows(pool,"SELECT s.payment_method, m.status, m.amount FROM cash_movements m JOIN sales s ON s.business_id=m.business_id AND s.id=m.sale_id WHERE m.business_id = ? AND m.id > ? ORDER BY m.id",[business,movementMax]);assert.deepEqual(added.map(m=>[m.payment_method,m.status,m.amount]),[['CARD','PENDING','11.48'],['TRANSFER','PENDING','11.48']]);
     assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount,before);assert.equal(await count('cash_movements'),movements+2);
   });
   await t.test('precios cambiados requieren confirmar nueva cotizacion',async()=>{
@@ -148,6 +148,11 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
   await t.test('cierre idempotente persiste arqueo y bloquea ventas y devoluciones originales',async()=>{
     const latest=(await admin.request('/sales?limit=1')).data.sales[0], before=await count('sales');const expected=(await admin.request('/cash/current?full=true')).data.cash.expectedAmount, data={operationKey:randomUUID(),countedAmount:expected};
     const a=await admin.request('/cash/sessions/'+cash.id+'/close','POST',data),b=await admin.request('/cash/sessions/'+cash.id+'/close','POST',data);assert.equal(a.status,200);assert.equal(b.status,200);assert.equal(a.data.cash.status,'CLOSED');assert.equal(a.data.cash.difference,'0.00');
+    assert.deepEqual(a.data.cash.summary,b.data.cash.summary);
+    assert.equal(a.data.cash.closedBy,'salesadmin'); assert.ok(a.data.cash.openedAt); assert.ok(a.data.cash.closedAt);
+    const breakdown=a.data.cash.summary; assert.equal(breakdown.purchases,'0.00');
+    assert.equal((Number(a.data.cash.openingAmount)+Number(breakdown.cashSales)+Number(breakdown.cashCollections)+Number(breakdown.otherCash)-Number(breakdown.expenses)-Number(breakdown.withdrawals)-Number(breakdown.purchases)-Number(breakdown.cashReturns)).toFixed(2),a.data.cash.expectedAmount);
+    const saved=(await admin.request('/cash/sessions')).data.sessions.find(s=>s.id===cash.id); assert.deepEqual(saved.summary,breakdown); assert.equal(saved.expectedAmount,expected);
     assert.equal((await one.request('/sales/quote','POST',cart())).data.error.code,'CASH_CLOSED');
     assert.equal((await admin.request('/sales/'+latest.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Caja cerrada'})).data.error.code,'CASH_ORIGINAL_CLOSED');assert.equal(await count('sales'),before);
     assert.equal((await admin.request('/cash/sessions')).data.sessions[0].status,'CLOSED');
@@ -220,15 +225,19 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     assert.equal((await one.request('/sales/quote','POST',cart())).data.error.code,'SALES_FLOW_CHANGED');
     const beforeStock=await stock(product.id), beforeSales=await count('sales'), beforeMovements=await count('cash_movements');
     const orderInput={items:[{productId:product.id,quantity:'1.125'}],priceType:'RETAIL',discountPercent:'0',detail:'Pedido de caja',operationKey:randomUUID()};
+    const rejected=await one.request('/sales/orders','POST',orderInput);assert.equal(rejected.status,409);assert.equal(rejected.data.error.code,'CASH_CLOSED');
+    assert.equal(await count('sales'),beforeSales);assert.equal(await count('cash_movements'),beforeMovements);
+    await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'5.00'});
     const created=await one.request('/sales/orders','POST',orderInput);assert.equal(created.status,201);assert.equal(created.data.order.status,'PENDING');
     assert.equal((await one.request('/sales/orders','POST',orderInput)).data.order.id,created.data.order.id);
+    current=(await admin.request('/cash/current?full=true')).data.cash;await admin.request('/cash/sessions/'+current.id+'/close','POST',{operationKey:randomUUID(),countedAmount:current.expectedAmount});
     assert.equal((await stock(product.id)),beforeStock);assert.equal(await count('sales'),beforeSales);assert.equal(await count('cash_movements'),beforeMovements);
     assert.equal((await one.request('/cash/orders/'+created.data.order.id+'/quote','POST',{paymentMethod:'CASH'})).status,403);
     assert.equal((await admin.request('/cash/orders/'+created.data.order.id+'/quote','POST',{paymentMethod:'CASH'})).data.error.code,'CASH_CLOSED');
     assert.equal((await admin.request('/business-settings/sales-flow','PUT',{salesFlow:'DIRECT'})).data.error.code,'PENDING_ORDERS_EXIST');
+    await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'5.00'});
     const second=(await one.request('/sales/orders','POST',{...orderInput,operationKey:randomUUID(),detail:'Pedido para cancelar'})).data.order;
     assert.equal((await admin.request('/cash/orders/'+second.id+'/cancel','POST',{operationKey:randomUUID()})).data.order.status,'CANCELLED');
-    await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'5.00'});
     const live=await admin.request('/products/'+product.id);await admin.request('/products/'+product.id,'PATCH',{revision:live.data.product.revision,retailPrice:'15.00'});
     const quoteResponse=await admin.request('/cash/orders/'+created.data.order.id+'/quote','POST',{paymentMethod:'CARD'}), q=quoteResponse.data.quote;
     assert.equal(quoteResponse.status,200);assert.equal(q.priceChanged,true);assert.equal(q.estimatedTotal,created.data.order.estimatedTotal);assert.equal(q.total,'16.88');
@@ -241,10 +250,33 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount,'5.00');
     current=(await admin.request('/cash/current?full=true')).data.cash;
     await admin.request('/cash/sessions/'+current.id+'/close','POST',{operationKey:randomUUID(),countedAmount:current.expectedAmount});
-    const overview=(await admin.request('/cash/overview')).data.overview,payment=overview.pendingPayments.find(item=>item.saleId===charged.data.sale.id);
+    const overview=(await admin.request('/cash/overview')).data.overview,payment=[...overview.pendingPayments,...(overview.pendingHistoricalPayments||[])].find(item=>item.saleId===charged.data.sale.id);
     assert.ok(payment);assert.equal((await admin.request('/cash/payments/'+payment.id+'/confirm','POST',{operationKey:randomUUID()})).status,200);
-    assert.equal((await admin.request('/cash/overview')).data.overview.expectedAmount,'5.00');
+    assert.equal((await admin.request('/cash/overview')).data.overview.expectedAmount,'0.00');
     assert.equal((await admin.request('/business-settings/sales-flow','PUT',{salesFlow:'DIRECT'})).status,200);
+  });
+  await t.test('resumen de Caja solo incluye la sesión abierta y separa pendientes históricos', async () => {
+    const previous = (await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'1.00'})).data.cash;
+    const oldCard = (await one.request('/sales','POST',await body(one,{paymentMethod:'CARD'}))).data.sale;
+    const oldSummary = (await admin.request('/cash/current?full=true')).data.cash;
+    await admin.request('/cash/sessions/'+previous.id+'/close','POST',{operationKey:randomUUID(),countedAmount:oldSummary.expectedAmount});
+    const current = (await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'2.00'})).data.cash;
+    const currentSale = (await one.request('/sales','POST',await body(one,{paymentMethod:'CASH'}))).data.sale;
+    const overview = (await admin.request('/cash/overview')).data.overview;
+    assert.equal(overview.currentCashSessionId,current.id);
+    assert.equal(overview.salesByUser.reduce((sum,item)=>sum+Number(item.total),0).toFixed(2),currentSale.total);
+    assert.ok(overview.movements.length > 0);
+    assert.ok(overview.movements.every(item=>item.cashSessionId===current.id));
+    assert.equal(overview.pendingPayments.some(item=>item.saleId===oldCard.id),false);
+    assert.equal(overview.pendingHistoricalPayments.some(item=>item.saleId===oldCard.id),true);
+    assert.equal(overview.expectedAmount,(2+Number(currentSale.total)).toFixed(2));
+     await admin.request('/cash/sessions/'+current.id+'/close','POST',{operationKey:randomUUID(),countedAmount:overview.expectedAmount});
+     const closedOverview = (await admin.request('/cash/overview')).data.overview;
+     assert.equal(closedOverview.currentCashSessionId,null);
+     assert.ok(closedOverview.operationSales.some(item=>item.id===currentSale.id));
+     assert.ok(closedOverview.movements.some(item=>item.saleId===currentSale.id));
+     assert.ok(closedOverview.pendingPayments.some(item=>item.saleId===oldCard.id));
+    await admin.request('/sales/'+oldCard.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Limpiar pendiente histórico'});
   });
   await t.test('auditoria contiene operaciones y nunca contrasenas ni tokens',async()=>{
     const records=await rows(pool,'SELECT action, details FROM audit_logs WHERE business_id = ?',[business]);for(const action of ['CREATE_SALE','CANCEL_SALE','OPEN_CASH','CLOSE_CASH','RESOLVE_OPERATION','CONFIRM_NONCASH_PAYMENT','PREPARE_SALE_ORDER','CANCEL_SALE_ORDER','CHANGE_SALES_FLOW'])assert.ok(records.some(r=>r.action===action));

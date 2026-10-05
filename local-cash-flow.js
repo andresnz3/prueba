@@ -105,11 +105,15 @@
     if (busy) return;
     busy = true;
     try {
+      const openSessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: 'abierta' }).toArray();
+      if (openSessions.length !== 1) fail(MSG_SIN_CAJA);
       const input = cartInput();
       await localDB.transaction('rw', tables(), async () => {
         if (flow() !== 'CENTRALIZED') fail('El flujo de venta cambió.');
+        const sessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: 'abierta' }).toArray();
+        if (sessions.length !== 1) fail(MSG_SIN_CAJA);
         const calc = await quote(input);
-        const order = { id: crypto.randomUUID(), business_id: DEFAULT_BUSINESS_ID, status: 'PENDING', createdAt: Date.now(), input, estimatedTotal: calc.total };
+        const order = { id: crypto.randomUUID(), business_id: DEFAULT_BUSINESS_ID, cajaSessionId: sessions[0].id, status: 'PENDING', createdAt: Date.now(), input, estimatedTotal: calc.total };
         await localDB.saleOrders.add(order); await audit('PREPARAR_ORDEN', 'Orden ' + order.id + '; sin factura ni movimiento de dinero.');
       });
       cart.splice(0); resetearDescuentoVenta(); actualizarCarrito(); await loadOrders(); render();
@@ -192,15 +196,27 @@
     el('saveConnectedSalesFlow').disabled = loading || busy || !isAdmin('cajaView');
     el('processSaleBtn').textContent = flow() === 'CENTRALIZED' ? 'Enviar a Caja' : 'Procesar / Cobrar Venta';
     el('connectedSalesFlowMessage').textContent = flow() === 'CENTRALIZED' ? 'Caja centralizada local: prepara órdenes sin factura ni dinero; Caja confirma y cobra.' : 'Venta directa local: el vendedor cobra desde Punto de Venta.';
-    const body = el('cajaOperacionesBody');
+    const body = el('cajaOperacionesBody'), historicalBody = el('cajaPendientesHistoricosBody'), historicalSection = el('cajaPendientesHistoricosSection');
+    const belongsToCurrent = order => cajaActual && (order.cajaSessionId !== undefined && order.cajaSessionId !== null ? String(order.cajaSessionId) === String(cajaActual.id) : Number(order.createdAt) >= Number(cajaActual.fechaAperturaTS));
+    const hasOpenSession = Boolean(cajaActual);
+    const currentOrders = orders.filter(o => o.status === 'PENDING' && (hasOpenSession ? belongsToCurrent(o) : true)).sort((a,b) => b.createdAt-a.createdAt);
+    const historicalOrders = hasOpenSession ? orders.filter(o => o.status === 'PENDING' && !belongsToCurrent(o)).sort((a,b) => b.createdAt-a.createdAt) : [];
     body.querySelectorAll('tr[data-local-order]').forEach(row => row.remove());
-    if (orders.some(o => o.status === 'PENDING')) body.querySelectorAll('td[colspan]').forEach(cell => cell.closest('tr').remove());
-    for (const order of orders.filter(o => o.status === 'PENDING').sort((a,b) => b.createdAt-a.createdAt)) {
+    historicalBody?.querySelectorAll('tr[data-local-order]').forEach(row => row.remove());
+    if (currentOrders.length) body.querySelectorAll('td[colspan]').forEach(cell => cell.closest('tr').remove());
+    if (historicalBody) historicalBody.innerHTML = historicalOrders.length ? '' : '<tr><td colspan="7" class="text-center">Sin pendientes de sesiones anteriores.</td></tr>';
+    historicalSection?.classList.toggle('hidden', historicalOrders.length === 0);
+    for (const order of currentOrders) {
       const row = document.createElement('tr'); row.dataset.localOrder = order.id;
       for (const value of [new Date(order.createdAt).toLocaleString(), 'Orden pendiente · sin factura', order.input.seller, mediosPagoVenta[order.input.suggestedMethod], sysConfig.currency + order.estimatedTotal.toFixed(2), 'Pendiente de cobro']) { const td = document.createElement('td'); td.textContent = value; row.append(td); }
       const td = document.createElement('td');
       for (const [label,action] of [['Cobrar',startCharge],['Cancelar',cancelOrder]]) { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-sm ' + (label === 'Cobrar' ? 'btn-success' : 'btn-secondary'); b.textContent = label; b.disabled = !isAdmin('cajaView'); b.dataset.orderId = order.id; b.addEventListener('click',() => action(order.id)); td.append(b); }
       row.append(td); body.prepend(row);
+    }
+    for (const order of historicalOrders) {
+      const row = document.createElement('tr'); row.dataset.localOrder = order.id;
+      for (const value of [new Date(order.createdAt).toLocaleString(), 'Orden de sesi�n anterior � sin factura', order.input.seller, mediosPagoVenta[order.input.suggestedMethod], sysConfig.currency + order.estimatedTotal.toFixed(2), 'Pendiente de resoluci�n']) { const td = document.createElement('td'); td.textContent = value; row.append(td); }
+      const td = document.createElement('td'); const detail = document.createElement('button'); detail.type = 'button'; detail.className = 'btn btn-sm btn-secondary'; detail.textContent = 'Detalle'; detail.addEventListener('click', () => showAlert('Orden #' + order.id + ' de una sesi�n anterior. El cobro se registrar� en la sesi�n actual de Caja.')); td.append(detail); const charge = document.createElement('button'); charge.type = 'button'; charge.className = 'btn btn-sm btn-success'; charge.textContent = 'Cobrar'; charge.disabled = !isAdmin('cajaView'); charge.addEventListener('click', () => startCharge(order.id)); td.append(charge); const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-sm btn-secondary'; cancel.textContent = 'Cancelar'; cancel.disabled = !isAdmin('cajaView'); cancel.addEventListener('click', () => cancelOrder(order.id)); td.append(cancel); row.append(td); historicalBody?.append(row);
     }
   }
   el('saveConnectedSalesFlow').addEventListener('click', async () => {

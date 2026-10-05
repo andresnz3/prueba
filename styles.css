@@ -275,3 +275,14 @@ input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
 
 .field-error { display: block; color: #b91c1c; font-size: .85rem; margin-top: 5px; }
 [aria-invalid="true"] { border-color: #b91c1c !important; outline-color: #b91c1c; }
+
+/* Cash closing review: readable amounts and scrollable modal on small screens. */
+#cierreCajaModal .modal-card, #detalleCierreCajaModal .modal-card { max-height: 90vh; overflow-y: auto; width: min(640px, 94vw); max-width: 640px; }
+.cash-close-row { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; border-bottom: 1px solid #e5e7eb; }
+.cash-close-row strong { text-align: right; font-variant-numeric: tabular-nums; }
+.cash-close-note { margin: 12px 0; color: #4b5563; font-size: .875rem; }
+#cajaCierreDiferencia { font-weight: 600; margin: 12px 0; }
+
+.cash-close-row span { min-width: 0; }
+.cash-close-row strong { flex-shrink: 0; white-space: nowrap; }
+.cash-close-row:nth-child(-n+3) strong { flex-shrink: 1; white-space: normal; max-width: 55%; }

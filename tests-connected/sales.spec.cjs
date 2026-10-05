@@ -7,17 +7,17 @@ test.beforeEach(async ({page})=>{const list=[];errors.set(page,list);page.on('pa
 test.afterEach(async ({page})=>{expect(errors.get(page)).toEqual([]);});
 async function login(page,username='browseradmin') {
   await page.goto('/?mode=connected');await expect(page.locator('#loginForm button')).toBeEnabled();
-  await page.locator('#loginBusinessId').fill(business);await page.locator('#loginUsername').fill(username);await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button').click();await expect(page.locator('#app')).toBeVisible();
+  await page.locator('#loginBusinessId').fill(business);await page.locator('#loginUsername').fill(username);await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button').click();await expect(page.locator('#app')).toBeVisible();await expect(page.locator('#app')).toHaveJSProperty('inert',false);
 }
 async function call(page,method,...args) {
   return page.evaluate(async({method,args})=>{const client=new window.PosApiClient(window.POS_API_BASE_URL);await client.me();return client[method](...args);},{method,args});
 }
 async function fixture(page) {
   await login(page);const current=await call(page,'currentCash',true);if(current)await call(page,'closeCash',current.id,{operationKey:randomUUID(),countedAmount:current.expectedAmount});
-  const overview=await call(page,'cashOverview');for(const order of overview.pendingOrders)await call(page,'cancelOrder',order.id,{operationKey:randomUUID()});if(overview.salesFlow!=='DIRECT')await call(page,'setSalesFlow','DIRECT');
+  const overview=await call(page,'cashOverview');for(const order of [...overview.pendingOrders,...(overview.pendingHistoricalOrders||[])])await call(page,'cancelOrder',order.id,{operationKey:randomUUID()});if(overview.salesFlow!=='DIRECT')await call(page,'setSalesFlow','DIRECT');
   const cash=(await call(page,'openCash',{operationKey:randomUUID(),openingAmount:'100'})).cash;
   const product=await call(page,'createProduct',{barcode:'S-'+randomUUID(),name:'Venta '+randomUUID(),category:'Bebidas',cost:'7',marginRetail:'25',marginWholesale:'10',retailPrice:'12.31',wholesalePrice:'11.34',stock:'10.125',minStock:'0'});
-  await page.locator('#navSalesBtn').click();await expect(page.locator('#productGrid')).toContainText(product.name);
+  await page.locator('#navSalesBtn').click();await expect(page.locator('#app')).toHaveJSProperty('inert',false);await expect(page.locator('#productGrid')).toContainText(product.name);
   return {product,cash};
 }
 async function add(page,product) {await page.locator('#barcodeInput').fill(product.barcode);await page.locator('#addBarcodeBtn').click();await expect(page.locator('#cartItems')).toContainText(product.name);}
@@ -52,11 +52,27 @@ test('Caja e Historial distinguen efectivo confirmado y pagos pendientes',async(
     await add(page,product);await page.locator('input[name=paymentMethod][value='+method+']').check();await page.locator('#processSaleBtn').click();await expect(page.locator('#ticketModal')).toBeVisible();
     const sale=(await call(page,'sales')).find(value=>value.paymentMethod===method.toUpperCase()&&value.items.some(item=>item.productId===product.id));expect(sale.cashStatus).toBe('PENDING');await page.locator('#newSaleBtn').click();
     await page.locator('#navCajaBtn').click();cash=await call(page,'currentCash',true);movement=cash.movements.find(value=>value.saleId===sale.id);expect(movement.status).toBe('PENDING');expect(movement.payment_method).toBe(method.toUpperCase());
-    row=page.locator('#cajaMovimientosBody tr').filter({hasText:method==='card'?'Tarjeta':'Transferencia'});await expect(row).toContainText('Pendiente de confirmaci\u00f3n');
+    row=page.locator('#cajaMovimientosBody tr').filter({hasText:'Venta #'+sale.invoiceNumber});await expect(row).toContainText('Pendiente de confirmaci\u00f3n');
     await page.locator('#navHistoryBtn').click();saleRow=page.locator('#historyTableBody tr').filter({hasText:'#'+sale.invoiceNumber});await expect(saleRow).toContainText(method==='card'?'TARJETA':'TRANSFERENCIA');await expect(saleRow).toContainText('PENDIENTE DE CONFIRMACI\u00d3N');
     await page.locator('#navSalesBtn').click();
   }
   cash=await call(page,'currentCash',true);expect(cash.expectedAmount).toBe('112.31');expect(cash.expectedAmount).not.toBe(before);expect(cash.movements.filter(value=>value.status==='PENDING')).toHaveLength(2);
+});
+test('Caja conectada nueva solo muestra su sesión y separa pendientes anteriores', async ({page}) => {
+  const {product, cash} = await fixture(page);
+  await add(page, product); await checkout(page); await confirm(page); await expect(page.locator('#ticketModal')).toBeVisible(); await page.locator('#newSaleBtn').click();
+  const cardInput = {items:[{productId:product.id, quantity:'1.000'}], priceType:'RETAIL', discountPercent:'0', paymentMethod:'CARD'}; const cardQuote = await call(page, 'quoteSale', cardInput); const oldCardSale = (await call(page, 'createSale', {...cardInput, operationKey:randomUUID(), quoteToken:cardQuote.quoteToken, cashReceived:null, detail:'Pendiente histórico'})).sale;
+  const oldCashSale = (await call(page, 'sales')).find(value => value.paymentMethod === 'CASH' && value.items.some(item => item.productId === product.id));
+  await call(page, 'closeCash', cash.id, {operationKey: randomUUID(), countedAmount: '112.31'}); const next = (await call(page, 'openCash', {operationKey: randomUUID(), openingAmount: '0'})).cash;
+  await page.locator('#navCajaBtn').click(); const overview = await call(page, 'cashOverview'); expect(overview.currentCashSessionId).toBe(next.id); expect(overview.salesByUser).toEqual([]); expect(overview.movements).toEqual([]); expect(overview.expectedAmount).toBe('0.00'); expect(overview.pendingPayments.some(value => value.saleId === oldCardSale.id)).toBe(false); expect(overview.pendingHistoricalPayments.some(value => value.saleId === oldCardSale.id)).toBe(true);
+  await expect(page.locator('#cajaOperacionesBody')).not.toContainText(oldCashSale.invoiceNumber); await expect(page.locator('#cajaPendientesHistoricosSection')).toBeVisible(); await expect(page.locator('#cajaPendientesHistoricosBody')).toContainText(oldCardSale.invoiceNumber); await expect(page.locator('#cajaHistorialBody')).toContainText('112.31');
+});
+test('Caja conectada cerrada muestra historial general en operaciones y movimientos', async ({page}) => {
+  const {product, cash} = await fixture(page); await add(page, product); await checkout(page); await confirm(page); await expect(page.locator('#ticketModal')).toBeVisible(); await page.locator('#newSaleBtn').click();
+  const sale = (await call(page, 'sales')).find(value => value.paymentMethod === 'CASH' && value.items.some(item => item.productId === product.id));
+  await call(page, 'closeCash', cash.id, {operationKey: randomUUID(), countedAmount: '112.31'}); await page.reload(); await expect(page.locator('#app')).toBeVisible(); await page.locator('#navCajaBtn').click();
+  const overview = await call(page, 'cashOverview'); expect(overview.currentCashSessionId).toBeNull(); expect(overview.operationSales.some(value => value.id === sale.id)).toBe(true); expect(overview.movements.some(value => value.saleId === sale.id)).toBe(true);
+  await expect(page.locator('#cajaOperacionesTitulo')).toContainText('historial general'); await expect(page.locator('#cajaMovimientosTitulo')).toContainText('historial general'); await expect(page.locator('#cajaOperacionesBody')).toContainText(sale.invoiceNumber); await expect(page.locator('#cajaMovimientosBody')).toContainText('Venta #' + sale.invoiceNumber); await expect(page.locator('#cajaPendientesHistoricosSection')).toBeHidden(); await expect(page.locator('#cajaHistorialBody')).toContainText('112.31');
 });
 test('Caja confirma tarjeta/transferencia con actor y fecha sin aumentar efectivo esperado',async({page})=>{
   const {product}=await fixture(page);await add(page,product);await page.locator('input[name=paymentMethod][value=card]').check();await page.locator('#processSaleBtn').click();await expect(page.locator('#ticketModal')).toBeVisible();await page.locator('#newSaleBtn').click();
@@ -66,15 +82,16 @@ test('Caja confirma tarjeta/transferencia con actor y fecha sin aumentar efectiv
   sale=(await call(page,'sales')).find(value=>value.id===sale.id);expect(sale.cashStatus).toBe('CONFIRMED');const cash=await call(page,'currentCash',true);expect(cash.expectedAmount).toBe(expected);
   const movement=cash.movements.find(value=>value.saleId===sale.id);expect(movement.status).toBe('CONFIRMED');expect(movement.confirmed_by_user_id).toBeTruthy();expect(movement.confirmed_at).toBeTruthy();
 });
-test('flujo centralizado permite preparar como vendedor y cobrar con precio revalidado en Caja',async({page})=>{
+test('flujo centralizado exige caja abierta antes de enviar y cobrar en Caja',async({page})=>{
   const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:'100'});await call(page,'setSalesFlow','CENTRALIZED');const salesBefore=await call(page,'sales'),stockBefore=(await call(page,'product',product.id)).stock;
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browserseller');await add(page,product);
   await expect(page.locator('#processSaleBtn')).toHaveText('Enviar a Caja');
-  await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('enviado a Caja');await closeAlert(page);
+  await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toHaveText('Debes abrir caja antes de facturar o cobrar');await closeAlert(page);expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),orders:await localDB.saleOrders.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,orders:0,queue:0});
+  await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browseradmin');await page.locator('#navCajaBtn').click();
+  await expect(page.locator('#connectedSalesFlow')).toHaveValue('CENTRALIZED');expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);expect((await call(page,'cashOverview')).pendingOrders).toHaveLength(0);await page.locator('#cajaEfectivoInicialInput').fill('100');await page.locator('#abrirCajaBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('Caja abierta en MySQL');await closeAlert(page);
+  await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browserseller');await add(page,product);await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('enviado a Caja');await closeAlert(page);
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browseradmin');await page.locator('#navCajaBtn').click();
   await expect(page.locator('#connectedSalesFlow')).toHaveValue('CENTRALIZED');await expect(page.locator('#cajaOperacionesBody')).toContainText('Pedido pendiente');expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);
-  await page.locator('#cajaOperacionesBody button[data-action=charge-order]').click();await expect(page.locator('#customAlertMessage')).toHaveText('Debes abrir caja antes de facturar o cobrar');await closeAlert(page);
-  await page.locator('#cajaEfectivoInicialInput').fill('100');await page.locator('#abrirCajaBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('Caja abierta en MySQL');await closeAlert(page);
   const live=await call(page,'product',product.id);await call(page,'updateProduct',product.id,{revision:live.revision,retailPrice:'14.00'});
   await page.locator('#cajaOperacionesBody button[data-action=charge-order]').click();await expect(page.locator('#connectedCheckoutModal')).toBeVisible();await expect(page.locator('#connectedPriceChangeMessage')).toContainText('El precio cambió desde que se preparó');
   await page.locator('#connectedOrderPaymentMethod').selectOption('CARD');await expect(page.locator('#connectedCheckoutTotal')).toHaveText('C$14.00');await expect(page.locator('#confirmConnectedSaleBtn')).toHaveText('Confirmar precio y cobrar');
@@ -157,9 +174,23 @@ for (const method of ['cash']) {
   });
 }
 for(const method of ['CASH','CARD','TRANSFER']) {
-  test('orden conectada '+method+' rechaza caja cerrada despues de cotizar sin escribir Dexie',async({page})=>{
-    const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:'100'});await call(page,'setSalesFlow','CENTRALIZED');await page.locator('#navCajaBtn').click();await page.locator('#navSalesBtn').click();await add(page,product);await page.locator('#processSaleBtn').click();await closeAlert(page);await page.locator('#navCajaBtn').click();await page.locator('#cajaEfectivoInicialInput').fill('100');await page.locator('#abrirCajaBtn').click();await closeAlert(page);await page.locator('#cajaOperacionesBody button[data-action=charge-order]').click();if(method!=='CASH')await page.locator('#connectedOrderPaymentMethod').selectOption(method);await expect(page.locator('#confirmConnectedSaleBtn')).toBeEnabled();await expect(page.locator('#connectedCashGroup')).toHaveClass(method==='CASH'?/form-group/:/hidden/);if(method==='CASH')await page.locator('#connectedCashReceived').fill('100');
-    const open=await call(page,'currentCash',true),beforeSales=await call(page,'sales'),beforeStock=(await call(page,'product',product.id)).stock;await call(page,'closeCash',open.id,{operationKey:randomUUID(),countedAmount:open.expectedAmount});await page.locator('#confirmConnectedSaleBtn').click();await expect(page.locator('#customAlertMessage')).toHaveText('Debes abrir caja antes de facturar o cobrar');await closeAlert(page);expect(await call(page,'sales')).toEqual(beforeSales);expect((await call(page,'product',product.id)).stock).toBe(beforeStock);
-    expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),orders:await localDB.saleOrders.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,orders:0,queue:0});await page.locator('#connectedCheckoutModal .close-modal-btn').click();const overview=await call(page,'cashOverview');const order=overview.pendingOrders.find(o=>o.items.some(i=>i.productId===product.id));await call(page,'cancelOrder',order.id,{operationKey:randomUUID()});await call(page,'setSalesFlow','DIRECT');
+  test('orden conectada '+method+' no se envía con caja cerrada',async({page})=>{
+    const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:'100'});await call(page,'setSalesFlow','CENTRALIZED');await page.evaluate(async()=>window.PosSales.load('salesView'));await add(page,product);const beforeSales=await call(page,'sales'),beforeStock=(await call(page,'product',product.id)).stock;await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toHaveText('Debes abrir caja antes de facturar o cobrar');await closeAlert(page);expect(await call(page,'sales')).toEqual(beforeSales);expect((await call(page,'product',product.id)).stock).toBe(beforeStock);expect((await call(page,'cashOverview')).pendingOrders).toHaveLength(0);expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),orders:await localDB.saleOrders.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,orders:0,queue:0});
   });
 }
+
+for (const flow of ['DIRECT','CENTRALIZED']) test('resumen previo y detalles MySQL ' + flow, async ({page}) => {
+  const {product,cash}=await fixture(page);
+  if(flow==='CENTRALIZED') { await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:'100'}); await call(page,'setSalesFlow',flow); await call(page,'openCash',{operationKey:randomUUID(),openingAmount:'100'}); }
+  for(const paymentMethod of ['CASH','CARD','TRANSFER']) {
+    if(flow==='DIRECT') { const input={items:[{productId:product.id,quantity:'1'}],priceType:'RETAIL',discountPercent:'0',paymentMethod}; const quote=await call(page,'quoteSale',input); await call(page,'createSale',{...input,operationKey:randomUUID(),quoteToken:quote.quoteToken,cashReceived:paymentMethod==='CASH'?'20':null,detail:''}); }
+    else { const {order}=await call(page,'prepareOrder',{operationKey:randomUUID(),items:[{productId:product.id,quantity:'1'}],priceType:'RETAIL',discountPercent:'0',detail:''}); const quote=await call(page,'quoteOrder',order.id,paymentMethod); await call(page,'chargeOrder',order.id,{operationKey:randomUUID(),quoteToken:quote.quoteToken,paymentMethod,cashReceived:paymentMethod==='CASH'?'20':null}); }
+  }
+  await page.locator('#navCajaBtn').click(); await page.locator('#cerrarCajaBtn').click(); await expect(page.locator('#cierreCajaModal')).toBeVisible(); await expect(page.locator('#cajaEsperadoDisplay')).toHaveText('C$ 112.31'); await expect(page.locator('#cajaCierreResumen')).toContainText('browseradmin'); await expect(page.locator('#confirmCierreCajaBtn')).toBeDisabled();
+  await page.locator('#cierreCajaModal .close-modal-btn').click(); expect((await call(page,'currentCash',true)).status).toBe('OPEN');
+  await page.locator('#cerrarCajaBtn').click(); await page.locator('#cajaEfectivoRealInput').fill('110'); await expect(page.locator('#cajaCierreDiferencia')).toContainText('C$ -2.31'); await page.locator('#confirmCierreCajaBtn').click(); await closeAlert(page); await expect(page.locator('#cierreCajaModal')).toBeHidden();
+  await page.locator('#cajaHistorialBody tr').first().getByRole('button',{name:'Detalles',exact:true}).click(); await expect(page.locator('#cajaDetalleResumen')).toContainText('C$ 112.31'); await expect(page.locator('#cajaDetalleResumen')).toContainText('C$ 12.31'); await expect(page.locator('#detalleCierreCajaModal input')).toHaveCount(0);
+  const saved=(await call(page,'cashSessions'))[0]; expect(saved.summary).toMatchObject({cashSales:'12.31',cardSales:'12.31',transferSales:'12.31',purchases:'0.00'}); const pendingCard=(await call(page,'sales')).find(s=>s.cashSessionId===saved.id&&s.paymentMethod==='CARD'); await call(page,'cancelSale',pendingCard.id,{operationKey:randomUUID(),reason:'Verificar snapshot del cierre'}); expect((await call(page,'cashSessions'))[0].summary).toEqual(saved.summary);
+  await page.locator('#detalleCierreCajaModal .close-modal-btn').click(); await page.reload(); await expect(page.locator('#app')).toBeVisible(); await page.locator('#navCajaBtn').click(); await page.locator('#cajaHistorialBody tr').first().getByRole('button',{name:'Detalles',exact:true}).click(); await expect(page.locator('#cajaDetalleResumen')).toContainText('C$ -2.31');
+  expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),cash:await localDB.cajaSessions.count()}))).toEqual({sales:0,cash:0});
+});
