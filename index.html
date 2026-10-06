@@ -152,6 +152,10 @@
                         <div class="summary-card" style="border-left:4px solid #ff9800;"><span>Bajo Stock (Alerta)</span><h3 id="invLowStock" style="color:#ff9800;">0</h3></div>
                         <div class="summary-card" style="border-left:4px solid #d32f2f;"><span>Agotados (0)</span><h3 id="invOutOfStock" style="color:#d32f2f;">0</h3></div>
                     </div>
+                    <div style="margin-bottom:12px;">
+                        <label for="inventorySearchInput" style="display:block; margin-bottom:5px; font-weight:600;">Buscar productos por nombre, código o categoría</label>
+                        <input type="search" id="inventorySearchInput" aria-controls="inventoryTableBody" autocomplete="off" placeholder="Nombre, código interno, código de barras o categoría" style="width:100%; max-width:520px; border:1px solid #999; border-radius:8px; padding:10px; font-size:1rem;">
+                    </div>
                     <div class="history-table-container">
                         <table class="history-table">
                             <thead><tr><th>Foto</th><th>Código</th><th>Nombre</th><th>Stock Actual</th><th>Costo</th><th>Precios (Men/May)</th><th>Estado</th><th>Acciones</th></tr></thead>
@@ -674,7 +678,7 @@
                 <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #bbdefb;">
                     <h4 style="margin-bottom: 10px; color: #0066cc;">Agregar Productos al Inventario</h4>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
-                        <div class="form-group" style="flex: 1; min-width: 200px;"><label for="purchProductTemp">Producto</label><div style="display: flex; gap: 5px;"><input type="text" id="purchProductTemp" list="productDataList" placeholder="Nombre del producto..." style="flex: 1;"><button type="button" id="quickAddProductFromPurchBtn" class="btn" style="background:#ff9800; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Crear Nuevo Producto Rápidamente">➕</button><button type="button" id="quickEditProductFromPurchBtn" class="btn" style="background:#64748b; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Editar el producto escrito arriba">✏️</button></div><datalist id="productDataList"></datalist></div>
+                        <div class="form-group" style="flex: 1; min-width: 200px;"><label for="purchProductTemp">Producto</label><div style="display: flex; gap: 5px;"><input type="text" id="purchProductTemp" list="productDataList" placeholder="Nombre, código interno o código de barras..." aria-describedby="purchaseProductSearchHint" style="flex: 1;"><button type="button" id="quickAddProductFromPurchBtn" class="btn" style="background:#ff9800; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Crear Nuevo Producto Rápidamente">➕</button><button type="button" id="quickEditProductFromPurchBtn" class="btn" style="background:#64748b; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Editar el producto escrito arriba">✏️</button></div><small id="purchaseProductSearchHint">Busca por nombre, código interno o código de barras.</small><datalist id="productDataList"></datalist></div>
                         <div class="form-group" style="flex: 1; min-width: 70px; max-width: 100px;"><label for="purchQtyTemp">Cant.</label><input type="number" id="purchQtyTemp" min="1" value="1"></div>
                         <div class="form-group" style="flex: 1; min-width: 100px; max-width: 140px;"><label for="purchCostTemp">Costo c/u</label><input type="number" id="purchCostTemp" step="0.01"></div>
                         <div style="margin-bottom: 1rem; flex-shrink: 0;"><button type="button" id="btnAddItemToPurch" class="btn btn-secondary" style="height: 44px; padding: 0 15px; font-weight: bold;">➕ Agregar</button></div>

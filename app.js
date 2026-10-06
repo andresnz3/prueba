@@ -86,6 +86,35 @@ function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+const PRODUCT_CODE_FIELDS = ['barcode', 'codigoBarras', 'code', 'codigo', 'sku', 'product_code', 'productCode', 'internalCode', 'internal_code'];
+function normalizarBusquedaProducto(value) {
+    return String(value ?? '').normalize('NFKC').trim().toLocaleLowerCase('es');
+}
+function codigosDeProducto(product) {
+    return PRODUCT_CODE_FIELDS.map(field => product?.[field]).filter(value => value !== undefined && value !== null && String(value).trim() !== '').map(String);
+}
+function productosConCodigoExacto(list, query) {
+    const normalized = normalizarBusquedaProducto(query);
+    if (!normalized) return [];
+    const matches = list.filter(product => codigosDeProducto(product).some(code => normalizarBusquedaProducto(code) === normalized));
+    return matches.filter((product, index) => matches.findIndex(candidate => String(candidate.id) === String(product.id)) === index);
+}
+function productoCoincideBusqueda(product, query, { category = false } = {}) {
+    const normalized = normalizarBusquedaProducto(query);
+    if (!normalized) return true;
+    const textValues = [product?.name, ...(category ? [product?.category, product?.categoria] : [])];
+    return textValues.some(value => normalizarBusquedaProducto(value).includes(normalized)) || codigosDeProducto(product).some(code => normalizarBusquedaProducto(code).includes(normalized));
+}
+function ordenarResultadosProducto(list, query) {
+    const normalized = normalizarBusquedaProducto(query);
+    if (!normalized) return list;
+    return list.map((product, index) => ({ product, index })).sort((a, b) => {
+        const rank = product => codigosDeProducto(product).some(code => normalizarBusquedaProducto(code) === normalized) ? 0 : normalizarBusquedaProducto(product.name) === normalized ? 1 : 2;
+        return rank(a.product) - rank(b.product) || a.index - b.index;
+    }).map(entry => entry.product);
+}
+window.PosProductSearch = Object.freeze({ normalize: normalizarBusquedaProducto, codes: codigosDeProducto, exactCodeMatches: productosConCodigoExacto, matches: productoCoincideBusqueda, prioritizeExact: ordenarResultadosProducto });
+
 const LOGIN_FAILURE_KEY = "posLoginFailState";
 
 function readLoginFailureState() {
@@ -607,6 +636,16 @@ document.addEventListener("keydown", (e) => {
 });
 
 searchProductInput?.addEventListener("input", actualizarCatalogo);
+searchProductInput?.addEventListener("keydown", event => {
+    if (event.key !== "Enter") return;
+    const matches = window.PosProductSearch.exactCodeMatches(products.filter(product => !product.deleted), searchProductInput.value);
+    if (!matches.length) return;
+    event.preventDefault();
+    procesarCodigoBarras(searchProductInput.value);
+    searchProductInput.value = "";
+    actualizarCatalogo();
+});
+document.getElementById("inventorySearchInput")?.addEventListener("input", actualizarTablaInventario);
 document.getElementById("toggleCameraBtn")?.addEventListener("click", async () => {
     if (camaraVentasBusy) return;
     camaraVentasBusy = true;
@@ -627,24 +666,27 @@ document.getElementById("toggleCameraBtn")?.addEventListener("click", async () =
 });
 
 function procesarCodigoBarras(codigo) {
-    codigo = (codigo || "").trim();
+    codigo = String(codigo ?? "").trim();
     if (!codigo) return;
+    const coincidencias = window.PosProductSearch.exactCodeMatches(products, codigo).filter(p => !p.deleted);
     if (connectedMode) {
-        const producto = products.find(p => (p.barcode || "").trim() === codigo && !p.deleted);
-        if (!producto) showAlert("Producto no encontrado en el inventario conectado.");
+        const producto = coincidencias.length === 1 ? coincidencias[0] : null;
+        if (coincidencias.length > 1) showAlert("Hay varios productos con ese código. Revisa el inventario antes de agregarlo.");
+        else if (!producto) showAlert("Producto no encontrado en el inventario conectado.");
         else if (producto.active === false) showAlert("El producto est\u00e1 inactivo y no se puede agregar al carrito.");
         else agregarAlCarrito(producto);
     } else {
-        const producto = products.find(p => (p.barcode || "").trim() === codigo && !p.deleted && p.active !== false);
-        if (producto) agregarAlCarrito(producto);
+        const activos = coincidencias.filter(p => p.active !== false);
+        if (activos.length > 1) showAlert("Hay varios productos con ese código. Revisa el inventario antes de agregarlo.");
+        else if (activos.length === 1) agregarAlCarrito(activos[0]);
         else showAlert("Producto no encontrado o inactivo.");
     }
     if (barcodeInput) barcodeInput.value = "";
 }
 
 function actualizarCatalogo() {
-    const searchTerm = searchProductInput ? searchProductInput.value.toLowerCase() : ""; 
-    const list = products.filter(p => !p.deleted && p.active !== false && ((p.name||"").toLowerCase().includes(searchTerm) || (p.barcode||"").includes(searchTerm))); 
+    const searchTerm = searchProductInput ? searchProductInput.value : "";
+    const list = ordenarResultadosProducto(products.filter(p => !p.deleted && p.active !== false && productoCoincideBusqueda(p, searchTerm)), searchTerm);
     const pCount = document.getElementById("productCount"); if(pCount) pCount.textContent = list.length;
     const pGrid = document.getElementById("productGrid");
     if(pGrid) {
@@ -652,7 +694,7 @@ function actualizarCatalogo() {
             const retail = p.retailPrice || p.retail || 0; const wholesale = p.wholesalePrice || p.wholesale || 0; const precio = buyerType === "retail" ? retail : wholesale; 
             const iconOrImage = p.image ? `<img src="${escapeHtml(p.image)}" style="width:100%; height:80px; object-fit:cover; border-radius:4px; margin-bottom:5px;">` : `<div style="text-align:center; padding:15px;">${iconoProducto("width:2.2rem;height:2.2rem;stroke-width:1.5;")}</div>`;
             const minStock = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); const stockColor = p.stock <= minStock ? "color: red;" : "color: #666;";
-            return `<div class="product-card" onclick="window.agregarAlCarritoPorId('${p.id}')">${iconOrImage}<strong>${escapeHtml(p.name)}</strong><br><small style="color:#666;">Cód: ${escapeHtml(p.barcode)}</small><br><div style="font-size:.85rem; font-weight:600; ${stockColor}">Stock: ${p.stock||0}</div><br><span style="color: #28a745; font-weight: bold;">${sysConfig.currency}${precio.toFixed(2)}</span></div>`; 
+            return `<div class="product-card" onclick="window.agregarAlCarritoPorId('${p.id}')">${iconOrImage}<strong>${escapeHtml(p.name)}</strong><br><small style="color:#666;">Cód: ${escapeHtml(codigosDeProducto(p)[0] || '')}</small><br><div style="font-size:.85rem; font-weight:600; ${stockColor}">Stock: ${p.stock||0}</div><br><span style="color: #28a745; font-weight: bold;">${sysConfig.currency}${precio.toFixed(2)}</span></div>`;
         }).join("");
     }
 }
@@ -971,7 +1013,7 @@ document.getElementById("productForm")?.addEventListener("submit", async (e) => 
     actualizarTablaInventario(); actualizarCatalogo(); renderDashboard();
 
     const purchModalRef = document.getElementById("purchaseModal"); const vieneDesdeCompras = purchModalRef && !purchModalRef.classList.contains("hidden");
-    if (vieneDesdeCompras) { const pdl = document.getElementById("productDataList"); if (pdl) pdl.innerHTML = products.filter(p => !p.deleted).map(p => `<option value="${escapeHtml(p.name)}">`).join(""); const pTemp = document.getElementById("purchProductTemp"); const cTemp = document.getElementById("purchCostTemp"); if (pTemp) { pTemp.value = newProd.name; pTemp.dataset.productId = String(newProd.id); } if (cTemp) cTemp.value = newProd.cost; pTemp?.focus(); }
+    if (vieneDesdeCompras) { actualizarSugerenciasProductosCompra(); const pTemp = document.getElementById("purchProductTemp"); const cTemp = document.getElementById("purchCostTemp"); if (pTemp) { pTemp.value = newProd.name; pTemp.dataset.productId = String(newProd.id); } if (cTemp) cTemp.value = newProd.cost; pTemp?.focus(); }
     showAlert("Producto guardado exitosamente.");
 });
 
@@ -979,10 +1021,17 @@ function actualizarTablaInventario() {
     const tb = document.getElementById("inventoryTableBody"); if(!tb) return; 
     const prodActivosReales = products.filter(p => !p.deleted);
     let bajoStock = 0; let agotados = 0;
-    
-    tb.innerHTML = prodActivosReales.map(p => {
+    prodActivosReales.forEach(p => {
+        if (p.active === false) return;
+        const minStockLimit = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5);
+        if ((p.stock || 0) <= 0) agotados++;
+        else if ((p.stock || 0) <= minStockLimit) bajoStock++;
+    });
+    const searchTerm = document.getElementById("inventorySearchInput")?.value || "";
+    const visibleProducts = ordenarResultadosProducto(prodActivosReales.filter(p => productoCoincideBusqueda(p, searchTerm, { category: true })), searchTerm);
+    tb.innerHTML = visibleProducts.length ? visibleProducts.map(p => {
         let rowStyle = ""; let stockHtml = p.stock || 0; const minStockLimit = p.minStock !== undefined ? p.minStock : (sysConfig.minStock || 5); const isActive = p.active !== false; let estadoHtml;
-        if (!isActive) { rowStyle = "background-color: #f4f4f4; color: #888;"; estadoHtml = '<span style="color:#666; font-weight:bold;">Inactivo</span>'; } else if ((p.stock||0) <= 0) { agotados++; rowStyle = "background-color: #ffebee;"; stockHtml = `<span style="color:#d32f2f; font-weight:bold;">${p.stock||0} (Agotado)</span>`; estadoHtml = 'Agotado'; } else if ((p.stock||0) <= minStockLimit) { bajoStock++; stockHtml = `<span style="color:#ff9800; font-weight:bold;">${p.stock} (Bajo)</span>`; estadoHtml = 'Activo'; } else { estadoHtml = 'Activo'; }
+        if (!isActive) { rowStyle = "background-color: #f4f4f4; color: #888;"; estadoHtml = '<span style="color:#666; font-weight:bold;">Inactivo</span>'; } else if ((p.stock||0) <= 0) { rowStyle = "background-color: #ffebee;"; stockHtml = `<span style="color:#d32f2f; font-weight:bold;">${p.stock||0} (Agotado)</span>`; estadoHtml = 'Agotado'; } else if ((p.stock||0) <= minStockLimit) { stockHtml = `<span style="color:#ff9800; font-weight:bold;">${p.stock} (Bajo)</span>`; estadoHtml = 'Activo'; } else { estadoHtml = 'Activo'; }
         const retail = p.retailPrice || p.retail || 0; const wholesale = p.wholesalePrice || p.wholesale || 0;
         
         const btnKardex = `<button class="btn btn-sm" style="background:#0891b2; color:#fff; margin-right:4px;" onclick="window.verKardex('${p.id}')">Kardex</button>`;
@@ -992,8 +1041,8 @@ function actualizarTablaInventario() {
 
         const btnAjuste = `<button class="btn btn-sm" style="background:#d97706; color:#fff; margin-right:4px;" onclick="window.abrirAjuste('${p.id}')">${iconoAjuste()} Ajuste</button>`;
         const fotoHtml = p.image ? `<img src="${escapeHtml(p.image)}" style="width:40px; height:40px; object-fit:cover; border-radius:4px;">` : iconoProducto("width:40px;height:40px;");
-        return `<tr style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(p.barcode)}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}${btnEliminar}</div></td></tr>`; 
-    }).join(""); 
+        return `<tr style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(codigosDeProducto(p)[0] || '')}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}${btnEliminar}</div></td></tr>`;
+    }).join("") : '<tr><td colspan="8" class="text-center">No hay productos que coincidan con la búsqueda.</td></tr>';
     
     if(document.getElementById("invTotalProducts")) document.getElementById("invTotalProducts").textContent = products.filter(p => !p.deleted && p.active !== false).length; 
     if(document.getElementById("invLowStock")) document.getElementById("invLowStock").textContent = bajoStock; 
@@ -1569,30 +1618,56 @@ window.verFacturaCompra = function(id) {
 
 let currentPurchaseCart = [];
 const purchProductInputEl = document.getElementById("purchProductTemp");
+function actualizarSugerenciasProductosCompra() {
+    const list = document.getElementById("productDataList");
+    if (!list) return;
+    const options = new Map();
+    const addOption = (value, label) => {
+        const normalized = normalizarBusquedaProducto(value);
+        if (normalized && !options.has(normalized)) options.set(normalized, `<option value="${escapeHtml(value)}" label="${escapeHtml(label)}"></option>`);
+    };
+    products.filter(product => !product.deleted).forEach(product => {
+        const codes = codigosDeProducto(product);
+        addOption(product.name, codes[0] ? `Código: ${codes[0]}` : product.category || 'Producto');
+        codes.forEach(code => addOption(code, product.name || 'Producto'));
+    });
+    list.innerHTML = [...options.values()].join("");
+}
+function resolverProductoEscritoCompra(value) {
+    const available = products.filter(product => !product.deleted);
+    let matches = productosConCodigoExacto(available, value);
+    if (!matches.length) {
+        const normalized = normalizarBusquedaProducto(value);
+        matches = available.filter(product => normalizarBusquedaProducto(product.name) === normalized);
+    }
+    return { product: matches.length === 1 ? matches[0] : null, ambiguous: matches.length > 1 };
+}
 purchProductInputEl?.addEventListener("input", () => { delete purchProductInputEl.dataset.productId; });
 document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { delete purchProductInputEl?.dataset.productId; });
-document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { document.getElementById("purchaseForm")?.reset(); const pi = document.getElementById("purchId"); if(pi) pi.value = ""; currentPurchaseCart = []; renderPurchaseCart(); document.getElementById("purchDaysContainer").style.display = "none"; const sdl = document.getElementById("supplierDataList"); if(sdl) sdl.innerHTML = suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">`).join(""); const pdl = document.getElementById("productDataList"); if(pdl) pdl.innerHTML = products.filter(p=>!p.deleted).map(p => `<option value="${escapeHtml(p.name)}">`).join(""); document.getElementById("purchaseModal")?.classList.remove("hidden"); });
+document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { document.getElementById("purchaseForm")?.reset(); const pi = document.getElementById("purchId"); if(pi) pi.value = ""; currentPurchaseCart = []; renderPurchaseCart(); document.getElementById("purchDaysContainer").style.display = "none"; const sdl = document.getElementById("supplierDataList"); if(sdl) sdl.innerHTML = suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">`).join(""); actualizarSugerenciasProductosCompra(); document.getElementById("purchaseModal")?.classList.remove("hidden"); });
 document.getElementById("btnAddItemToPurch")?.addEventListener("click", () => {
     const prodName = purchProductInputEl.value.trim(); const qty = Number(document.getElementById("purchQtyTemp").value); const cost = parseFloat(document.getElementById("purchCostTemp").value);
     if(!prodName || !Number.isFinite(qty) || !Number.isFinite(cost) || qty <= 0) { showAlert("Ingrese producto, cantidad y costo unitario."); return; }
     if (!Number.isInteger(qty)) { showAlert("La cantidad debe ser un número entero mayor que cero."); return; }
     if (cost < 0) { showAlert("El costo unitario no puede ser negativo."); return; }
     const quickProductId = purchProductInputEl.dataset.productId;
-    const quickProduct = quickProductId && products.find(p => String(p.id) === quickProductId && !p.deleted && (p.name || "").trim().toLowerCase() === prodName.toLowerCase());
-    const matchedProd = quickProduct || products.find(p => (p.name || "").trim().toLowerCase() === prodName.toLowerCase() && !p.deleted);
+    const quickProduct = quickProductId && products.find(p => String(p.id) === quickProductId && !p.deleted && normalizarBusquedaProducto(p.name) === normalizarBusquedaProducto(prodName));
+    const resolved = quickProduct ? { product: quickProduct, ambiguous: false } : resolverProductoEscritoCompra(prodName);
+    if (resolved.ambiguous) { showAlert("Más de un producto coincide con ese código. Escribe el nombre para elegirlo sin ambigüedad."); return; }
+    const matchedProd = resolved.product;
     if (!matchedProd) { showAlert("El producto no existe. Créelo con el botón de agregar producto antes de incluirlo en la compra."); return; }
 
-    currentPurchaseCart.push({ producto: prodName, productId: matchedProd.id, cantidad: qty, costo: r2(cost), total: r2(qty * cost) });
+    currentPurchaseCart.push({ producto: matchedProd.name, productId: matchedProd.id, cantidad: qty, costo: r2(cost), total: r2(qty * cost) });
     purchProductInputEl.value = ""; delete purchProductInputEl.dataset.productId; document.getElementById("purchQtyTemp").value = "1"; document.getElementById("purchCostTemp").value = ""; renderPurchaseCart();
 });
-document.getElementById("quickEditProductFromPurchBtn")?.addEventListener("click", () => { const prodName = document.getElementById("purchProductTemp").value.trim(); if (!prodName) { showAlert("Escribe el nombre del producto en el campo para poder editarlo."); return; } const p = products.find(pr => (pr.name || "").toLowerCase() === prodName.toLowerCase() && !pr.deleted); if (p) { window.editarProducto(p.id); } else { showAlert("Producto no encontrado en la base de datos."); } });
+document.getElementById("quickEditProductFromPurchBtn")?.addEventListener("click", () => { const value = document.getElementById("purchProductTemp").value.trim(); if (!value) { showAlert("Escribe el nombre o código del producto en el campo para poder editarlo."); return; } const resolved = resolverProductoEscritoCompra(value); if (resolved.ambiguous) { showAlert("Más de un producto coincide con ese código. Escribe el nombre para elegirlo sin ambigüedad."); return; } if (resolved.product) window.editarProducto(resolved.product.id); else showAlert("Producto no encontrado en la base de datos."); });
 
 function renderPurchaseCart() { const tbody = document.getElementById("purchCartBody"); if(!tbody) return; let totalFactura = 0; if(currentPurchaseCart.length === 0) { tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color:#999;">Aún no hay productos en la factura.</td></tr>`; } else { tbody.innerHTML = currentPurchaseCart.map((item, idx) => { totalFactura += item.total; return `<tr><td><strong>${escapeHtml(item.producto)}</strong>${!item.productId ? ' <small style="color:#ff9800;">(sin vincular)</small>' : ''}</td><td>${item.cantidad}</td><td>${sysConfig.currency}${item.costo.toFixed(2)}</td><td>${sysConfig.currency}${item.total.toFixed(2)}</td><td><button type="button" onclick="window.removePurchItem(${idx})" style="background:#d32f2f; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;">X</button></td></tr>`; }).join(""); } const pTot = document.getElementById("purchTotalDisplay"); if(pTot) pTot.textContent = `${sysConfig.currency}${totalFactura.toFixed(2)}`; }
 window.removePurchItem = function(idx) { currentPurchaseCart.splice(idx, 1); renderPurchaseCart(); };
 
 function resolverProductoDeItemCompra(item) {
     if (item.productId) { const p = products.find(pr => String(pr.id) === String(item.productId)); if (p) return p; }
-    return products.find(pr => (pr.name || "").toLowerCase() === (item.producto || "").toLowerCase() && !pr.deleted);
+    return resolverProductoEscritoCompra(item.producto || "").product;
 }
 
 document.getElementById("purchaseForm")?.addEventListener("submit", async (e) => { 

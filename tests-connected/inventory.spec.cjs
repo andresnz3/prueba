@@ -27,6 +27,28 @@ async function adjust(page, row, type, quantity, reason) {
 async function call(page, method, ...args) {
   return page.evaluate(async ({ method, args, api }) => { const client = new window.PosApiClient(api); await client.me(); try { return { value: await client[method](...args) }; } catch (error) { return { code: error.code, status: error.status }; } }, { method, args, api });
 }
+test('búsqueda conectada encuentra el código de barras exacto en inventario y POS', async ({ page }) => {
+  const barcode = '7501234567890', name = 'Producto búsqueda ' + randomBytes(4).toString('hex');
+  await page.addInitScript({ path: require.resolve('../tests/dexie-search-shim.js') });
+  await login(page); await inventory(page); await page.locator('#addNewProductBtn').click();
+  for (const [id, value] of Object.entries({ prodBarcode: barcode, prodName: name, prodCost: '5', prodMargenRetail: '20', prodMargenWholesale: '10', prodStock: '10', prodMinStock: '1' })) await page.locator('#' + id).fill(value);
+  await page.locator('#prodCategory').selectOption('Bebidas');
+  await page.locator('#productForm button[type=submit]').click(); await expect(page.locator('#customAlertMessage')).toContainText('MySQL'); await closeAlert(page);
+  const row = page.locator('#inventoryTableBody tr').filter({ hasText: name }); await expect(row).toHaveCount(1);
+  await page.locator('#inventorySearchInput').fill('  ' + barcode + '  '); await expect(row).toHaveCount(1);
+  await page.locator('#inventorySearchInput').fill(name.toUpperCase()); await expect(row).toHaveCount(1);
+  await page.locator('#inventorySearchInput').fill('BEBIDAS'); await expect(row).toHaveCount(1);
+
+  await page.locator('#navSalesBtn').click(); await expect(page.locator('#salesView')).toBeVisible();
+  await page.locator('#searchProductInput').fill('  ' + barcode + '  ');
+  const card = page.locator('.product-card').filter({ hasText: name }); await expect(card.first()).toBeVisible();
+  await page.locator('#searchProductInput').press('Enter');
+  await expect(page.locator('#cartItems .cart-item-row')).toHaveCount(1);
+  await page.locator('#barcodeInput').fill(' ' + barcode + ' '); await page.locator('#barcodeInput').press('Enter');
+  await expect(page.locator('#cartItems .cart-item-row input[type=number]')).toHaveValue('2');
+  await page.locator('#searchProductInput').fill(name.toUpperCase()); await expect(card.first()).toBeVisible();
+  expect(await page.evaluate(async () => ({ sales: await localDB.sales.count(), queue: await localDB.sync_queue.count() }))).toEqual({ sales: 0, queue: 0 });
+});
 test('crear y editar sin proveedor no bloquea el formulario ni envia datos ficticios', async ({ page }) => {
   const writes = [];
   page.on('request', request => {
