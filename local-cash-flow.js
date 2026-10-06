@@ -1,5 +1,6 @@
 ﻿/* global connectedMode, localDB, DEFAULT_BUSINESS_ID, sysConfig, configStorageKey, cart, buyerType, paymentMethod, currentUser, cajaActual, MSG_SIN_CAJA, r2, isAdmin, showAlert, showConfirm, initApp, actualizarCatalogo, actualizarTablaInventario, renderDashboard, renderCajaView, generarVisualizacionTicket, mediosPagoVenta, resetearDescuentoVenta, actualizarCarrito */
 'use strict';
+/* global saleNumber */
 (() => {
   if (connectedMode) return;
   const el = id => document.getElementById(id);
@@ -117,7 +118,7 @@
         await localDB.saleOrders.add(order); await audit('PREPARAR_ORDEN', 'Orden ' + order.id + '; sin factura ni movimiento de dinero.');
       });
       cart.splice(0); resetearDescuentoVenta(); actualizarCarrito(); await loadOrders(); render();
-      showAlert('Orden enviada a Caja. No se generó factura ni se descontó inventario.');
+      showAlert('Orden enviada a Caja. No se generó factura ni se descontó inventario. La próxima factura sigue siendo #' + String(saleNumber).padStart(6, '0') + '.');
     } catch (error) { showAlert(error.message); }
     finally { busy = false; render(); }
   }
@@ -133,6 +134,7 @@
           await localDB.saleOrders.put(order); await audit('CANCELAR_ORDEN', 'Orden ' + id);
         });
         await loadOrders(); render();
+        showAlert('Orden cancelada. No se generó factura ni movimiento de caja. La próxima factura sigue siendo #' + String(saleNumber).padStart(6, '0') + '.');
       } catch (error) { showAlert(error.message); }
       finally { busy = false; render(); }
     });

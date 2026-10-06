@@ -49,17 +49,17 @@ function createCustomerService({ repo, auth, config }) {
     if (amount !== '0.00' && debt + units(amount) > units(client.credit_limit)) throw httpError(409, 'CREDIT_LIMIT_EXCEEDED');
     return { client, debt, available: units(client.credit_limit) - debt };
   }
-  const clientQuery = 'SELECT c.*, c.opening_balance + COALESCE((SELECT SUM(s.total) FROM sales s WHERE s.business_id = c.business_id AND s.client_id = c.id AND s.sale_type = \'CREDIT\' AND s.status = \'COMPLETED\'), 0) - COALESCE((SELECT SUM(p.amount) FROM customer_payments p WHERE p.business_id = c.business_id AND p.client_id = c.id AND p.status = \'POSTED\'), 0) AS debt, COALESCE((SELECT SUM(p.amount) FROM customer_payments p WHERE p.business_id = c.business_id AND p.client_id = c.id AND p.status = \'PENDING\'), 0) AS pending_payments FROM clients c WHERE c.business_id = ? AND (? IS NULL OR c.name LIKE ? OR c.phone LIKE ? OR c.ruc LIKE ?) ORDER BY c.active DESC, c.name, c.id LIMIT ? OFFSET ?';
+  const clientQuery = 'SELECT c.*, c.opening_balance + COALESCE((SELECT SUM(s.total) FROM sales s WHERE s.business_id = c.business_id AND s.client_id = c.id AND s.sale_type = \'CREDIT\' AND s.status = \'COMPLETED\'), 0) - COALESCE((SELECT SUM(p.amount) FROM customer_payments p WHERE p.business_id = c.business_id AND p.client_id = c.id AND p.status = \'POSTED\'), 0) AS debt, COALESCE((SELECT SUM(p.amount) FROM customer_payments p WHERE p.business_id = c.business_id AND p.client_id = c.id AND p.status = \'PENDING\'), 0) AS pending_payments FROM clients c WHERE c.business_id = ? AND (? IS NULL OR c.name LIKE ? OR c.phone LIKE ? OR c.ruc LIKE ? OR CAST(c.id AS CHAR) LIKE ?) ORDER BY c.active DESC, c.name, c.id LIMIT ? OFFSET ?';
   const clientByIdQuery = "SELECT c.*, c.opening_balance + COALESCE((SELECT SUM(s.total) FROM sales s WHERE s.business_id = c.business_id AND s.client_id = c.id AND s.sale_type = 'CREDIT' AND s.status = 'COMPLETED'), 0) - COALESCE((SELECT SUM(p.amount) FROM customer_payments p WHERE p.business_id = c.business_id AND p.client_id = c.id AND p.status = 'POSTED'), 0) AS debt, COALESCE((SELECT SUM(p.amount) FROM customer_payments p WHERE p.business_id = c.business_id AND p.client_id = c.id AND p.status = 'PENDING'), 0) AS pending_payments FROM clients c WHERE c.business_id = ? AND c.id = ?";
   async function clientRow(db, current, id) { return (await repo.rows(db, clientByIdQuery, [current.business_id, id]))[0]; }
   const clientOptions = (session, options) => work(session, 'sales', async (db, current) => {
     const query = options.q ? '%' + options.q + '%' : null;
-    const rows = await repo.rows(db, clientQuery.replace(' WHERE c.business_id = ?', ' WHERE c.business_id = ? AND c.active = TRUE'), [current.business_id, query, query, query, query, options.limit, options.offset]);
+    const rows = await repo.rows(db, clientQuery.replace(' WHERE c.business_id = ?', ' WHERE c.business_id = ? AND c.active = TRUE'), [current.business_id, query, query, query, query, query, options.limit, options.offset]);
     return rows.map(row => publicClient(row, current.business_id));
   });
   const listClients = (session, options) => work(session, 'clients', async (db, current) => {
     const query = options.q ? '%' + options.q + '%' : null;
-    const rows = await repo.rows(db, clientQuery, [current.business_id, query, query, query, query, options.limit, options.offset]);
+    const rows = await repo.rows(db, clientQuery, [current.business_id, query, query, query, query, query, options.limit, options.offset]);
     return rows.map(row => publicClient(row, current.business_id));
   });
   async function ensureUnique(db, businessId, values, exceptId = null) {
@@ -95,7 +95,7 @@ function createCustomerService({ repo, auth, config }) {
     await repo.audit(db, current, active ? 'ACTIVATE_CLIENT' : 'DEACTIVATE_CLIENT', 'clients', id, {});
     return { id: String(id), businessId: String(current.business_id), active };
   });
-  const receivableQuery = 'SELECT s.id, s.business_id, s.client_id, c.name AS client_name, s.invoice_number, s.created_at, s.due_at, s.total, s.status AS sale_status, COALESCE(SUM(CASE WHEN p.status = \'POSTED\' THEN p.amount ELSE 0 END), 0) AS paid, COALESCE(SUM(CASE WHEN p.status = \'PENDING\' THEN p.amount ELSE 0 END), 0) AS pending FROM sales s JOIN clients c ON c.business_id = s.business_id AND c.id = s.client_id LEFT JOIN customer_payments p ON p.business_id = s.business_id AND p.sale_id = s.id WHERE s.business_id = ? AND s.sale_type = \'CREDIT\' AND (? IS NULL OR c.name LIKE ? OR s.invoice_number LIKE ?) GROUP BY s.id, s.business_id, s.client_id, c.name, s.invoice_number, s.created_at, s.due_at, s.total, s.status ORDER BY (s.status = \'COMPLETED\' AND s.due_at < UTC_TIMESTAMP(3)) DESC, s.created_at DESC, s.id DESC LIMIT ? OFFSET ?';
+  const receivableQuery = 'SELECT s.id, s.business_id, s.client_id, c.name AS client_name, s.invoice_number, s.created_at, s.due_at, s.total, s.status AS sale_status, COALESCE(SUM(CASE WHEN p.status = \'POSTED\' THEN p.amount ELSE 0 END), 0) AS paid, COALESCE(SUM(CASE WHEN p.status = \'PENDING\' THEN p.amount ELSE 0 END), 0) AS pending FROM sales s JOIN clients c ON c.business_id = s.business_id AND c.id = s.client_id LEFT JOIN customer_payments p ON p.business_id = s.business_id AND p.sale_id = s.id WHERE s.business_id = ? AND s.sale_type = \'CREDIT\' AND (? IS NULL OR c.name LIKE ? OR s.invoice_number LIKE ? OR CAST(c.id AS CHAR) LIKE ?) GROUP BY s.id, s.business_id, s.client_id, c.name, s.invoice_number, s.created_at, s.due_at, s.total, s.status ORDER BY (s.status = \'COMPLETED\' AND s.due_at < UTC_TIMESTAMP(3)) DESC, s.created_at DESC, s.id DESC LIMIT ? OFFSET ?';
   function formatReceivable(row) {
     const grossBalance = units(row.total) - units(row.paid), pending = units(row.pending);
     const balance = row.sale_status === 'CANCELLED' ? 0n : grossBalance;
@@ -107,12 +107,12 @@ function createCustomerService({ repo, auth, config }) {
   }
   const receivables = (session, options) => work(session, 'clients', async (db, current) => {
     const query = options.q ? '%' + options.q + '%' : null;
-    return (await repo.rows(db, receivableQuery, [current.business_id, query, query, query, options.limit, options.offset])).map(formatReceivable);
+    return (await repo.rows(db, receivableQuery, [current.business_id, query, query, query, query, options.limit, options.offset])).map(formatReceivable);
   });
   const statement = (session, id, options) => work(session, 'clients', async (db, current) => {
     const client = await clientRow(db, current, id);
     if (!client) throw httpError(404, 'CLIENT_NOT_FOUND');
-    const invoiceQuery = receivableQuery.replace(' AND (? IS NULL OR c.name LIKE ? OR s.invoice_number LIKE ?)', ' AND s.client_id = ?').replace(' LIMIT ? OFFSET ?', '');
+    const invoiceQuery = receivableQuery.replace(' AND (? IS NULL OR c.name LIKE ? OR s.invoice_number LIKE ? OR CAST(c.id AS CHAR) LIKE ?)', ' AND s.client_id = ?').replace(' LIMIT ? OFFSET ?', '');
     const invoices = (await repo.rows(db, invoiceQuery, [current.business_id, id])).map(formatReceivable);
     const payments = await repo.rows(db, 'SELECT p.id, p.sale_id, p.amount, p.payment_method, p.status, p.created_at, s.invoice_number, u.full_name AS user_name FROM customer_payments p JOIN sales s ON s.business_id = p.business_id AND s.id = p.sale_id JOIN users u ON u.business_id = p.business_id AND u.id = p.user_id WHERE p.business_id = ? AND p.client_id = ? ORDER BY p.id DESC LIMIT ? OFFSET ?', [current.business_id, id, options.limit, options.offset]);
     return { client: publicClient(client, current.business_id), invoices, payments: payments.map(item => ({ id: String(item.id), saleId: String(item.sale_id), invoiceNumber: item.invoice_number, amount: item.amount, paymentMethod: item.payment_method, status: item.status, createdAt: item.created_at, userName: item.user_name })) };

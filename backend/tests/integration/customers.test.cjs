@@ -55,6 +55,10 @@ test('Fase 5.4: clientes, credito conectado, cuentas por cobrar y abonos', async
   assert.equal(firstSale.paymentMethod,'CREDIT'); assert.equal(firstSale.clientId,first.id); assert.equal(firstSale.cashStatus,'NOT_APPLICABLE'); assert.ok(firstSale.dueAt);
   assert.equal((await admin.request('/products/' + product.id)).data.product.stock,'99.000');
   assert.equal(await count('cash_movements'),beforeCashMovements); assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount,beforeExpected);
+  for (const path of ['/clients?limit=100&q='+first.id,'/sales/clients?limit=100&q='+first.id]) {
+    const found=await admin.request(path);assert.equal(found.status,200);assert.ok(found.data.clients.some(item=>item.id===first.id));
+  }
+  assert.ok((await admin.request('/receivables?limit=100&q='+first.id)).data.receivables.some(item=>item.clientId===first.id));
   const receivableResponse = await admin.request('/receivables?limit=100'); assert.equal(receivableResponse.status,200,JSON.stringify(receivableResponse.data));
   let receivables = receivableResponse.data.receivables; let invoice = receivables.find(item => item.id === firstSale.id);
   assert.equal(invoice.status,'OPEN'); assert.equal(invoice.total,'10.00'); assert.equal(invoice.balance,'10.00'); assert.equal(invoice.paid,'0.00');
@@ -69,6 +73,9 @@ test('Fase 5.4: clientes, credito conectado, cuentas por cobrar y abonos', async
   let paymentRows = await rows(pool,'SELECT id FROM customer_payments WHERE business_id = ? AND sale_id = ? AND payment_method = \'CARD\'',[business,firstSale.id]);
   let movementRows = await rows(pool,'SELECT id FROM cash_movements WHERE business_id = ? AND customer_payment_id = ?',[business,String(paymentRows[0].id)]);
   const cardConfirm = await admin.request('/cash/payments/' + movementRows[0].id + '/confirm','POST',{operationKey:randomUUID()}); assert.equal(cardConfirm.status,200); assert.equal(cardConfirm.data.payment.status,'POSTED'); assert.equal(cardConfirm.data.payment.invoiceNumber,firstSale.invoiceNumber);
+  const paidStock=await admin.request('/products/'+product.id);
+  assert.equal((await admin.request('/sales/'+firstSale.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Crédito con abonos'})).data.error.code,'CREDIT_HAS_PAYMENTS');
+  assert.equal((await admin.request('/products/'+product.id)).data.product.stock,paidStock.data.product.stock);
   pay = await admin.request('/receivables/' + firstSale.id + '/payments','POST',{operationKey:randomUUID(),amount:'5.00',paymentMethod:'TRANSFER'}); assert.equal(pay.data.payment.status,'PENDING');
   paymentRows = await rows(pool,'SELECT id FROM customer_payments WHERE business_id = ? AND sale_id = ? AND payment_method = \'TRANSFER\'',[business,firstSale.id]);
   movementRows = await rows(pool,'SELECT id FROM cash_movements WHERE business_id = ? AND customer_payment_id = ?',[business,String(paymentRows[0].id)]);
@@ -101,4 +108,14 @@ test('Fase 5.4: clientes, credito conectado, cuentas por cobrar y abonos', async
   assert.equal(charged.status,201); assert.equal(charged.data.sale.paymentMethod,'CREDIT'); assert.equal(charged.data.order.status,'COMPLETED');
   assert.equal((await admin.request('/products/' + product.id)).data.product.stock,'96.000'); assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount,beforeOrderCash);
   assert.equal((await admin.request('/cash/overview')).data.overview.pendingOrders.length,0);
+  const beforeCreditCancelStock=Number((await admin.request('/products/'+product.id)).data.product.stock), beforeCreditCancelCash=await count('cash_movements');
+  const beforeStatement=(await admin.request('/clients/'+first.id+'/statement?limit=100&offset=0')).data;
+  const creditCancel=await admin.request('/sales/'+charged.data.sale.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Crédito sin abonos'});
+  assert.equal(creditCancel.status,200);assert.equal(creditCancel.data.sale.status,'CANCELLED');assert.equal(creditCancel.data.sale.paymentMethod,'CREDIT');
+  assert.equal(Number((await admin.request('/products/'+product.id)).data.product.stock),beforeCreditCancelStock+1);assert.equal(await count('cash_movements'),beforeCreditCancelCash);
+  const afterStatement=(await admin.request('/clients/'+first.id+'/statement?limit=100&offset=0')).data;
+  assert.equal(afterStatement.client.debt,(Number(beforeStatement.client.debt)-Number(charged.data.sale.total)).toFixed(2));
+  assert.equal(afterStatement.invoices.find(item=>item.id===charged.data.sale.id).status,'CANCELLED');
+  assert.equal((await admin.request('/sales/'+charged.data.sale.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Segundo intento'})).data.error.code,'SALE_CANCELLED');
+  assert.equal(Number((await admin.request('/products/'+product.id)).data.product.stock),beforeCreditCancelStock+1);
 });

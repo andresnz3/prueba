@@ -3,10 +3,13 @@
 (() => {
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
-  let clients = [], creditClients = [], receivables = [], selectedSale = null, pageRequest = 0, creditRequest = 0, searchTimer = null;
+  let clients = [], creditClients = [], receivables = [], selectedSale = null, pageRequest = 0, creditRequest = 0, clientSearchTimer = null, selectedClientSuggestionId = null;
+  let creditAutocomplete = null, clientAutocomplete = null;
   const api = action => window.PosConnected.inventoryOperation(action);
   const money = value => 'C$' + Number(value || 0).toFixed(2);
   const formatDate = value => value ? new Date(value).toLocaleDateString() : '-';
+  const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase();
+  const clientMatches = (client, query) => [client.name, client.phone, client.ruc, client.id].some(value => normalize(value).includes(normalize(query)));
   const statusText = value => ({ OPEN: 'Pendiente', OVERDUE: 'Vencida', PAID: 'Pagada', CANCELLED: 'Anulada', PENDING_CONFIRMATION: 'Abono pendiente de confirmar' }[value] || value);
   function message(text, kind = 'success') {
     const node = el('clientsNotice'); if (!node) return;
@@ -69,9 +72,10 @@
     el('connectedClientsControls')?.classList.remove('hidden'); el('connectedReceivablesPanel')?.classList.remove('hidden');
     try {
       const [nextClients, nextReceivables] = await Promise.all([allPages('clients', q), allPages('receivables', q)]);
-      if (request !== pageRequest) return;
+      if (request !== pageRequest || q !== (el('clientSearchInput')?.value.trim() || '')) return;
       clients = nextClients; receivables = nextReceivables;
       renderClients(); renderReceivables(); message('');
+      if (document.activeElement === el('clientSearchInput') && !selectedClientSuggestionId) clientAutocomplete?.refresh();
     } catch (error) { if (request === pageRequest) message(error.message, 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
   }
   function fillCreditSelect(values, selected) {
@@ -83,13 +87,21 @@
       const option = new Option(client.name + ' · Disponible ' + money(client.availableCredit), client.id);
       select.add(option);
     }
-    if (selected && values.some(client => client.id === selected && client.active)) select.value = selected;
+    if (selected && values.some(client => client.id === String(selected) && client.active)) select.value = String(selected);
     const chosen = values.find(client => client.id === select.value);
-    if (chosen) el('creditDays').value = String(chosen.creditDays);
+    el('creditDays').value = chosen ? String(chosen.creditDays) : '30';
+    if (document.activeElement === el('creditClientSearch')) creditAutocomplete?.refresh();
   }
-  async function loadCreditClients(q = el('creditClientSearch')?.value.trim() || '') {
-    const request = ++creditRequest, selected = el('creditClientSelect')?.value;
-    try { const values = await allPages('creditClients', q); if (request === creditRequest) fillCreditSelect(values, selected); }
+  async function loadCreditClients(selectedId) {
+    const explicitSelection = selectedId !== undefined && selectedId !== null && String(selectedId) !== '';
+    const request = ++creditRequest, selected = explicitSelection ? String(selectedId) : el('creditClientSelect')?.value;
+    try {
+      const values = await allPages('creditClients');
+      if (request !== creditRequest) return;
+      const current = values.find(client => client.id === String(selected) && client.active);
+      const keepSelection = explicitSelection || (current && normalize(current.name) === normalize(el('creditClientSearch')?.value));
+      fillCreditSelect(values, keepSelection ? selected : '');
+    }
     catch (error) { if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else window.showAlert(error.message); }
   }
   function edit(id) {
@@ -111,8 +123,8 @@
       el('clientModal').classList.add('hidden'); el('clientForm').reset(); el('clientId').value = ''; el('clientDebt').required = true; el('clientCreditDays').required = false; el('clientDebtField').classList.remove('hidden');
       el('clientModalTitle').textContent = 'Nuevo Cliente (Cuenta por Cobrar)'; el('clientCreditDaysField').classList.add('hidden');
       await load('clientsView', el('clientSearchInput').value.trim());
-      await loadCreditClients('');
-      const select = el('creditClientSelect'); if (value?.id) select.value = value.id;
+      await loadCreditClients(value?.id);
+      if (value?.id) el('creditClientSearch').value = value.name;
       message(id ? 'Cliente actualizado.' : 'Cliente creado.');
     } catch (error) { message(error.message, 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { button.disabled = false; }
@@ -162,9 +174,43 @@
   for (const id of ['addNewClientBtn', 'quickAddClientBtn']) el(id)?.addEventListener('click', () => { el('clientDebt').required = false; el('clientCreditDays').required = true; el('clientDebtField').classList.add('hidden'); el('clientCreditDaysField').classList.remove('hidden'); el('clientCreditDays').value = '30'; el('clientModalTitle').textContent = 'Nuevo cliente'; });
   el('clientsTableBody')?.addEventListener('click', routeTable);
   el('receivablesTableBody')?.addEventListener('click', routeTable);
-  el('clientSearchInput')?.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => load('clientsView'), 250); });
-  el('creditClientSearch')?.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadCreditClients(), 250); });
-  el('creditClientSelect')?.addEventListener('change', () => { const client = creditClients.find(value => value.id === el('creditClientSelect').value); if (client) el('creditDays').value = String(client.creditDays); });
+  clientAutocomplete = window.PosAutocomplete?.setup(el('clientSearchInput'), {
+    getItems: query => clients.filter(client => clientMatches(client, query)),
+    getLabel: client => client.name,
+    getMeta: client => [client.phone, client.ruc ? 'RUC: ' + client.ruc : '', 'ID: ' + client.id].filter(Boolean).join(' · '),
+    onInput: () => {
+      selectedClientSuggestionId = null;
+      clearTimeout(clientSearchTimer);
+      clientSearchTimer = setTimeout(() => load('clientsView'), 250);
+    },
+    onSelect: client => {
+      selectedClientSuggestionId = client.id;
+      load('clientsView', client.name);
+    }
+  });
+  creditAutocomplete = window.PosAutocomplete?.setup(el('creditClientSearch'), {
+    getItems: query => creditClients.filter(client => client.active && clientMatches(client, query)),
+    getLabel: client => client.name,
+    getMeta: client => [client.phone, client.ruc ? 'RUC: ' + client.ruc : '', 'ID: ' + client.id, 'Disponible: ' + money(client.availableCredit)].filter(Boolean).join(' · '),
+    onInput: query => {
+      const select = el('creditClientSelect');
+      const selected = creditClients.find(client => client.id === select.value);
+      if (selected && normalize(selected.name) !== normalize(query)) {
+        select.value = '';
+        el('creditDays').value = '30';
+      }
+    },
+    onSelect: client => {
+      el('creditClientSelect').value = client.id;
+      el('creditClientSelect').dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+  el('creditClientSelect')?.addEventListener('change', () => {
+    const client = creditClients.find(value => value.id === el('creditClientSelect').value && value.active);
+    el('creditDays').value = client ? String(client.creditDays) : '30';
+    if (client) el('creditClientSearch').value = client.name;
+    creditAutocomplete?.close();
+  });
   el('creditDays').readOnly = true;
   el('clientModal')?.querySelector('.close-modal-btn')?.addEventListener('click', () => { el('clientDebt').required = true; el('clientCreditDays').required = false; el('clientDebtField').classList.remove('hidden'); el('clientCreditDaysField').classList.add('hidden'); });
   window.PosClients = Object.freeze({ load, loadCreditClients, edit, toggle, statement, save, submitPayment, openPayment, refreshCreditClients: loadCreditClients });

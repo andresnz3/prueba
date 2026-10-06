@@ -43,6 +43,7 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
   async function body(owner=one,changes={},extra={}) { const data=cart(changes), q=await owner.request('/sales/quote','POST',data); assert.equal(q.status,200); return {...data,operationKey:randomUUID(),quoteToken:q.data.quote.quoteToken,cashReceived:data.paymentMethod==='CASH'?'100.00':null,detail:'Venta de prueba',...extra}; }
   const stock=async id=>(await admin.request('/products/'+id)).data.product.stock;
   const count=async table=>Number((await rows(pool,'SELECT COUNT(*) AS n FROM '+table+' WHERE business_id = ?',[business]))[0].n);
+  const saleSequence=async()=>{const [row]=await rows(pool,"SELECT current_number FROM document_sequences WHERE business_id = ? AND document_type = 'SALE'",[business]);return BigInt(row?.current_number||'0');};
   await t.test('anonimo y CSRF invalidos no escriben',async()=>{
     assert.equal((await anon.request('/sales','POST',{})).status,401);
     assert.equal((await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'10'},{'X-CSRF-Token':'bad'})).status,403);
@@ -54,6 +55,10 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     assert.equal((await one.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'10'})).status,403);
     assert.equal((await one.request('/sales')).status,403);
   });
+  await t.test('vista previa de factura no reserva consecutivo',async()=>{
+    const before=await saleSequence(), response=await one.request('/sales/next-invoice');
+    assert.equal(response.status,200);assert.equal(response.data.businessId,business);assert.equal(response.data.invoiceNumber,'000001');assert.equal(await saleSequence(),before);
+  });
   await t.test('apertura idempotente y caja unica por negocio',async()=>{
     const data={operationKey:randomUUID(),openingAmount:'10.00'}, results=await Promise.all([admin.request('/cash/sessions','POST',data),admin.request('/cash/sessions','POST',data)]);
     assert.ok(results.every(r=>r.status===201)); assert.equal(results[0].data.cash.id,results[1].data.cash.id); cash=results[0].data.cash;
@@ -62,6 +67,7 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
   await t.test('venta calcula importes exactos, usuario, factura, stock y efectivo sin duplicar',async()=>{
     const input=await body(); const response=await one.request('/sales','POST',input); assert.equal(response.status,201); firstSale=response.data.sale;
     assert.equal(firstSale.invoiceNumber,'000001'); assert.equal(firstSale.subtotal,'13.85'); assert.equal(firstSale.discount,'1.39'); assert.equal(firstSale.total,'12.46'); assert.equal(firstSale.changeAmount,'87.54'); assert.equal(firstSale.seller,'salesone'); assert.equal(await stock(product.id),'98.875');
+    assert.equal((await one.request('/sales/next-invoice')).data.invoiceNumber,'000002');
     assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount,'22.46');
     assert.equal(await count('cash_movements'),1); assert.equal(firstSale.items[0].unitPrice,'12.31');
     const [item]=await rows(pool,'SELECT cost_at_sale FROM sale_items WHERE business_id = ? AND sale_id = ?',[business,firstSale.id]); assert.equal(item.cost_at_sale,'7.00');
@@ -145,8 +151,8 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     const id=page.data.sales[0].id, before=(await admin.request('/sales?limit=2&offset=2&maxId='+id)).data.sales.map(s=>s.id);await one.request('/sales','POST',await body());assert.deepEqual((await admin.request('/sales?limit=2&offset=2&maxId='+id)).data.sales.map(s=>s.id),before);
     assert.equal((await admin.request('/sales/'+firstSale.id)).data.sale.status,'CANCELLED');
   });
-  await t.test('cierre idempotente persiste arqueo y bloquea ventas y devoluciones originales',async()=>{
-    const latest=(await admin.request('/sales?limit=1')).data.sales[0], before=await count('sales');const expected=(await admin.request('/cash/current?full=true')).data.cash.expectedAmount, data={operationKey:randomUUID(),countedAmount:expected};
+  await t.test('cierre idempotente conserva arqueo y registra devoluciones posteriores en la caja actual',async()=>{
+    const latest=(await admin.request('/sales?limit=1')).data.sales[0], before=await count('sales'), beforeStock=Number(await stock(product.id));const expected=(await admin.request('/cash/current?full=true')).data.cash.expectedAmount, data={operationKey:randomUUID(),countedAmount:expected};
     const a=await admin.request('/cash/sessions/'+cash.id+'/close','POST',data),b=await admin.request('/cash/sessions/'+cash.id+'/close','POST',data);assert.equal(a.status,200);assert.equal(b.status,200);assert.equal(a.data.cash.status,'CLOSED');assert.equal(a.data.cash.difference,'0.00');
     assert.deepEqual(a.data.cash.summary,b.data.cash.summary);
     assert.equal(a.data.cash.closedBy,'salesadmin'); assert.ok(a.data.cash.openedAt); assert.ok(a.data.cash.closedAt);
@@ -154,8 +160,32 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     assert.equal((Number(a.data.cash.openingAmount)+Number(breakdown.cashSales)+Number(breakdown.cashCollections)+Number(breakdown.otherCash)-Number(breakdown.expenses)-Number(breakdown.withdrawals)-Number(breakdown.purchases)-Number(breakdown.cashReturns)).toFixed(2),a.data.cash.expectedAmount);
     const saved=(await admin.request('/cash/sessions')).data.sessions.find(s=>s.id===cash.id); assert.deepEqual(saved.summary,breakdown); assert.equal(saved.expectedAmount,expected);
     assert.equal((await one.request('/sales/quote','POST',cart())).data.error.code,'CASH_CLOSED');
-    assert.equal((await admin.request('/sales/'+latest.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Caja cerrada'})).data.error.code,'CASH_ORIGINAL_CLOSED');assert.equal(await count('sales'),before);
+    const originalSnapshot=(await rows(pool,'SELECT status, expected_amount, counted_amount, difference, closed_at FROM cash_sessions WHERE business_id = ? AND id = ?',[business,cash.id]))[0];
+    const blocked=await admin.request('/sales/'+latest.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Sin caja activa'});
+    assert.equal(blocked.status,409);assert.equal(blocked.data.error.code,'CANCEL_REQUIRES_OPEN_CASH');assert.equal(await count('sales'),before);assert.equal(Number(await stock(product.id)),beforeStock);
     assert.equal((await admin.request('/cash/sessions')).data.sessions[0].status,'CLOSED');
+    const insufficientOpen=await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'0.00'});assert.equal(insufficientOpen.status,201);const insufficientCash=insufficientOpen.data.cash;
+    const insufficient=await admin.request('/sales/'+latest.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Saldo insuficiente'});assert.equal(insufficient.status,409);assert.equal(insufficient.data.error.code,'CASH_REFUND_INSUFFICIENT');assert.equal((await admin.request('/sales/'+latest.id)).data.sale.status,'COMPLETED');assert.equal(Number(await stock(product.id)),beforeStock);assert.equal((await rows(pool,"SELECT id FROM cash_movements WHERE business_id = ? AND sale_id = ? AND type = 'REVERSAL'",[business,latest.id])).length,0);
+    await admin.request('/cash/sessions/'+insufficientCash.id+'/close','POST',{operationKey:randomUUID(),countedAmount:insufficientCash.expectedAmount});
+    const opened=await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:latest.total});assert.equal(opened.status,201);const refundCash=opened.data.cash;
+    const beforeRefundMovements=await count('cash_movements'), originalRows=repo.rows;
+    repo.rows=(db,sql,args)=>{if(sql.includes('INSERT INTO cash_movements')&&sql.includes("'REVERSAL'"))throw new Error('Injected refund failure');return originalRows(db,sql,args);};
+    let failedRefund;try{failedRefund=await admin.request('/sales/'+latest.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Fallo temporal'});}finally{repo.rows=originalRows;}
+    assert.equal(failedRefund.status,500);assert.equal((await admin.request('/sales/'+latest.id)).data.sale.status,'COMPLETED');assert.equal(Number(await stock(product.id)),beforeStock);assert.equal(await count('cash_movements'),beforeRefundMovements);
+    const sequenceBeforeCancellation=await saleSequence();
+    const cancelled=await admin.request('/sales/'+latest.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Devolucion posterior al cierre'});
+    assert.equal(cancelled.status,200);assert.equal(cancelled.data.sale.status,'CANCELLED');assert.equal(cancelled.data.sale.invoiceNumber,latest.invoiceNumber);assert.equal(cancelled.data.refundCashSessionId,refundCash.id);
+    assert.equal(await saleSequence(),sequenceBeforeCancellation);assert.equal((await admin.request('/sales/next-invoice')).data.invoiceNumber,(sequenceBeforeCancellation+1n).toString().padStart(6,'0'));
+    assert.equal(Number(await stock(product.id)),beforeStock+1.125);assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount,'0.00');
+    assert.deepEqual((await rows(pool,'SELECT status, expected_amount, counted_amount, difference, closed_at FROM cash_sessions WHERE business_id = ? AND id = ?',[business,cash.id]))[0],originalSnapshot);
+    const [originalMovement]=await rows(pool,"SELECT id, cash_session_id, status FROM cash_movements WHERE business_id = ? AND sale_id = ? AND type = 'SALE'",[business,latest.id]);
+    const [reversal]=await rows(pool,"SELECT cash_session_id, reversal_of_movement_id, amount, description, status FROM cash_movements WHERE business_id = ? AND sale_id = ? AND type = 'REVERSAL'",[business,latest.id]);
+    assert.equal(originalMovement.cash_session_id,String(cash.id));assert.equal(originalMovement.status,'CONFIRMED');assert.equal(String(reversal.cash_session_id),refundCash.id);assert.equal(String(reversal.reversal_of_movement_id),String(originalMovement.id));assert.equal(reversal.amount,latest.total);assert.equal(reversal.status,'CONFIRMED');
+    assert.match(reversal.description,/Factura #/);assert.match(reversal.description,/caja original #/);assert.match(reversal.description,/caja actual #/);assert.match(reversal.description,/Devolucion posterior al cierre/);
+    const [cancelAudit]=await rows(pool,"SELECT u.username, details FROM audit_logs a JOIN users u ON u.business_id = a.business_id AND u.id = a.user_id WHERE a.business_id = ? AND a.action = 'CANCEL_SALE' AND a.entity_id = ? ORDER BY a.id DESC LIMIT 1",[business,latest.id]);
+    const auditDetails=typeof cancelAudit.details==='string'?JSON.parse(cancelAudit.details):cancelAudit.details;assert.equal(cancelAudit.username,'salesadmin');assert.equal(auditDetails.invoiceNumber,latest.invoiceNumber);assert.equal(auditDetails.paymentMethod,'CASH');assert.equal(auditDetails.originalCashSessionId,String(cash.id));assert.equal(auditDetails.refundCashSessionId,refundCash.id);assert.equal(auditDetails.reason,'Devolucion posterior al cierre');assert.ok(auditDetails.products.some(item=>item.productId===product.id));
+    assert.equal((await admin.request('/sales/'+latest.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Segundo intento'})).data.error.code,'SALE_CANCELLED');assert.equal(Number(await stock(product.id)),beforeStock+1.125);assert.equal((await rows(pool,"SELECT id FROM cash_movements WHERE business_id = ? AND sale_id = ? AND type = 'REVERSAL'",[business,latest.id])).length,1);
+    const current=(await admin.request('/cash/current?full=true')).data.cash;await admin.request('/cash/sessions/'+current.id+'/close','POST',{operationKey:randomUUID(),countedAmount:current.expectedAmount});
   });
   await t.test('cotizacion no permite registrar venta en otro turno',async()=>{
     await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'0'});const input=await body(), current=(await admin.request('/cash/current?full=true')).data.cash;
@@ -211,6 +241,10 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
       const [stored]=await rows(pool,'SELECT m.status, m.confirmed_at, u.username FROM cash_movements m JOIN users u ON u.business_id=m.business_id AND u.id=m.confirmed_by_user_id WHERE m.business_id = ? AND m.id = ?',[business,pending.id]);
       assert.equal(stored.status,'CONFIRMED');assert.ok(stored.confirmed_at);assert.equal(stored.username,'salesadmin');
       assert.equal((await admin.request('/cash/payments/'+pending.id+'/confirm','POST',{operationKey:randomUUID()})).data.error.code,'PAYMENT_NOT_PENDING');
+      const stockBeforeCancel=await stock(product.id), reversalCount=await rows(pool,"SELECT COUNT(*) AS n FROM cash_movements WHERE business_id = ? AND sale_id = ? AND type = 'REVERSAL'",[business,sale.id]);
+      assert.equal((await admin.request('/sales/'+sale.id+'/cancel','POST',{operationKey:randomUUID(),reason:'Pago externo ya confirmado'})).data.error.code,'PAYMENT_ALREADY_CONFIRMED');
+      assert.equal((await admin.request('/sales/'+sale.id)).data.sale.status,'COMPLETED');assert.equal(await stock(product.id),stockBeforeCancel);
+      assert.equal(Number((await rows(pool,"SELECT COUNT(*) AS n FROM cash_movements WHERE business_id = ? AND sale_id = ? AND type = 'REVERSAL'",[business,sale.id]))[0].n),Number(reversalCount[0].n));
     }
     const cancelled=(await one.request('/sales','POST',await body(one,{paymentMethod:'CARD'}))).data.sale;
     const [pending]=await rows(pool,"SELECT id FROM cash_movements WHERE business_id = ? AND sale_id = ? AND type = 'SALE'",[business,cancelled.id]);
@@ -223,12 +257,14 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     await admin.request('/cash/sessions/'+current.id+'/close','POST',{operationKey:randomUUID(),countedAmount:current.expectedAmount});
     assert.equal((await admin.request('/business-settings/sales-flow','PUT',{salesFlow:'CENTRALIZED'})).status,200);
     assert.equal((await one.request('/sales/quote','POST',cart())).data.error.code,'SALES_FLOW_CHANGED');
-    const beforeStock=await stock(product.id), beforeSales=await count('sales'), beforeMovements=await count('cash_movements');
+    const beforeStock=await stock(product.id), beforeSales=await count('sales'), beforeMovements=await count('cash_movements'), sequenceBeforeOrder=await saleSequence();
+    assert.equal((await one.request('/sales/next-invoice')).data.invoiceNumber,(sequenceBeforeOrder+1n).toString().padStart(6,'0'));
     const orderInput={items:[{productId:product.id,quantity:'1.125'}],priceType:'RETAIL',discountPercent:'0',detail:'Pedido de caja',operationKey:randomUUID()};
     const rejected=await one.request('/sales/orders','POST',orderInput);assert.equal(rejected.status,409);assert.equal(rejected.data.error.code,'CASH_CLOSED');
     assert.equal(await count('sales'),beforeSales);assert.equal(await count('cash_movements'),beforeMovements);
     await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'5.00'});
     const created=await one.request('/sales/orders','POST',orderInput);assert.equal(created.status,201);assert.equal(created.data.order.status,'PENDING');
+    assert.equal(Object.hasOwn(created.data.order,'invoiceNumber'),false);assert.equal(await saleSequence(),sequenceBeforeOrder);
     assert.equal((await one.request('/sales/orders','POST',orderInput)).data.order.id,created.data.order.id);
     current=(await admin.request('/cash/current?full=true')).data.cash;await admin.request('/cash/sessions/'+current.id+'/close','POST',{operationKey:randomUUID(),countedAmount:current.expectedAmount});
     assert.equal((await stock(product.id)),beforeStock);assert.equal(await count('sales'),beforeSales);assert.equal(await count('cash_movements'),beforeMovements);
@@ -236,8 +272,11 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     assert.equal((await admin.request('/cash/orders/'+created.data.order.id+'/quote','POST',{paymentMethod:'CASH'})).data.error.code,'CASH_CLOSED');
     assert.equal((await admin.request('/business-settings/sales-flow','PUT',{salesFlow:'DIRECT'})).data.error.code,'PENDING_ORDERS_EXIST');
     await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'5.00'});
+    const sequenceBeforeCancelledOrder=await saleSequence();
     const second=(await one.request('/sales/orders','POST',{...orderInput,operationKey:randomUUID(),detail:'Pedido para cancelar'})).data.order;
+    assert.equal(Object.hasOwn(second,'invoiceNumber'),false);assert.equal(await saleSequence(),sequenceBeforeCancelledOrder);
     assert.equal((await admin.request('/cash/orders/'+second.id+'/cancel','POST',{operationKey:randomUUID()})).data.order.status,'CANCELLED');
+    assert.equal(await saleSequence(),sequenceBeforeCancelledOrder);assert.equal((await one.request('/sales/next-invoice')).data.invoiceNumber,(sequenceBeforeCancelledOrder+1n).toString().padStart(6,'0'));
     const live=await admin.request('/products/'+product.id);await admin.request('/products/'+product.id,'PATCH',{revision:live.data.product.revision,retailPrice:'15.00'});
     const quoteResponse=await admin.request('/cash/orders/'+created.data.order.id+'/quote','POST',{paymentMethod:'CARD'}), q=quoteResponse.data.quote;
     assert.equal(quoteResponse.status,200);assert.equal(q.priceChanged,true);assert.equal(q.estimatedTotal,created.data.order.estimatedTotal);assert.equal(q.total,'16.88');
@@ -246,6 +285,7 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     const q2=(await admin.request('/cash/orders/'+created.data.order.id+'/quote','POST',{paymentMethod:'CARD'})).data.quote;
     const charged=await admin.request('/cash/orders/'+created.data.order.id+'/charge','POST',{operationKey:randomUUID(),quoteToken:q2.quoteToken,paymentMethod:'CARD',cashReceived:null});
     assert.equal(charged.status,201);assert.equal(charged.data.sale.seller,'salesone');assert.equal(charged.data.sale.cashier,'salesadmin');assert.equal(charged.data.order.status,'COMPLETED');
+    assert.equal(charged.data.sale.invoiceNumber,(sequenceBeforeOrder+1n).toString().padStart(6,'0'));assert.equal(await saleSequence(),sequenceBeforeOrder+1n);assert.equal((await one.request('/sales/next-invoice')).data.invoiceNumber,(sequenceBeforeOrder+2n).toString().padStart(6,'0'));
     assert.equal(await stock(product.id),(Number(beforeStock)-1.125).toFixed(3));
     assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount,'5.00');
     current=(await admin.request('/cash/current?full=true')).data.cash;

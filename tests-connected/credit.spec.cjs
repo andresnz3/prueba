@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const password = 'Browser-fixture-password-123!';
 const business = process.env.POS_TEST_BUSINESS;
 const errors = new WeakMap();
-test.beforeEach(async ({page})=>{const list=[];errors.set(page,list);page.on('pageerror',error=>list.push(error.message));});
+test.beforeEach(async ({page,context})=>{await context.addInitScript({path:require.resolve('../tests/dexie-search-shim.js')});const list=[];errors.set(page,list);page.on('pageerror',error=>list.push(error.message));});
 test.afterEach(async ({page})=>{expect(errors.get(page)).toEqual([]);});
 async function login(page) { await page.goto('/?mode=connected'); await page.locator('#loginBusinessId').fill(business); await page.locator('#loginUsername').fill('browseradmin'); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button').click(); await expect(page.locator('#app')).toBeVisible(); }
 async function call(page,method,...args) { return page.evaluate(async({method,args})=>{const api=new window.PosApiClient(window.POS_API_BASE_URL);await api.me();return api[method](...args);},{method,args}); }

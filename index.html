@@ -64,7 +64,7 @@
             <div id="salesView" class="view-panel">
                 <div class="workspace-layout">
                     <section class="workspace">
-                        <div class="page-heading"><div><h1>Punto de Venta</h1></div><div class="sale-number">Venta #<strong id="currentSaleNumber">000001</strong></div></div>
+                        <div class="page-heading"><div><h1>Punto de Venta</h1></div><div class="sale-number"><span id="currentSaleNumberLabel">Próxima factura #</span><strong id="currentSaleNumber">000001</strong></div></div>
                         <section class="buyer-section">
                             <div class="form-group" style="margin-bottom: 10px;">
                                 <label for="saleDetailInput" style="font-size: 1rem; color: #000;">Detalle de la venta / Nombre del Cliente (Opcional):</label>
@@ -93,7 +93,7 @@
                             <div class="catalog-heading" style="flex-direction: column; gap: 10px;">
                                 <div style="display: flex; justify-content: space-between; align-items: center;"><h2>Catálogo de productos</h2><div class="product-count"><span id="productCount">0</span> productos</div></div>
                                 <label class="visually-hidden" for="searchProductInput">Buscar producto por nombre o código</label>
-                                <input type="text" id="searchProductInput" placeholder="🔍 Buscar producto por nombre o código..." style="border: 1px solid #999; border-radius: 8px; font-size: 1rem; width: 100%; background-color: #ffffff !important; color: #000000 !important;">
+                                <input type="text" id="searchProductInput" placeholder="Buscar producto por nombre o código..." style="border: 1px solid #999; border-radius: 8px; font-size: 1rem; width: 100%; background-color: #ffffff !important; color: #000000 !important;">
                             </div>
                             <div id="productGrid" class="product-grid"></div>
                         </section>
@@ -121,10 +121,11 @@
                                     <label class="payment-option"><input type="radio" name="paymentMethod" value="credit"> Crédito</label>
                                 </div>
                                 <div id="creditClientContainer" class="form-group hidden" style="margin-top: 15px; background: #f4f4f4; padding: 10px; border-radius: 8px; border: 1px solid #ddd;">
-                                    <label for="creditClientSelect" style="font-weight: bold; color: #d32f2f;">1. Seleccione el Cliente (Deudor):</label>
-                                    <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-                                        <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;"><label for="creditClientSearch">Buscar cliente</label><input id="creditClientSearch" type="search" placeholder="Nombre, tel&#233;fono o identificaci&#243;n"></div><select id="creditClientSelect" style="flex: 1; padding: 8px; background-color: #fff !important; color: #000 !important;"></select>
-                                        <button type="button" id="quickAddClientBtn" class="btn btn-primary" style="padding: 0 15px; font-weight: bold;" title="Crear Nuevo Cliente">➕ Nuevo</button>
+                                    <label for="creditClientSearch" class="credit-client-heading">1. Seleccione el cliente (deudor)</label>
+                                    <div class="credit-client-pickers">
+                                        <div class="credit-client-search-field"><label for="creditClientSearch">Buscar por nombre, tel&#233;fono, RUC o c&#233;dula</label><input id="creditClientSearch" type="search" placeholder="Escriba para buscar" autocomplete="off"></div>
+                                        <div class="credit-client-select-field"><label for="creditClientSelect">Lista de clientes</label><select id="creditClientSelect" aria-label="Cliente de crédito"></select></div>
+                                        <button type="button" id="quickAddClientBtn" class="btn btn-primary" title="Crear nuevo cliente">+ Nuevo</button>
                                     </div>
                                     <label for="creditDays" style="font-weight: bold; color: #d32f2f;">2. Plazo para pagar (Días):</label>
                                     <input type="number" id="creditDays" value="30" min="1" style="width: 100%; padding: 8px; font-size: 1.1em; background-color: #fff !important; color: #000 !important;">
@@ -291,7 +292,7 @@
                                 <select id="connectedSalesFlow"><option value="DIRECT">Venta directa</option><option value="CENTRALIZED">Caja centralizada</option></select>
                                 <button id="saveConnectedSalesFlow" class="btn btn-secondary" type="button">Guardar flujo</button>
                             </div>
-                            <p id="connectedSalesFlowMessage" role="status" aria-live="polite">En venta directa, cada vendedor cobra. En el flujo central, los vendedores preparan pedidos y un usuario con permiso de Caja los cobra.</p>
+                            <p id="connectedSalesFlowMessage" role="status" aria-live="polite">En venta directa, cada vendedor cobra. En el flujo central, los vendedores preparan órdenes y un usuario con permiso de Caja las cobra.</p>
                         </div>
                         <div class="summary-cards">
                             <div class="summary-card" style="border-left:4px solid #2563eb;"><span>Ventas registradas</span><h3 id="cajaCentralVentas">C$0.00</h3></div>
@@ -666,7 +667,7 @@
                     <div class="form-group" style="flex: 2; min-width: 200px; position: relative; z-index: 10;">
                         <label for="purchSupplier">Proveedor</label>
                         <div style="display:flex; gap:5px;">
-                            <input type="text" id="purchSupplier" list="supplierDataList" placeholder="Escriba el nombre..." autocomplete="off" required style="flex:1;">
+                            <input type="text" id="purchSupplier" placeholder="Escriba el nombre..." autocomplete="off" required style="flex:1;">
                             <datalist id="supplierDataList"></datalist>
                             <button type="button" id="quickAddSupplierFromPurchBtn" class="btn" style="background:#0066cc; color:white; padding:0 12px; font-weight:bold; border-radius:6px; position: relative; z-index: 11;" title="Crear Nuevo Proveedor Rápidamente">➕</button>
                         </div>
@@ -678,7 +679,7 @@
                 <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #bbdefb;">
                     <h4 style="margin-bottom: 10px; color: #0066cc;">Agregar Productos al Inventario</h4>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
-                        <div class="form-group" style="flex: 1; min-width: 200px;"><label for="purchProductTemp">Producto</label><div style="display: flex; gap: 5px;"><input type="text" id="purchProductTemp" list="productDataList" placeholder="Nombre, código interno o código de barras..." aria-describedby="purchaseProductSearchHint" style="flex: 1;"><button type="button" id="quickAddProductFromPurchBtn" class="btn" style="background:#ff9800; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Crear Nuevo Producto Rápidamente">➕</button><button type="button" id="quickEditProductFromPurchBtn" class="btn" style="background:#64748b; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Editar el producto escrito arriba">✏️</button></div><small id="purchaseProductSearchHint">Busca por nombre, código interno o código de barras.</small><datalist id="productDataList"></datalist></div>
+                        <div class="form-group" style="flex: 1; min-width: 200px;"><label for="purchProductTemp">Producto</label><div style="display: flex; gap: 5px;"><input type="text" id="purchProductTemp" placeholder="Nombre, código interno o código de barras..." aria-describedby="purchaseProductSearchHint" style="flex: 1;"><button type="button" id="quickAddProductFromPurchBtn" class="btn" style="background:#ff9800; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Crear Nuevo Producto Rápidamente">➕</button><button type="button" id="quickEditProductFromPurchBtn" class="btn" style="background:#64748b; color:white; padding:0 12px; font-weight:bold; border-radius:6px;" title="Editar el producto escrito arriba">✏️</button></div><small id="purchaseProductSearchHint">Busca por nombre, código interno o código de barras.</small><datalist id="productDataList"></datalist></div>
                         <div class="form-group" style="flex: 1; min-width: 70px; max-width: 100px;"><label for="purchQtyTemp">Cant.</label><input type="number" id="purchQtyTemp" min="1" value="1"></div>
                         <div class="form-group" style="flex: 1; min-width: 100px; max-width: 140px;"><label for="purchCostTemp">Costo c/u</label><input type="number" id="purchCostTemp" step="0.01"></div>
                         <div style="margin-bottom: 1rem; flex-shrink: 0;"><button type="button" id="btnAddItemToPurch" class="btn btn-secondary" style="height: 44px; padding: 0 15px; font-weight: bold;">➕ Agregar</button></div>

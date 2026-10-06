@@ -15,6 +15,7 @@ Una unica caja compartida por negocio identifica el turno. Todas las ventas de c
 | Metodo y ruta | Permiso | Contrato |
 | --- | --- | --- |
 | POST /sales/quote | sales + CSRF | items, priceType, paymentMethod, discountPercent; devuelve quote con importes, caja y quoteToken |
+| GET /sales/next-invoice | sales | Devuelve el siguiente numero visible como vista previa; leerlo no reserva ni incrementa la secuencia |
 | POST /sales | sales + CSRF | Los campos anteriores mas operationKey, quoteToken, cashReceived y detail; devuelve kind=SALE y sale |
 | GET /sales | history | limit/offset, maxId opcional; devuelve sales |
 | GET /sales/:id | history | Factura propia, snapshots e informacion de anulacion |
@@ -26,6 +27,8 @@ Una unica caja compartida por negocio identifica el turno. Todas las ventas de c
 | GET /cash/sessions | cash | limit/offset; sesiones con arqueo y movimientos |
 | POST /cash/sessions | cash + CSRF | operationKey, openingAmount; apertura idempotente |
 | POST /cash/sessions/:id/close | cash + CSRF | operationKey, countedAmount; cierre y diferencia idempotentes |
+
+En flujo centralizado, `sale_orders.id` identifica una orden pendiente y no es un numero de factura. Crear, consultar o cancelar una orden no modifica `document_sequences`; `/cash/orders/:id/charge` la incrementa una sola vez al crear la venta y asignar su factura. La cabecera muestra la vista previa del siguiente numero; una anulacion conserva el numero de la factura emitida y no consume otro.
 
 IDs BIGINT y DECIMAL viajan como cadenas. Los listados admiten limit=1..100 y offset=0..9999999. maxId fija un corte del historial ante ventas nuevas; el frontend recorre todas las paginas. Cuerpos estrictos: se rechazan businessId/business_id, userId, precios, importes calculados, impuestos y campos desconocidos. Se exige JSON en escrituras y CSRF ligado a la sesion. Todas las respuestas son no-store.
 
@@ -39,7 +42,7 @@ Se conserva la regla del POS actual: total=subtotal-descuento, tax=0. No se aña
 
 Efectivo: una entrada SALE CONFIRMED por el total cobrado, no por el efectivo recibido. cash_received y change_amount preservan el cambio. Tarjeta y transferencia crean también un movimiento SALE IN con estado PENDING y método visible, dentro de la misma transacción que factura y descuenta stock. Los estados pendientes no aumentan el efectivo esperado: solo se suman movimientos CONFIRMED. No existe todavía una interfaz conectada para confirmar tarjeta/transferencia; por eso permanecen pendientes y nunca se confirman automáticamente. Estos medios registran pagos declarados por el operador: no se integró una pasarela bancaria ni se procesa un cargo/refund externo.
 
-Cierre: persiste contado, esperado y diferencia, actor y fecha. No incluye gastos/abonos/entradas manuales futuros. Anulación en efectivo requiere la caja ORIGINAL abierta, movimiento original consistente y fondos; crea una salida REVERSAL vinculada al ingreso, sin borrar o modificar el original. Tarjeta/transferencia anulan el registro, marcan VOID su movimiento pendiente y reponen stock; la devolución por el mismo medio se realiza fuera del POS. Devoluciones en efectivo después del cierre quedan bloqueadas hasta integrar un proceso específico.
+Cierre: persiste contado, esperado y diferencia, actor y fecha. No incluye gastos/abonos/entradas manuales futuros. Para anular una venta de efectivo con importe positivo debe haber una caja abierta actualmente y saldo suficiente en ella. La devolución se registra como salida REVERSAL en la caja actual, vinculada al movimiento SALE original; el movimiento, caja y cierre originales quedan intactos. Sin caja abierta se devuelve `CANCEL_REQUIRES_OPEN_CASH` con el mensaje «Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual». La anulación repone stock una sola vez y conserva el número de factura. Una venta de total cero no crea movimiento de efectivo. Tarjeta/transferencia anulan el registro y marcan VOID su movimiento pendiente; una venta ya confirmada no se anula hasta registrar el reembolso externo. Las ventas a crédito solo se anulan si no tienen abonos aplicados.
 
 ## Integridad, concurrencia e idempotencia
 
@@ -77,7 +80,7 @@ El script exige --apply y verifica que no existan la tabla/columnas antes de eje
 6. Ventas: buscar o escanear, ajustar cantidades, elegir tarifa, descuento y medio de pago. Cobrar muestra el total calculado por MySQL. En efectivo ingresar recibido suficiente y Confirmar venta. Tarjeta/transferencia conservan el flujo directo del modo local y quedan como pendientes visibles en Caja e Historial; aun no tienen accion de confirmacion.
 7. Verificar ticket, Historial y Kardex tras recargar. El historial/anulacion de vendedor requiere autorizacion history.
 8. Si hay resultado desconocido, pulsar Comprobar operacion antes de cobrar otra vez. No borrar manualmente la referencia pendiente.
-9. Caja: confirmar que solo efectivo aumenta esperado; cerrar con el conteo real. Anulaciones de efectivo se prueban antes del cierre.
+9. Caja: confirmar que solo efectivo aumenta esperado; cerrar con el conteo real. Probar una devolución después del cierre: sin caja actual se bloquea; al abrir otra caja con saldo suficiente, la salida se registra ahí y el cierre original permanece intacto.
 
 ## Validaciones y limites pendientes
 

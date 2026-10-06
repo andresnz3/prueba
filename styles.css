@@ -63,6 +63,46 @@ input::placeholder { color: #94a3b8; }
 input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
+/* Autocomplete: claro, legible y fuera de contenedores con overflow. */
+.autocomplete-search-input, #inventorySearchInput {
+  background: #fff !important; color: #0f172a !important; border: 1px solid #cbd5e1 !important;
+}
+.autocomplete-search-input::placeholder, #inventorySearchInput::placeholder { color: #64748b !important; opacity: 1; }
+.autocomplete-suggestions {
+  position: fixed; z-index: 3000; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
+  padding: 4px; background: #fff; color: #0f172a; border: 1px solid #cbd5e1; border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .18); scrollbar-width: thin;
+}
+.autocomplete-suggestions[hidden] { display: none !important; }
+.autocomplete-option {
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px;
+  width: 100%; min-height: 44px; padding: 7px 10px; border: 0; border-radius: 6px;
+  background: #fff; color: #0f172a; text-align: left; cursor: pointer; font: inherit;
+}
+.autocomplete-option[aria-selected="true"], .autocomplete-option:focus-visible { background: #eff4ff; outline: 2px solid #2563eb; outline-offset: -2px; }
+.autocomplete-option-title { font-size: .9rem; font-weight: 600; line-height: 1.3; }
+.autocomplete-option-meta { max-width: 100%; overflow: hidden; color: #64748b; font-size: .78rem; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.credit-client-heading { display: block; margin-bottom: 8px; color: #7f1d1d; font-weight: 700; }
+#creditClientContainer { container: credit-client-picker / inline-size; min-width: 0; }
+.credit-client-pickers { display: grid; width: 100%; min-width: 0; grid-template-columns: minmax(0, 1.2fr) minmax(180px, 1fr) auto; gap: 8px; align-items: end; margin-bottom: 10px; }
+.credit-client-search-field, .credit-client-select-field { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.credit-client-search-field label, .credit-client-select-field label { color: #334155; font-size: .78rem; font-weight: 600; }
+#creditClientSearch, #creditClientSelect { width: 100%; min-width: 0; background: #fff !important; color: #0f172a !important; }
+#quickAddClientBtn { min-height: 40px; padding-inline: 14px; }
+@container credit-client-picker (max-width: 560px) {
+  .credit-client-pickers { grid-template-columns: minmax(0, 1fr) auto; }
+  .credit-client-search-field { grid-column: 1 / -1; }
+  .credit-client-select-field { grid-column: 1; }
+  #creditClientSearch, #creditClientSelect, #quickAddClientBtn { min-height: 44px; }
+  #quickAddClientBtn { grid-column: 2; width: auto; padding-inline: 12px; }
+}
+.connected-clients-controls { max-width: 620px; margin-bottom: 16px; }
+.connected-clients-controls > label { display: block; margin-bottom: 6px; color: var(--text); font-size: .85rem; font-weight: 600; }
+.connected-clients-controls > input { max-width: 100%; background: #fff !important; color: #0f172a !important; }
+@media (hover: hover) and (pointer: fine) {
+  .autocomplete-option:hover { background: #f1f5f9; }
+}
+
 /* ============================ BOTONES ============================ */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 16px; border: 1px solid transparent; border-radius: var(--radius); cursor: pointer; font-weight: 600; font-size: .875rem; white-space: nowrap; transition: background var(--ease), border-color var(--ease), transform var(--ease); }
 .btn:active { transform: translateY(1px); }

@@ -115,6 +115,115 @@ function ordenarResultadosProducto(list, query) {
 }
 window.PosProductSearch = Object.freeze({ normalize: normalizarBusquedaProducto, codes: codigosDeProducto, exactCodeMatches: productosConCodigoExacto, matches: productoCoincideBusqueda, prioritizeExact: ordenarResultadosProducto });
 
+function normalizarBusquedaTexto(value) {
+    return String(value ?? '').normalize('NFKC').trim().toLocaleLowerCase('es');
+}
+function autocompleteTextMatches(query, values) {
+    const normalized = normalizarBusquedaTexto(query);
+    return !normalized || values.flat().some(value => normalizarBusquedaTexto(value).includes(normalized));
+}
+const autocompleteControllers = new Map();
+let autocompleteSequence = 0;
+function setupAutocomplete(input, options) {
+    if (!input) return null;
+    const existing = autocompleteControllers.get(input);
+    if (existing) return existing;
+
+    const list = document.createElement('div');
+    const listId = `autocomplete-${input.id || ++autocompleteSequence}-listbox`;
+    list.id = listId; list.className = 'autocomplete-suggestions'; list.setAttribute('role', 'listbox'); list.hidden = true;
+    document.body.append(list);
+    input.classList.add('autocomplete-search-input');
+    input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-controls', listId);
+    input.setAttribute('autocomplete', 'off');
+
+    let items = [], activeIndex = -1;
+    function close() {
+        list.hidden = true; items = []; activeIndex = -1;
+        input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant');
+    }
+    function position() {
+        if (list.hidden) return;
+        const rect = input.getBoundingClientRect();
+        const width = Math.min(rect.width, window.innerWidth - 16);
+        const maxHeight = Math.min(352, Math.max(96, window.innerHeight - 24));
+        const below = window.innerHeight - rect.bottom - 8;
+        const above = rect.top - 8;
+        const placeAbove = below < Math.min(176, items.length * 44) && above > below;
+        const height = Math.min(maxHeight, placeAbove ? above : below);
+        list.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+        list.style.width = `${width}px`; list.style.maxHeight = `${Math.max(88, height)}px`;
+        list.style.top = placeAbove ? `${Math.max(8, rect.top - Math.min(list.scrollHeight, height) - 4)}px` : `${Math.min(window.innerHeight - 8, rect.bottom + 4)}px`;
+    }
+    function render() {
+        list.replaceChildren();
+        items.forEach((item, index) => {
+            const option = document.createElement('button');
+            option.type = 'button'; option.className = 'autocomplete-option'; option.setAttribute('role', 'option');
+            option.setAttribute('aria-selected', String(index === activeIndex)); option.id = `${listId}-option-${index}`; option.tabIndex = -1;
+            const title = document.createElement('span'); title.className = 'autocomplete-option-title';
+            title.textContent = options.getLabel(item);
+            option.append(title);
+            const metaText = options.getMeta?.(item);
+            if (metaText) { const meta = document.createElement('span'); meta.className = 'autocomplete-option-meta'; meta.textContent = metaText; option.append(meta); }
+            option.addEventListener('pointerdown', event => event.preventDefault());
+            option.addEventListener('click', () => select(index));
+            list.append(option);
+        });
+        list.hidden = items.length === 0;
+        input.setAttribute('aria-expanded', String(items.length > 0));
+        input.removeAttribute('aria-activedescendant');
+        position();
+    }
+    function refresh() {
+        const query = input.value.trim();
+        if (query.length < (options.minChars ?? 1)) { close(); return; }
+        try { items = (options.getItems(query) || []).slice(0, options.maxItems ?? 8); }
+        catch { items = []; }
+        activeIndex = -1; render();
+    }
+    function select(index) {
+        const item = items[index];
+        if (!item) return;
+        input.value = options.getValue ? options.getValue(item) : options.getLabel(item);
+        close();
+        options.onSelect?.(item);
+    }
+    function onInput() { refresh(); options.onInput?.(input.value.trim()); }
+    function onKeydown(event) {
+        if (event.defaultPrevented) return;
+        if (event.key === 'Escape') { if (!list.hidden) { event.preventDefault(); close(); } return; }
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            if (list.hidden) refresh();
+            if (!items.length) return;
+            event.preventDefault();
+            const direction = event.key === 'ArrowDown' ? 1 : -1;
+            activeIndex = activeIndex < 0 ? (direction > 0 ? 0 : items.length - 1) : (activeIndex + direction + items.length) % items.length; render();
+            input.setAttribute('aria-activedescendant', `${listId}-option-${activeIndex}`);
+            list.children[activeIndex]?.scrollIntoView({ block: 'nearest' });
+            return;
+        }
+        if (event.key === 'Enter' && !list.hidden && items.length) {
+            event.preventDefault(); select(activeIndex >= 0 ? activeIndex : 0);
+        }
+    }
+    input.addEventListener('input', onInput);
+    input.addEventListener('keydown', onKeydown);
+    input.addEventListener('blur', () => setTimeout(() => { if (!list.contains(document.activeElement)) close(); }, 0));
+    document.addEventListener('pointerdown', event => { if (event.target !== input && !list.contains(event.target)) close(); });
+    window.addEventListener('resize', position);
+    document.addEventListener('scroll', position, true);
+    const controller = { close, refresh };
+    autocompleteControllers.set(input, controller);
+    return controller;
+}
+window.PosAutocomplete = Object.freeze({
+    setup: setupAutocomplete,
+    refresh(input) { autocompleteControllers.get(input)?.refresh(); },
+    closeAll() { autocompleteControllers.forEach(controller => controller.close()); }
+});
+
 const LOGIN_FAILURE_KEY = "posLoginFailState";
 
 function readLoginFailureState() {
@@ -459,6 +568,7 @@ function switchView(viewId) {
     return renderPosView(viewId);
 }
 function renderPosView(viewId) {
+    window.PosAutocomplete?.closeAll();
     clearTimeout(salesFocusTimer);
     if (viewId !== "salesView") detenerCamaraVentas();
     if (viewId !== unlockedModuleId) unlockedModuleId = null;
@@ -641,11 +751,11 @@ searchProductInput?.addEventListener("keydown", event => {
     const matches = window.PosProductSearch.exactCodeMatches(products.filter(product => !product.deleted), searchProductInput.value);
     if (!matches.length) return;
     event.preventDefault();
+    window.PosAutocomplete?.closeAll();
     procesarCodigoBarras(searchProductInput.value);
     searchProductInput.value = "";
     actualizarCatalogo();
 });
-document.getElementById("inventorySearchInput")?.addEventListener("input", actualizarTablaInventario);
 document.getElementById("toggleCameraBtn")?.addEventListener("click", async () => {
     if (camaraVentasBusy) return;
     camaraVentasBusy = true;
@@ -895,17 +1005,72 @@ window.confirmarAnularVenta = async function() {
     const id = document.getElementById("anularVentaId").value; const motivo = document.getElementById("anularVentaMotivo").value.trim(); const sale = salesHistory.find(x => String(x.id) === String(id)); if (!sale || sale.anulada) return;
     if ((calcFactura(sale.id)?.abonado || 0) > 0) { showAlert("Anule primero los abonos aplicados a esta factura antes de anular la venta."); return; }
     if (sale.estadoCaja === "confirmado" && ["card", "transfer"].includes(obtenerMedioPagoVenta(sale))) { showAlert("El pago ya fue confirmado. Se requiere registrar el reembolso externo antes de anular."); return; }
-    sale.anulada = true; sale.motivoAnulacion = motivo; sale.fechaAnulacion = new Date().toLocaleString(); sale.usuarioAnulacion = currentUser.displayName;
-    
-    if (sale.items) { for (let item of sale.items) { let prod = products.find(p => String(p.id) === String(item.id)); if (!prod) prod = products.find(p => (p.name||"").toLowerCase() === (item.name||"").toLowerCase()); if (prod) { await registrarMovimientoKardex(prod.id, 'DEVOLUCION_VENTA', item.cantidad, `Anulación Venta #${sale.numero}: ${motivo}`); } } }
-    if (sale.metodo === "Crédito") { let c = clients.find(cl => String(cl.id) === String(sale.clienteId)) || clients.find(cl => cl.name === sale.cliente); if (c) { c.debt = calcularDeudaFacturasCliente(c); await localDB.clients.put(c); await encolarSincronizacion('UPDATE', 'clients', c); } }
-    
-    for (const session of cajaHistorial) {
-        let changed = false;
-        for (const movement of session.movimientos || []) if (String(movement.saleId) === String(sale.id)) { movement.anulado = true; movement.estado = "void"; changed = true; }
-        if (changed) await localDB.cajaSessions.put(session);
+    const paymentMethod = obtenerMedioPagoVenta(sale);
+    const refundAmount = r2(Number(sale.total) || 0);
+    const needsCashRefund = paymentMethod === "cash" && refundAmount > 0;
+    let activeCash = null;
+    if (needsCashRefund) {
+        const openSessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: "abierta" }).toArray();
+        if (openSessions.length !== 1) { showAlert("Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual."); return; }
+        activeCash = openSessions[0];
+        cajaActual = activeCash;
+        if (calcularResumenCaja(activeCash).esperado < refundAmount) { showAlert("La caja actual no tiene efectivo suficiente para devolver esta venta."); return; }
     }
-    await localDB.sales.put(sale); await encolarSincronizacion('UPDATE', 'sales', sale); await registrarAuditoria('VENTAS', 'ANULACION', `Anuló Factura #${sale.numero} por C$${sale.total}. Motivo: ${motivo}`);
+    const originalCashSessionId = sale.cajaSessionId || cajaHistorial.find(session => session.movimientos?.some(movement => String(movement.saleId) === String(sale.id)))?.id || null;
+    const originalSale = { ...sale };
+    sale.anulada = true; sale.motivoAnulacion = motivo; sale.fechaAnulacion = new Date().toLocaleString(); sale.usuarioAnulacion = currentUser.displayName;
+    try {
+        await localDB.transaction('rw', localDB.sales, localDB.clients, localDB.products, localDB.inventory_movements, localDB.sync_queue, localDB.cajaSessions, localDB.audit_logs, async () => {
+            const storedSale = await localDB.sales.get(sale.id);
+            if (!storedSale || storedSale.anulada) throw new Error("La venta ya fue anulada.");
+            if (needsCashRefund) {
+                const openSessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: "abierta" }).toArray();
+                if (openSessions.length !== 1 || String(openSessions[0].id) !== String(activeCash.id)) throw new Error("Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual.");
+                if (calcularResumenCaja(openSessions[0]).esperado < refundAmount) throw new Error("La caja actual no tiene efectivo suficiente para devolver esta venta.");
+                const sessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID }).toArray();
+                if (sessions.some(session => (session.movimientos || []).some(movement => String(movement.reversalOfSaleId) === String(sale.id)))) throw new Error("La devolución de esta venta ya está registrada.");
+                activeCash = openSessions[0];
+                activeCash.movimientos.push({
+                    id: crypto.randomUUID(), cajaSessionId: activeCash.id, tipo: "salida", monto: refundAmount,
+                    concepto: `Devolución Factura #${sale.numero}: ${motivo}`, fechaTS: Date.now(), fecha: new Date().toLocaleString(),
+                    usuario: currentUser.displayName, estado: "confirmado", medioPago: "CASH", saleId: sale.id,
+                    reversalOfSaleId: sale.id, originalCashSessionId, motivoAnulacion: motivo, anulado: false
+                });
+                await localDB.cajaSessions.put(activeCash);
+                await encolarSincronizacion("UPDATE", "cajaSessions", activeCash);
+            }
+            for (const item of sale.items || []) {
+                let product = products.find(value => String(value.id) === String(item.id || item.productId));
+                if (!product) product = products.find(value => (value.name || "").toLowerCase() === (item.name || "").toLowerCase());
+                if (!product || !await registrarMovimientoKardex(product.id, 'DEVOLUCION_VENTA', Number(item.cantidad ?? item.quantity), `Anulación Venta #${sale.numero}: ${motivo}`)) throw new Error("No se pudo restituir el inventario de esta venta.");
+            }
+            if (sale.metodo === "Crédito") {
+                const client = clients.find(value => String(value.id) === String(sale.clienteId)) || clients.find(value => value.name === sale.cliente);
+                if (client) { client.debt = calcularDeudaFacturasCliente(client); await localDB.clients.put(client); await encolarSincronizacion('UPDATE', 'clients', client); }
+            }
+            if (paymentMethod !== "cash") {
+                const sessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID }).toArray();
+                for (const session of sessions) {
+                    let changed = false;
+                    for (const movement of session.movimientos || []) if (String(movement.saleId) === String(sale.id)) { movement.anulado = true; movement.estado = "void"; changed = true; }
+                    if (changed) { await localDB.cajaSessions.put(session); await encolarSincronizacion('UPDATE', 'cajaSessions', session); }
+                }
+            }
+            await localDB.sales.put(sale);
+            await encolarSincronizacion('UPDATE', 'sales', sale);
+            await registrarAuditoria('VENTAS', 'ANULACION', `Anuló Factura #${sale.numero} por C$${sale.total}. Medio: ${paymentMethod}. Caja original: ${originalCashSessionId || 'sin caja'}. Caja de devolución: ${activeCash?.id || 'sin movimiento de efectivo'}. Productos: ${(sale.items || []).map(item => `${item.name} x ${item.cantidad ?? item.quantity}`).join(', ')}. Motivo: ${motivo}`);
+        });
+        if (activeCash) {
+            cajaActual = activeCash;
+            const sessionIndex = cajaHistorial.findIndex(session => String(session.id) === String(activeCash.id));
+            if (sessionIndex >= 0) cajaHistorial[sessionIndex] = activeCash;
+        }
+    } catch (error) {
+        Object.assign(sale, originalSale);
+        await initApp();
+        showAlert(error.message || "No se pudo completar la anulación.");
+        return;
+    }
     document.getElementById("anularVentaModal").classList.add("hidden"); actualizarTablaHistorial(); actualizarTablaInventario(); actualizarCatalogo(); actualizarTablaClientes(); if (cajaActual) renderCajaView(); renderDashboard(); showAlert(`Venta #${sale.numero} anulada exitosamente.`);
 };
 
@@ -1041,7 +1206,7 @@ function actualizarTablaInventario() {
 
         const btnAjuste = `<button class="btn btn-sm" style="background:#d97706; color:#fff; margin-right:4px;" onclick="window.abrirAjuste('${p.id}')">${iconoAjuste()} Ajuste</button>`;
         const fotoHtml = p.image ? `<img src="${escapeHtml(p.image)}" style="width:40px; height:40px; object-fit:cover; border-radius:4px;">` : iconoProducto("width:40px;height:40px;");
-        return `<tr style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(codigosDeProducto(p)[0] || '')}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}${btnEliminar}</div></td></tr>`;
+        return `<tr data-product-id="${escapeHtml(p.id)}" tabindex="-1" style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(codigosDeProducto(p)[0] || '')}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}${btnEliminar}</div></td></tr>`;
     }).join("") : '<tr><td colspan="8" class="text-center">No hay productos que coincidan con la búsqueda.</td></tr>';
     
     if(document.getElementById("invTotalProducts")) document.getElementById("invTotalProducts").textContent = products.filter(p => !p.deleted && p.active !== false).length; 
@@ -1187,7 +1352,7 @@ document.getElementById("clientForm")?.addEventListener("submit", async (e) => {
 
 function actualizarTablaClientes() { 
     const tb = document.getElementById("clientsTableBody"); if(!tb) return; const hoyTS = Date.now(); 
-    tb.innerHTML = clients.map(c => { 
+    tb.innerHTML = clients.map(c => {
         const disponible = (c.creditLimit||0) - (c.debt||0); const facturasCliente = salesHistory.filter(s => s.cliente === c.name && s.metodo === "Crédito" && !s.anulada); const tieneVencido = facturasCliente.some(s => s.vencimientoTS && s.vencimientoTS < hoyTS && (c.debt||0) > 0); 
         const isActive = c.active !== false;
         let estadoHtml;
@@ -1530,7 +1695,7 @@ document.getElementById("supplierForm")?.addEventListener("submit", async (e) =>
 
 function actualizarTablaProveedores() { 
     const tb = document.getElementById("suppliersTableBody"); if(!tb) return; 
-    tb.innerHTML = suppliers.map(s => { 
+    tb.innerHTML = suppliers.map(s => {
         const comprasProv = purchasesHistory.filter(p => p.proveedor === s.name && !p.anulada); const totalComprado = comprasProv.reduce((sum, p) => sum + p.total, 0); 
         const isActive = s.active !== false;
         const btnBorrar = `<button class="btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}" onclick="window.toggleEstadoProveedor('${s.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>`;
@@ -1645,11 +1810,11 @@ function resolverProductoEscritoCompra(value) {
 purchProductInputEl?.addEventListener("input", () => { delete purchProductInputEl.dataset.productId; });
 document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { delete purchProductInputEl?.dataset.productId; });
 document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { document.getElementById("purchaseForm")?.reset(); const pi = document.getElementById("purchId"); if(pi) pi.value = ""; currentPurchaseCart = []; renderPurchaseCart(); document.getElementById("purchDaysContainer").style.display = "none"; const sdl = document.getElementById("supplierDataList"); if(sdl) sdl.innerHTML = suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">`).join(""); actualizarSugerenciasProductosCompra(); document.getElementById("purchaseModal")?.classList.remove("hidden"); });
-document.getElementById("btnAddItemToPurch")?.addEventListener("click", () => {
+function addPurchaseItemFromInput() {
     const prodName = purchProductInputEl.value.trim(); const qty = Number(document.getElementById("purchQtyTemp").value); const cost = parseFloat(document.getElementById("purchCostTemp").value);
-    if(!prodName || !Number.isFinite(qty) || !Number.isFinite(cost) || qty <= 0) { showAlert("Ingrese producto, cantidad y costo unitario."); return; }
+    if(!prodName || !Number.isFinite(qty) || !Number.isFinite(cost) || qty <= 0) { showAlert("Ingrese producto, cantidad y costo unitario."); return false; }
     if (!Number.isInteger(qty)) { showAlert("La cantidad debe ser un número entero mayor que cero."); return; }
-    if (cost < 0) { showAlert("El costo unitario no puede ser negativo."); return; }
+    if (cost < 0) { showAlert("El costo unitario no puede ser negativo."); return false; }
     const quickProductId = purchProductInputEl.dataset.productId;
     const quickProduct = quickProductId && products.find(p => String(p.id) === quickProductId && !p.deleted && normalizarBusquedaProducto(p.name) === normalizarBusquedaProducto(prodName));
     const resolved = quickProduct ? { product: quickProduct, ambiguous: false } : resolverProductoEscritoCompra(prodName);
@@ -1659,6 +1824,21 @@ document.getElementById("btnAddItemToPurch")?.addEventListener("click", () => {
 
     currentPurchaseCart.push({ producto: matchedProd.name, productId: matchedProd.id, cantidad: qty, costo: r2(cost), total: r2(qty * cost) });
     purchProductInputEl.value = ""; delete purchProductInputEl.dataset.productId; document.getElementById("purchQtyTemp").value = "1"; document.getElementById("purchCostTemp").value = ""; renderPurchaseCart();
+    return true;
+}
+document.getElementById("btnAddItemToPurch")?.addEventListener("click", addPurchaseItemFromInput);
+function selectPurchaseProduct(product) {
+    if (!purchProductInputEl || !product) return;
+    purchProductInputEl.value = product.name;
+    purchProductInputEl.dataset.productId = String(product.id);
+    const costInput = document.getElementById("purchCostTemp");
+    if (costInput && !costInput.value && Number.isFinite(Number(product.cost))) costInput.value = String(product.cost);
+}
+purchProductInputEl?.addEventListener("keydown", event => {
+    if (connectedMode || event.key !== "Enter") return;
+    const matches = productosConCodigoExacto(products.filter(product => !product.deleted), purchProductInputEl.value);
+    if (matches.length !== 1) return;
+    event.preventDefault(); selectPurchaseProduct(matches[0]); addPurchaseItemFromInput();
 });
 document.getElementById("quickEditProductFromPurchBtn")?.addEventListener("click", () => { const value = document.getElementById("purchProductTemp").value.trim(); if (!value) { showAlert("Escribe el nombre o código del producto en el campo para poder editarlo."); return; } const resolved = resolverProductoEscritoCompra(value); if (resolved.ambiguous) { showAlert("Más de un producto coincide con ese código. Escribe el nombre para elegirlo sin ambigüedad."); return; } if (resolved.product) window.editarProducto(resolved.product.id); else showAlert("Producto no encontrado en la base de datos."); });
 
@@ -1848,7 +2028,8 @@ function calcularResumenCaja(session) {
     const hasta = session.fechaCierreTS || Date.now();
     const ventasContado = salesHistory.filter(venta => {
         const ts = venta.fechaTS || venta.id;
-        return (venta.cajaSessionId ? String(venta.cajaSessionId) === String(session.id) : ts >= desde && ts <= hasta) && venta.metodo === "Contado" && obtenerMedioPagoVenta(venta) === "cash" && !venta.anulada;
+        const hasRefundInSession = (session.movimientos || []).some(movement => String(movement.reversalOfSaleId) === String(venta.id) && !movement.anulado);
+        return (venta.cajaSessionId ? String(venta.cajaSessionId) === String(session.id) : ts >= desde && ts <= hasta) && venta.metodo === "Contado" && obtenerMedioPagoVenta(venta) === "cash" && (!venta.anulada || hasRefundInSession);
     }).reduce((sum, venta) => sum + venta.total, 0);
     const entradas = session.movimientos.filter(mov => mov.tipo === "entrada" && !mov.anulado).reduce((sum, mov) => sum + mov.monto, 0);
     const salidas = session.movimientos.filter(mov => mov.tipo === "salida" && !mov.anulado).reduce((sum, mov) => sum + mov.monto, 0);
@@ -1906,14 +2087,15 @@ document.getElementById("confirmCashCorrectionBtn")?.addEventListener("click", a
 function detalleResumenLocal(session) {
     if (session.resumenCierre) return session.resumenCierre;
     const belongs = venta => venta.cajaSessionId ? String(venta.cajaSessionId) === String(session.id) : (venta.fechaTS || venta.id) >= session.fechaAperturaTS && (venta.fechaTS || venta.id) <= (session.fechaCierreTS || Date.now());
-    const sales = salesHistory.filter(v => belongs(v) && !v.anulada);
+    const sales = salesHistory.filter(v => belongs(v) && (!v.anulada || (v.metodo === "Contado" && obtenerMedioPagoVenta(v) === 'cash' && (session.movimientos || []).some(movement => String(movement.reversalOfSaleId) === String(v.id) && !movement.anulado))));
     const sum = rows => r2(rows.reduce((n, v) => n + Number(v.monto ?? v.total ?? 0), 0));
     const movements = (session.movimientos || []).filter(m => !m.anulado && m.estado !== 'void' && (!m.medioPago || m.medioPago === 'CASH'));
     const out = movements.filter(m => m.tipo === 'salida');
     const expenses = out.filter(m => (m.concepto || '').startsWith('Gasto:'));
     const purchases = out.filter(m => m.referenciaCompraId);
     const collections = movements.filter(m => m.tipo === 'entrada' && m.referenciaAbonoId);
-    return { cashSales: sum(sales.filter(v => v.metodo === 'Contado' && obtenerMedioPagoVenta(v) === 'cash')), creditSales: sum(sales.filter(v => v.metodo === 'Crédito')), cardSales: sum(sales.filter(v => obtenerMedioPagoVenta(v) === 'card')), transferSales: sum(sales.filter(v => obtenerMedioPagoVenta(v) === 'transfer')), expenses: sum(expenses), purchases: sum(purchases), withdrawals: sum(out.filter(m => !expenses.includes(m) && !purchases.includes(m))), cashReturns: 0, cashCollections: sum(collections), otherCash: sum(movements.filter(m => m.tipo === 'entrada' && !collections.includes(m))) };
+    const reversals = out.filter(m => m.reversalOfSaleId);
+    return { cashSales: sum(sales.filter(v => v.metodo === 'Contado' && obtenerMedioPagoVenta(v) === 'cash')), creditSales: sum(sales.filter(v => v.metodo === 'Crédito')), cardSales: sum(sales.filter(v => obtenerMedioPagoVenta(v) === 'card')), transferSales: sum(sales.filter(v => obtenerMedioPagoVenta(v) === 'transfer')), expenses: sum(expenses), purchases: sum(purchases), withdrawals: sum(out.filter(m => !expenses.includes(m) && !purchases.includes(m) && !reversals.includes(m))), cashReturns: sum(reversals), cashCollections: sum(collections), otherCash: sum(movements.filter(m => m.tipo === 'entrada' && !collections.includes(m))) };
 }
 const cashCloseMoney = value => 'C$ ' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 function pintarResumenCierre(target, data, details = false) {
@@ -2269,3 +2451,62 @@ window.PosRuntime = Object.freeze({
     },
     clearCart() { cart = []; resetearDescuentoVenta(); actualizarCarrito(); }
 });
+
+function getProductAutocompleteItems(query, { activeOnly = false } = {}) {
+    const available = products.filter(product => !product.deleted && (!activeOnly || product.active !== false));
+    return ordenarResultadosProducto(available.filter(product => productoCoincideBusqueda(product, query, { category: true })), query);
+}
+function initializeLocalAutocompletes() {
+    window.PosAutocomplete.setup(searchProductInput, {
+        getItems: query => getProductAutocompleteItems(query, { activeOnly: true }),
+        getLabel: product => product.name,
+        getMeta: product => [codigosDeProducto(product)[0] ? `Código: ${codigosDeProducto(product)[0]}` : '', product.category || product.categoria || ''].filter(Boolean).join(' · '),
+        onSelect: product => { agregarAlCarrito(product); searchProductInput.value = ''; actualizarCatalogo(); searchProductInput.focus(); }
+    });
+    const inventorySearch = document.getElementById('inventorySearchInput');
+    window.PosAutocomplete.setup(inventorySearch, {
+        getItems: query => getProductAutocompleteItems(query), getLabel: product => product.name,
+        getMeta: product => [codigosDeProducto(product)[0] ? `Código: ${codigosDeProducto(product)[0]}` : '', product.category || product.categoria || (product.active === false ? 'Inactivo' : '')].filter(Boolean).join(' · '),
+        onSelect: product => {
+            actualizarTablaInventario();
+            const row = [...(document.getElementById('inventoryTableBody')?.rows || [])].find(candidate => candidate.dataset.productId === String(product.id));
+            row?.scrollIntoView({ block: 'center' }); row?.focus();
+        }
+    });
+
+    if (!connectedMode) {
+        window.PosAutocomplete.setup(purchProductInputEl, {
+            getItems: query => getProductAutocompleteItems(query), getLabel: product => product.name,
+            getMeta: product => [codigosDeProducto(product)[0] ? `Código: ${codigosDeProducto(product)[0]}` : '', product.category || product.categoria || ''].filter(Boolean).join(' · '),
+            onSelect: product => { selectPurchaseProduct(product); document.getElementById('purchQtyTemp')?.focus(); }
+        });
+        window.PosAutocomplete.setup(document.getElementById('purchSupplier'), {
+            getItems: query => suppliers.filter(supplier => supplier.active !== false && autocompleteTextMatches(query, [supplier.name, supplier.phone, supplier.ruc])),
+            getLabel: supplier => supplier.name,
+            getMeta: supplier => [supplier.phone, supplier.ruc ? `RUC: ${supplier.ruc}` : ''].filter(Boolean).join(' · ')
+        });
+        const creditSearch = document.getElementById('creditClientSearch');
+        const creditSelect = document.getElementById('creditClientSelect');
+        const creditAutocomplete = window.PosAutocomplete.setup(creditSearch, {
+            getItems: query => clients.filter(client => client.active !== false && autocompleteTextMatches(query, [client.name, client.phone, client.ruc, client.id])),
+            getLabel: client => client.name,
+            getMeta: client => [client.phone, client.ruc ? `RUC: ${client.ruc}` : '', `ID: ${client.id}`].filter(Boolean).join(' · '),
+            onInput: query => {
+                const selected = clients.find(client => String(client.id) === String(creditSelect?.value));
+                const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase();
+                if (selected && normalize(selected.name) !== normalize(query)) creditSelect.value = '';
+            },
+            onSelect: client => { if (creditSelect) creditSelect.value = String(client.id); }
+        });
+        creditSelect?.addEventListener('change', () => {
+            const selected = clients.find(client => String(client.id) === String(creditSelect.value));
+            if (selected) creditSearch.value = selected.name;
+            creditAutocomplete?.close();
+        });
+    }
+
+    for (const [id, render] of [
+        ['inventorySearchInput', actualizarTablaInventario]
+    ]) document.getElementById(id)?.addEventListener('input', render);
+}
+initializeLocalAutocompletes();

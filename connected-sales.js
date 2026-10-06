@@ -3,7 +3,7 @@
 (() => {
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
-  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, salesFlow = 'DIRECT', activeOrderId = null, pendingOrderDetails = new Map();
+  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map();
   const state = () => window.PosRuntime.salesInput();
   const scope = () => { const s = state(); return 'posOperation_' + encodeURIComponent(window.POS_API_BASE_URL) + '_' + s.businessId + '_' + s.userId; };
   function pending() {
@@ -30,7 +30,21 @@
     const credit = sale.paymentMethod === 'CREDIT';
     return { id: sale.id, businessId: sale.businessId, numero: sale.invoiceNumber, vendedor: sale.seller, fecha: new Date(sale.createdAt).toLocaleString(), fechaTS: Date.parse(sale.createdAt), detalle: sale.detail || '-', metodo: credit ? 'Crédito' : 'Contado', medioPago: sale.paymentMethod.toLowerCase(), cliente: credit ? sale.clientName : '-', clienteId: sale.clientId, vencimiento: sale.dueAt ? new Date(sale.dueAt).toLocaleDateString() : null, vencimientoTS: sale.dueAt ? Date.parse(sale.dueAt) : null, saldoPendiente: credit && sale.status === 'COMPLETED' ? Number(sale.total) : 0, tarifa: sale.priceType === 'RETAIL' ? 'Menudeo' : 'Mayoreo', subtotal: Number(sale.subtotal), descuentoPct: Number(sale.discountPercent), descuentoMonto: Number(sale.discount), total: Number(sale.total), anulada: sale.status === 'CANCELLED', motivoAnulacion: sale.cancelReason, conectado: true, estadoCaja: sale.cashStatus === 'PENDING' ? 'pendiente' : sale.cashStatus === 'CONFIRMED' ? 'confirmado' : 'no_aplica', cajaSessionId: sale.cashSessionId, items: sale.items.map(item => ({ id: item.productId, name: item.name, barcode: item.barcode, cantidad: Number(item.quantity), connectedSubtotal: Number(item.subtotal), retailPrice: Number(item.unitPrice), wholesalePrice: Number(item.unitPrice) })) };
   }
+  async function refreshNextInvoiceNumber() {
+    nextInvoiceNumber = await api(client => client.nextInvoiceNumber());
+    const number = el('currentSaleNumber'); if (number) number.textContent = nextInvoiceNumber;
+    return nextInvoiceNumber;
+  }
+  async function refreshNextInvoiceNumberAfterOperation() {
+    try { await refreshNextInvoiceNumber(); }
+    catch (error) {
+      nextInvoiceNumber = null;
+      const number = el('currentSaleNumber'); if (number) number.textContent = '—';
+      if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
+    }
+  }
   async function completed(result, recovered = false) {
+    if (result.sale || result.order) await refreshNextInvoiceNumberAfterOperation();
     if (result.kind === 'CONFIRM_PAYMENT' && result.payment) {
       const payment = result.payment, method = payment.paymentMethod === 'CARD' ? 'Tarjeta' : 'Transferencia';
       showAlert(method + ' confirmado para la factura #' + payment.invoiceNumber + ' por ' + result.movement.confirmedBy + '. No suma al efectivo físico esperado.');
@@ -49,14 +63,22 @@
       if (result.kind === 'SALE') {
         window.PosRuntime.clearCart(); el('connectedCheckoutModal').classList.add('hidden'); quote = quoteInput = null; activeOrderId = null;
         generarVisualizacionTicket(sale, Number(result.sale.cashReceived || result.sale.total), Number(result.sale.changeAmount || 0), recovered);
-      } else { el('anularVentaModal').classList.add('hidden'); showAlert(result.sale.paymentMethod === 'CASH' ? 'Venta anulada en MySQL. Stock y efectivo revertidos.' : result.sale.paymentMethod === 'CREDIT' ? 'Venta a crédito anulada en MySQL. El saldo y el inventario fueron revertidos.' : 'Venta anulada en MySQL. Stock repuesto. La devolución por tarjeta o transferencia debe realizarse por el mismo medio fuera del POS.'); }
+      } else {
+        el('anularVentaModal').classList.add('hidden');
+        const notice = result.sale.paymentMethod === 'CASH'
+          ? result.refundCashSessionId ? `Venta anulada en MySQL. La devolución se registró en la caja #${result.refundCashSessionId}; la caja original #${result.sale.cashSessionId} conserva su cierre.` : 'Venta anulada en MySQL. No había importe en efectivo que devolver.'
+          : result.sale.paymentMethod === 'CREDIT' ? 'Venta a crédito anulada en MySQL. El saldo y el inventario fueron revertidos.'
+          : 'Venta anulada en MySQL. Stock repuesto. La devolución por tarjeta o transferencia debe realizarse por el mismo medio fuera del POS.';
+        showAlert(notice);
+      }
       try { await window.PosInventory.load('salesView'); } catch (error) { if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else showAlert('La operación está confirmada. No se pudo actualizar el catálogo; vuelve a Ventas para consultarlo.'); }
     }
     if (result.kind === 'ABANDONED') showAlert('La operación no estaba registrada y quedó descartada en el servidor. Puedes preparar el cobro nuevamente.');
     if (result.order && !result.sale) {
       activeOrderId = null; quote = quoteInput = null; el('connectedCheckoutModal').classList.add('hidden');
-      if (result.kind === 'ORDER') { window.PosRuntime.clearCart(); showAlert('Pedido #' + result.order.id + ' enviado a Caja. No se generó factura ni se descontó inventario.'); }
-      else if (result.kind === 'CANCEL_ORDER') showAlert('Pedido #' + result.order.id + ' cancelado. No se generó factura ni movimiento de caja.');
+      const nextInvoiceNotice = nextInvoiceNumber ? ' La próxima factura sigue siendo #' + nextInvoiceNumber + '.' : '';
+      if (result.kind === 'ORDER') { window.PosRuntime.clearCart(); showAlert('Orden enviada a Caja. No se generó factura ni se descontó inventario.' + nextInvoiceNotice); }
+      else if (result.kind === 'CANCEL_ORDER') showAlert('Orden cancelada. No se generó factura ni movimiento de caja.' + nextInvoiceNotice);
     }
     if (result.cash) el('cierreCajaModal').classList.add('hidden');
     if (window.PosConnected.canManageModule('cajaView')) await load('cajaView');
@@ -158,6 +180,9 @@
   function renderCheckoutMode() {
     const button = el('processSaleBtn');
     if (button) button.textContent = salesFlow === 'CENTRALIZED' ? 'Enviar a Caja' : 'Procesar / Cobrar Venta';
+    const label = el('currentSaleNumberLabel');
+    if (label) label.textContent = 'Próxima factura #';
+    el('currentSaleNumber').textContent = nextInvoiceNumber || '—';
   }
   async function startOrderCharge(id) {
     if (busy || pending()) { showPending(); showAlert('Comprueba la operación pendiente antes de continuar.'); return; }
@@ -172,17 +197,17 @@
     let refreshed = false;
     try {
       quote = await api(client => client.quoteOrder(activeOrderId, el('connectedOrderPaymentMethod').value));
-      el('connectedCheckoutTitle').textContent = 'Cobrar pedido #' + activeOrderId;
+      el('connectedCheckoutTitle').textContent = 'Cobrar orden #' + activeOrderId;
       el('connectedCheckoutItems').replaceChildren();
       for (const item of quote.items) { const row = document.createElement('p'); row.textContent = item.name + ' × ' + Number(item.quantity) + ' — C$' + item.total; el('connectedCheckoutItems').append(row); }
       el('connectedCheckoutTotal').textContent = 'C$' + quote.total;
       const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : quote.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Crédito';
       el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · Sin ingreso de efectivo.' : method + ' · Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
       const difference = Number(quote.priceDelta), priceMessage = el('connectedPriceChangeMessage');
-      priceMessage.textContent = quote.priceChanged ? 'El precio cambió desde que se preparó el pedido: estimado C$' + quote.estimatedTotal + '; precio vigente C$' + quote.total + ' (' + (difference > 0 ? '+' : '') + 'C$' + quote.priceDelta + '). Confirma este precio vigente para continuar.' : 'Precio vigente comprobado. Total estimado al preparar: C$' + quote.estimatedTotal + '.';
+      priceMessage.textContent = quote.priceChanged ? 'El precio cambió desde que se preparó la orden: estimado C$' + quote.estimatedTotal + '; precio vigente C$' + quote.total + ' (' + (difference > 0 ? '+' : '') + 'C$' + quote.priceDelta + '). Confirma este precio vigente para continuar.' : 'Precio vigente comprobado. Total estimado al preparar: C$' + quote.estimatedTotal + '.';
       priceMessage.classList.remove('hidden'); el('connectedOrderMethodGroup').classList.remove('hidden');
       el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; window.PosValidation.clear(el('connectedCheckoutModal'));
-      el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : quote.priceChanged ? 'Confirmar precio y cobrar' : 'Confirmar y cobrar pedido';
+      el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : quote.priceChanged ? 'Confirmar precio y cobrar' : 'Confirmar y cobrar orden';
       el('connectedCheckoutModal').classList.remove('hidden'); refreshed = true;
     } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { busy = false; el('confirmConnectedSaleBtn').disabled = false; if (refreshed) (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus(); }
@@ -228,17 +253,17 @@
     }
     pendingOrderDetails = new Map([...overview.pendingOrders, ...(overview.pendingHistoricalOrders || [])].map(order => [order.id, order]));
     const paymentRows = payments => payments.map(payment => ({ kind: 'payment', id: payment.id, date: payment.createdAt, reference: (payment.kind === 'CUSTOMER_PAYMENT' ? 'Abono factura #' : 'Factura #') + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta pendiente' : 'Transferencia pendiente', amount: payment.amount }));
-    const orderRows = orders => orders.map(order => ({ kind: 'order', id: order.id, date: order.createdAt, reference: 'Pedido #' + order.id + (order.clientName ? ' · ' + order.clientName : ''), user: order.seller, method: order.clientId ? 'Crédito' : 'Por cobrar', amount: order.estimatedTotal }));
+    const orderRows = orders => orders.map(order => ({ kind: 'order', id: order.id, date: order.createdAt, reference: 'Orden #' + order.id + (order.clientName ? ' · ' + order.clientName : ''), user: order.seller, method: order.clientId ? 'Crédito' : 'Por cobrar', amount: order.estimatedTotal }));
     const saleRows = sales => (sales || []).map(sale => ({ kind: 'sale', id: sale.id, date: sale.createdAt, reference: 'Factura #' + sale.invoiceNumber, user: sale.seller, method: sale.paymentMethod === 'CARD' ? 'Tarjeta' : sale.paymentMethod === 'TRANSFER' ? 'Transferencia' : sale.paymentMethod === 'CREDIT' ? 'Crédito' : 'Efectivo', amount: sale.amount }));
     const collectionRows = payments => (payments || []).map(payment => ({ kind: 'collection', id: payment.id, date: payment.createdAt, reference: 'Abono factura #' + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta' : payment.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Efectivo', amount: payment.amount }));
     const renderOperationRows = (body, payments, orders, historical = false, additionalRows = []) => {
       if (!body) return;
       const rows = [...additionalRows, ...paymentRows(payments), ...orderRows(orders)].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
-      if (!rows.length) { fillEmpty(body, 7, historical ? 'Sin pendientes de sesiones anteriores.' : 'No hay pagos pendientes ni pedidos por cobrar.'); return; }
+      if (!rows.length) { fillEmpty(body, 7, historical ? 'Sin pendientes de sesiones anteriores.' : 'No hay pagos pendientes ni órdenes por cobrar.'); return; }
       body.replaceChildren();
       for (const item of rows) {
         const row = document.createElement('tr');
-        for (const value of [new Date(item.date).toLocaleString(), item.reference, item.user, item.method, money(item.amount), item.kind === 'payment' ? 'Pendiente de confirmación' : (historical ? 'Pendiente histórico · sin factura' : 'Pedido pendiente · sin factura ni descuento de inventario')]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
+        for (const value of [new Date(item.date).toLocaleString(), item.reference, item.user, item.method, money(item.amount), item.kind === 'payment' ? 'Pendiente de confirmación' : (historical ? 'Pendiente histórico · sin factura' : 'Orden pendiente · sin factura ni descuento de inventario')]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
         if (item.kind === 'sale') row.cells[5].textContent = 'Venta registrada';
         if (item.kind === 'collection') row.cells[5].textContent = 'Cobro registrado';
         const actions = document.createElement('td');
@@ -277,7 +302,8 @@
     if (activeScope !== scope()) { activeScope = scope(); quote = quoteInput = null; }
     showPending();
     if (view === 'salesView' || view === 'cajaView') {
-      const settings = await api(client => client.salesFlow()); salesFlow = settings.salesFlow; renderCheckoutMode();
+      const settings = await api(client => client.salesFlow()); salesFlow = settings.salesFlow;
+      await refreshNextInvoiceNumber(); renderCheckoutMode();
     }
     if (view === 'salesView') await window.PosClients.loadCreditClients();
     if (view === 'clientsView') await window.PosClients.load(view);
@@ -309,7 +335,7 @@
   for (const id of ['summaryCreditSales', 'summaryTotalExpenses']) el(id).closest('.summary-card').classList.add('hidden');
   el('historyView').querySelector('h1').textContent = 'Historial de ventas MySQL';
   const auditTable = el('auditTableBody').closest('.history-table-container'); auditTable.previousElementSibling.classList.add('hidden'); auditTable.classList.add('hidden');
-  el('currentSaleNumber').textContent = 'Al confirmar';
+  el('currentSaleNumber').textContent = '—';
   el('confirmConnectedSaleBtn').addEventListener('click', confirm); el('recoverSaleBtn').addEventListener('click', recover);
   el('connectedOrderPaymentMethod').addEventListener('change', refreshOrderQuote);
   el('connectedCheckoutModal').querySelector('.close-modal-btn').addEventListener('click', () => { activeOrderId = null; quote = quoteInput = null; });
@@ -322,7 +348,7 @@
     if (action === 'order-detail') {
       const order = pendingOrderDetails.get(id); if (!order) return;
       const detail = order.items.map(item => item.name + ' × ' + Number(item.quantity) + ' · C$' + item.estimatedSubtotal).join('\n');
-      showAlert('Pedido #' + order.id + ' · ' + order.seller + '\n' + detail + '\nEstimado al preparar: C$' + order.estimatedTotal + '. Precio y stock se volverán a validar al cobrar.');
+      showAlert('Orden #' + order.id + ' · ' + order.seller + '\n' + detail + '\nEstimado al preparar: C$' + order.estimatedTotal + '. Precio y stock se volverán a validar al cobrar.');
     }
   };
   for (const id of ['cajaOperacionesBody', 'cajaPendientesHistoricosBody']) el(id)?.addEventListener('click', handleOperationAction);
@@ -331,7 +357,7 @@
     const button = el('saveConnectedSalesFlow'); button.disabled = true;
     try {
       const value = await api(client => client.setSalesFlow(el('connectedSalesFlow').value));
-      salesFlow = value.salesFlow; renderCheckoutMode(); el('connectedSalesFlowMessage').textContent = salesFlow === 'DIRECT' ? 'Venta directa activa. Cada vendedor cobra desde Venta.' : 'Cobro centralizado activo. Los vendedores preparan pedidos; un usuario con permiso de Caja confirma y factura.';
+      salesFlow = value.salesFlow; renderCheckoutMode(); el('connectedSalesFlowMessage').textContent = salesFlow === 'DIRECT' ? 'Venta directa activa. Cada vendedor cobra desde Venta.' : 'Cobro centralizado activo. Los vendedores preparan órdenes; un usuario con permiso de Caja las confirma y factura.';
       await load('cajaView');
     } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { button.disabled = false; }

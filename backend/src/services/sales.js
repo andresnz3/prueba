@@ -98,6 +98,12 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
     return { cash, calc, credit, dueAt, preview: { ...preview, quoteToken: digest(preview) } };
   }
   const quote = (session, data) => work(session, 'sales', async (db, current) => (await prepare(db, current, data)).preview);
+  const nextInvoiceNumber = session => work(session, 'sales', async (db, current) => {
+    const [sequence] = await repo.rows(db, "SELECT current_number FROM document_sequences WHERE business_id = ? AND document_type = 'SALE'", [current.business_id]);
+    const number = BigInt(sequence?.current_number || '0') + 1n;
+    if (number > 18446744073709551615n) throw httpError(409, 'INVOICE_LIMIT');
+    return { businessId: String(current.business_id), invoiceNumber: number.toString().padStart(6, '0') };
+  });
   async function recordSale(db, current, data, prepared, sellerId = current.user_id, orderId = null) {
     const { cash, calc, credit, dueAt } = prepared;
     const isCredit = data.paymentMethod === 'CREDIT';
@@ -148,14 +154,22 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
       if (payment) throw httpError(409, 'CREDIT_HAS_PAYMENTS');
     }
     if (sale.paymentMethod !== 'CASH' && sale.cashStatus === 'CONFIRMED') throw httpError(409, 'PAYMENT_ALREADY_CONFIRMED');
+    let refundCash = null;
+    let originalMovement = null;
     if (sale.paymentMethod === 'CASH') {
-      const cash = await cashRow(db, current, sale.cashSessionId);
-      if (!cash || cash.status !== 'OPEN') throw httpError(409, 'CASH_ORIGINAL_CLOSED');
-      const balance = await cashPublic(db, current, cash);
-      if (units(balance.expectedAmount) < units(sale.total)) throw httpError(409, 'CASH_REFUND_INSUFFICIENT');
       const [movement] = await repo.rows(db, "SELECT * FROM cash_movements WHERE business_id = ? AND sale_id = ? AND type = 'SALE' AND status = 'CONFIRMED' FOR UPDATE", [current.business_id, id]);
-      if (units(sale.total) > 0n && (!movement || movement.amount !== sale.total || String(movement.cash_session_id) !== sale.cashSessionId)) throw httpError(409, 'CASH_INCONSISTENT');
-      if (movement) await repo.rows(db, "INSERT INTO cash_movements (business_id, cash_session_id, user_id, type, direction, amount, sale_id, reversal_of_movement_id, description) VALUES (?, ?, ?, 'REVERSAL', 'OUT', ?, ?, ?, ?)", [current.business_id, sale.cashSessionId, current.user_id, sale.total, id, String(movement.id), data.reason]);
+      originalMovement = movement || null;
+      if (units(sale.total) > 0n) {
+        refundCash = await cashRow(db, current);
+        if (!refundCash) throw httpError(409, 'CANCEL_REQUIRES_OPEN_CASH');
+        if (!movement || movement.amount !== sale.total || String(movement.cash_session_id) !== sale.cashSessionId) throw httpError(409, 'CASH_INCONSISTENT');
+        const [existingReversal] = await repo.rows(db, "SELECT id FROM cash_movements WHERE business_id = ? AND sale_id = ? AND type = 'REVERSAL' LIMIT 1 FOR UPDATE", [current.business_id, id]);
+        if (existingReversal) throw httpError(409, 'CASH_INCONSISTENT');
+        const balance = await cashPublic(db, current, refundCash, false);
+        if (units(balance.expectedAmount) < units(sale.total)) throw httpError(409, 'CASH_REFUND_INSUFFICIENT');
+        const description = `Devolución Factura #${sale.invoiceNumber}; caja original #${sale.cashSessionId}; caja actual #${refundCash.id}; motivo: ${data.reason}`.slice(0, 500);
+        await repo.rows(db, "INSERT INTO cash_movements (business_id, cash_session_id, user_id, type, direction, amount, sale_id, reversal_of_movement_id, description) VALUES (?, ?, ?, 'REVERSAL', 'OUT', ?, ?, ?, ?)", [current.business_id, String(refundCash.id), current.user_id, sale.total, id, String(movement.id), description]);
+      }
     }
     if (sale.cashStatus === 'PENDING') {
       await repo.rows(db, "UPDATE cash_movements SET status = 'VOID' WHERE business_id = ? AND sale_id = ? AND type = 'SALE' AND status = 'PENDING'", [current.business_id, id]);
@@ -166,8 +180,17 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
       await stock(db, current, product, units(line.quantity), 'SALE_CANCEL', id, data.reason);
     }
     await repo.rows(db, "UPDATE sales SET status = 'CANCELLED', cash_status = IF(cash_status = 'PENDING', 'NOT_APPLICABLE', cash_status), cancelled_at = UTC_TIMESTAMP(3), cancelled_by = ?, cancel_reason = ? WHERE business_id = ? AND id = ?", [current.user_id, data.reason, current.business_id, id]);
-    await repo.audit(db, current, 'CANCEL_SALE', 'sales', id, { reason: data.reason, operationKey: data.operationKey });
-    return { kind: 'CANCEL', sale: await getSale(db, current, id) };
+    await repo.audit(db, current, 'CANCEL_SALE', 'sales', id, {
+      reason: data.reason,
+      operationKey: data.operationKey,
+      invoiceNumber: sale.invoiceNumber,
+      paymentMethod: sale.paymentMethod,
+      originalCashSessionId: sale.cashSessionId,
+      refundCashSessionId: refundCash ? String(refundCash.id) : null,
+      originalCashMovementId: originalMovement ? String(originalMovement.id) : null,
+      products: sale.items.map(item => ({ productId: item.productId, quantity: item.quantity }))
+    });
+    return { kind: 'CANCEL', sale: await getSale(db, current, id), refundCashSessionId: refundCash ? String(refundCash.id) : null };
   }));
   const getSalesFlow = session => work(session, 'sales', async (db, current) => ({ salesFlow: await flow(db, current), businessId: String(current.business_id) }));
   const setSalesFlow = (session, salesFlow) => work(session, 'sales', async (db, current) => {
@@ -337,6 +360,6 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
     await repo.audit(db, current, 'RESOLVE_OPERATION', 'businesses', current.business_id, { operationKey: key, kind: 'ABANDONED' });
     return result;
   });
-  return { quote, create, cancel, currentCash, cashHistory, openCash, closeCash, cashOverview, confirmPayment, getSalesFlow, setSalesFlow, createOrder, quoteOrder, chargeOrder, cancelOrder, operation, resolveOperation, list, get };
+  return { quote, nextInvoiceNumber, create, cancel, currentCash, cashHistory, openCash, closeCash, cashOverview, confirmPayment, getSalesFlow, setSalesFlow, createOrder, quoteOrder, chargeOrder, cancelOrder, operation, resolveOperation, list, get };
 }
 module.exports = { createSalesService };

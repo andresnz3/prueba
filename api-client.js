@@ -13,8 +13,8 @@
     PENDING_ORDERS_EXIST: 'Resuelve los pedidos pendientes antes de cambiar el flujo de ventas.',
     CASH_INVALID: 'Ingresa un monto de efectivo válido, cero o mayor, con hasta dos decimales.',
     CASH_INSUFFICIENT: 'El efectivo recibido es insuficiente para pagar esta venta.',
-    CASH_ORIGINAL_CLOSED: 'La caja original está cerrada. La devolución posterior al cierre está pendiente de integración.',
-    CASH_REFUND_INSUFFICIENT: 'La caja original no tiene efectivo suficiente para devolver esta venta.',
+    CANCEL_REQUIRES_OPEN_CASH: 'Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual.',
+    CASH_REFUND_INSUFFICIENT: 'La caja actual no tiene efectivo suficiente para devolver esta venta.',
     CASH_INCONSISTENT: 'El movimiento de efectivo requiere revisión antes de anular.',
     QUOTE_CHANGED: 'Los precios o la caja cambiaron. Cancela este cobro y vuelve a comprobar los importes.',
     SALES_FLOW_CHANGED: 'El flujo de ventas cambió. Actualiza la pantalla y vuelve a intentar.',
@@ -169,6 +169,7 @@
       if (value.payment) { const payment = value.payment; if (!/^[1-9]\d*$/.test(payment.id || '') || !/^[1-9]\d*$/.test(payment.saleId || '') || !/^[1-9]\d*$/.test(payment.clientId || '') || payment.businessId !== this.#identity?.businessId || !/^\d+\.\d{2}$/.test(payment.amount || '') || !['CASH','CARD','TRANSFER'].includes(payment.paymentMethod) || !['PENDING','POSTED'].includes(payment.status)) throw new ApiError('INVALID_RESPONSE'); }
       return value;
     }
+    async nextInvoiceNumber() { const value = await this.#request('/sales/next-invoice'); if (value?.businessId !== this.#identity?.businessId || !/^\d{6,20}$/.test(value.invoiceNumber || '')) throw new ApiError('INVALID_RESPONSE'); return value.invoiceNumber; }
     async quoteSale(data) { const value = await this.#write('/sales/quote', 'POST', data); if (!value?.quote || value.quote.businessId !== this.#identity?.businessId || !/^[a-f0-9]{64}$/.test(value.quote.quoteToken) || !/^\d+\.\d{2}$/.test(value.quote.total) || !Array.isArray(value.quote.items)) throw new ApiError('INVALID_RESPONSE'); return value.quote; }
     async createSale(data) { return this.#salesResult(await this.#write('/sales','POST',data)); }
     async cancelSale(id,data) { return this.#salesResult(await this.#write('/sales/'+encodeURIComponent(id)+'/cancel','POST',data)); }

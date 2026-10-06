@@ -1,3 +1,4 @@
+/* global localDB, salesHistory, products */
 const { test, expect } = require("@playwright/test");
 const { openCash } = require("./cash-fixture.cjs");
 const { monitorRequests } = require("./browser-diagnostics.cjs");
@@ -15,6 +16,7 @@ test.afterEach(async ({ page }) => {
 });
 
 async function iniciarSesion(page) {
+  await page.addInitScript({ path: require.resolve('./dexie-search-shim.js') });
   await page.goto("/");
   await page.locator("#loginUsername").fill("andres");
   await page.locator("#loginPassword").fill("4321");
@@ -148,6 +150,110 @@ test("Historial muestra ventas, detalles, auditoría y anulaciones sin duplicar 
     hasText: "HISTORY-SALE-001"
   });
   await expect(productRow.locator("td").nth(3)).toContainText("8");
+});
+
+test("devolución local de una venta anterior usa la caja abierta y conserva el cierre original", async ({ page }) => {
+  await iniciarSesion(page);
+  const barcode = "HISTORY-CASH-RETURN-" + Date.now();
+  await crearProductoDesdeUI(page, barcode, "Producto devolución de caja", "8");
+  await openCash(page);
+  await agregarVenta(page, barcode, "cash");
+  await expect(page.locator("#cashModal")).toBeVisible();
+  await page.locator("#cashReceivedInput").fill("20");
+  await page.locator("#confirmCashBtn").click();
+  await expect(page.locator("#ticketModal")).toBeVisible();
+  await page.locator("#newSaleBtn").click();
+
+  await page.locator("#navCajaBtn").click();
+  await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$15.00");
+  const original = await page.evaluate(async () => {
+    const sale = salesHistory[salesHistory.length - 1];
+    const session = await localDB.cajaSessions.get(sale.cajaSessionId);
+    const product = products.find(item => item.barcode === sale.items[0].barcode);
+    return { saleId: sale.id, invoice: sale.numero, originalCashId: session.id, session, productId: product.id, stock: product.stock };
+  });
+
+  await page.locator("#cerrarCajaBtn").click();
+  await page.locator("#cajaEfectivoRealInput").fill("15");
+  await page.locator("#confirmCierreCajaBtn").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("Caja cerrada");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  original.session = await page.evaluate(async original => localDB.cajaSessions.get(original.originalCashId), original);
+  const nextInvoiceBeforeCancellation = await page.locator("#currentSaleNumber").textContent();
+
+  await abrirHistorial(page);
+  await page.locator("#historyTableBody tr").filter({ hasText: "#1" }).getByRole("button", { name: "Anular" }).click();
+  await page.locator("#anularVentaMotivo").fill("Devolución después del cierre");
+  await page.locator("#anularVentaForm button[type='submit']").click();
+  await expect(page.locator("#customAlertMessage")).toHaveText("Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual.");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  const stillOpen = await page.evaluate(async original => ({
+    sale: await localDB.sales.get(original.saleId),
+    session: await localDB.cajaSessions.get(original.originalCashId),
+    stock: (await localDB.products.get(original.productId)).stock,
+    openCount: (await localDB.cajaSessions.toArray()).filter(session => session.estado === "abierta").length
+  }), original);
+  expect(stillOpen.sale.anulada).toBe(false);
+  expect(stillOpen.session).toEqual(original.session);
+  expect(stillOpen.stock).toBe(original.stock);
+  expect(stillOpen.openCount).toBe(0);
+  await page.locator("#anularVentaModal .close-modal-btn").click();
+  await expect(page.locator("#customConfirmModal")).toBeVisible();
+  await page.locator("#customConfirmBtn").click();
+
+  await page.locator("#navCajaBtn").click();
+  await page.locator("#cajaEfectivoInicialInput").fill("10");
+  await page.locator("#abrirCajaBtn").click();
+  await expect(page.locator("#cajaAbiertaBox")).toBeVisible();
+  await abrirHistorial(page);
+  await page.locator("#historyTableBody tr").filter({ hasText: "#1" }).getByRole("button", { name: "Anular" }).click();
+  await page.locator("#anularVentaMotivo").fill("Devolucion con saldo insuficiente");
+  await page.locator("#anularVentaForm button[type='submit']").click();
+  await expect(page.locator("#customAlertMessage")).toHaveText("La caja actual no tiene efectivo suficiente para devolver esta venta.");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  const insufficient = await page.evaluate(async ids => ({ sale: await localDB.sales.get(ids.saleId), stock: (await localDB.products.get(ids.productId)).stock }), { saleId: original.saleId, productId: original.productId });
+  expect(insufficient.sale.anulada).toBe(false);
+  expect(insufficient.stock).toBe(original.stock);
+  await page.locator("#anularVentaModal .close-modal-btn").click();
+  await expect(page.locator("#customConfirmModal")).toBeVisible();
+  await page.locator("#customConfirmBtn").click();
+  await page.locator("#navCajaBtn").click();
+  await page.locator("#cerrarCajaBtn").click();
+  await page.locator("#cajaEfectivoRealInput").fill("10");
+  await page.locator("#confirmCierreCajaBtn").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("Caja cerrada");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await page.locator("#cajaEfectivoInicialInput").fill("25");
+  await page.locator("#abrirCajaBtn").click();
+  await expect(page.locator("#cajaAbiertaBox")).toBeVisible();
+  await abrirHistorial(page);
+  await page.locator("#historyTableBody tr").filter({ hasText: "#1" }).getByRole("button", { name: "Anular" }).click();
+  await page.locator("#anularVentaMotivo").fill("Devolución después del cierre");
+  await page.locator("#anularVentaForm button[type='submit']").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("anulada exitosamente");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+
+  const after = await page.evaluate(async original => {
+    const sale = await localDB.sales.get(original.saleId);
+    const sessions = await localDB.cajaSessions.where({ business_id: sale.business_id }).toArray();
+    const originalSession = sessions.find(session => String(session.id) === String(original.originalCashId));
+    const currentSession = sessions.find(session => session.estado === "abierta");
+    const movement = currentSession.movimientos.find(item => String(item.reversalOfSaleId) === String(sale.id));
+    const audit = (await localDB.audit_logs.toArray()).find(item => item.accion === "ANULACION" && item.detalle.includes('Factura #' + original.invoice));
+    return { sale, originalSession, currentSession, movement, audit, stock: (await localDB.products.get(original.productId)).stock };
+  }, original);
+  expect(after.sale.anulada).toBe(true);
+  expect(after.sale.numero).toBe(original.invoice);
+  await expect(page.locator("#currentSaleNumber")).toHaveText(nextInvoiceBeforeCancellation);
+  expect(after.stock).toBe(original.stock + 1);
+  expect(after.originalSession).toEqual(original.session);
+  expect(after.movement).toMatchObject({ tipo: "salida", monto: 15, estado: "confirmado", medioPago: "CASH", originalCashSessionId: original.originalCashId, motivoAnulacion: "Devolución después del cierre" });
+  expect(after.movement.saleId).toBe(original.saleId);
+  expect(after.audit.detalle).toContain("Caja de devolución: " + after.currentSession.id);
+  expect(after.audit.detalle).toContain("Devolución después del cierre");
+  await page.locator("#navCajaBtn").click();
+  await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$15.00");
+  await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$10.00");
 });
 
 test("los resúmenes incluyen compras y gastos y sobreviven a una recarga", async ({ page }) => {

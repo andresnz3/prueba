@@ -1,12 +1,13 @@
-/* global localDB */
+/* global localDB, PosApiError */
 const { test, expect } = require('@playwright/test');
 const { checkCartCheckout } = require('./pos-layout-helper.cjs');
 // HTTP fixtures exercise the real connected frontend without any MySQL writes.
-async function connectedFixture(page, closed = false, loseResponse = false) {
+async function connectedFixture(page, closed = false, loseResponse = false, productOverrides = {}, fixtureClients = []) {
+  await page.addInitScript({ path: require.resolve('./dexie-search-shim.js') });
   const unexpected = [], errors = [], writes = [];
   page.on('pageerror', error => errors.push(error.message));
   const user = {id:'1',businessId:'1',username:'fixture',fullName:'Fixture',role:'ADMIN',active:true};
-  const product = {id:'1',businessId:'1',barcode:'VISUAL',name:'Producto visual',category:'Pruebas',active:true,deleted:false,image:null,retailPrice:'10.00',wholesalePrice:'9.00',stock:'20.000',minStock:'0.000',...arguments[3]};
+  const product = {id:'1',businessId:'1',barcode:'VISUAL',name:'Producto visual',category:'Pruebas',active:true,deleted:false,image:null,retailPrice:'10.00',wholesalePrice:'9.00',stock:'20.000',minStock:'0.000',...productOverrides};
   let result;
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
@@ -15,7 +16,10 @@ async function connectedFixture(page, closed = false, loseResponse = false) {
     else if(path === '/api/auth/modules/sales/enter') body = {module:'sales',allowed:true};
     else if(path === '/api/auth/access/sales') body = {module:'sales',allowed:true};
     else if(path === '/api/business-settings/sales-flow') body = {businessId:'1',salesFlow:'DIRECT'};
-    else if(path === '/api/sales/clients') body = {clients:[]};
+    else if(path === '/api/sales/clients') { const offset=Number(new URL(route.request().url()).searchParams.get('offset')||0); body = {clients:fixtureClients.slice(offset,offset+100)}; }
+    else if(path === '/api/auth/access/clients' || path === '/api/auth/modules/clients/enter') body = {module:'clients',allowed:true};
+    else if(path === '/api/clients') body = {clients:fixtureClients};
+    else if(path === '/api/receivables') body = {receivables:[]};
     else if(path === '/api/catalog/products') body = {products:[product]};
     else if(path === '/api/cash/sessions') body = {sessions:[]};
     else if(path === '/api/cash/overview') body = {overview:{businessId:'1',salesFlow:'DIRECT',salesByUser:[],pendingPayments:[],pendingOrders:[],movements:[],expectedAmount:'0.00',customerCollections:'0.00',lastDifference:'0.00'}};
@@ -137,4 +141,96 @@ test('conectado: codigo desconocido indica que no existe en el inventario conect
   await expect(page.locator('#customAlertMessage')).toHaveText('Producto no encontrado en el inventario conectado.');
   await expect(page.locator('#cartItemCount')).toHaveText('1 productos');
   expect(errors).toEqual([]);expect(unexpected).toEqual([]);
+});
+
+test('cliente conectado sugiere por teléfono e id, conserva plazo y limpia id obsoleto', async ({page}) => {
+  const client={id:'123456',businessId:'1',name:'Cliente conectado',phone:'505-7777-1212',ruc:'RUC-CONECTADO-88',active:true,creditLimit:'600.00',debt:'100.00',availableCredit:'500.00',pendingPayments:'0.00',creditDays:21};
+  const fixture=await connectedFixture(page,false,false,{},[client]);
+  await page.locator('input[name=paymentMethod][value=credit]').check();
+  await expect(page.locator('#creditClientSelect option[value="123456"]')).toHaveCount(1);
+  await page.locator('#creditClientSearch').fill('505-7777');
+  const suggestion=page.locator('[role="listbox"] [role="option"]').filter({hasText:'Cliente conectado'}).first();
+  await expect(suggestion).toBeVisible();
+  await page.locator('#creditClientSearch').press('ArrowDown');
+  await page.locator('#creditClientSearch').press('Enter');
+  await expect(page.locator('#creditClientSelect')).toHaveValue('123456');
+  await expect(page.locator('#creditDays')).toHaveValue('21');
+  await page.locator('#creditClientSearch').fill('sin coincidencias');
+  await expect(page.locator('#creditClientSelect')).toHaveValue('');
+  await expect(page.locator('#creditDays')).toHaveValue('30');
+  await page.locator('#creditClientSearch').fill('12345');
+  const idSuggestion=page.locator('[role="listbox"] [role="option"]').filter({hasText:'Cliente conectado'}).first();
+  await expect(idSuggestion).toBeVisible();
+  await idSuggestion.click();
+  await expect(page.locator('#creditClientSelect')).toHaveValue('123456');
+  expect(await page.evaluate(()=>new PosApiError('CANCEL_REQUIRES_OPEN_CASH').message)).toBe('Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual.');
+  await page.locator('#clearCartBtn').click();
+  await expect(page.locator('#customConfirmModal')).toBeVisible();
+  await page.locator('#customConfirmBtn').click();
+  await page.locator('#quickAddClientBtn').click();
+  await expect(page.locator('#clientModal')).toBeVisible();
+  expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,queue:0});
+  expect(fixture.unexpected).toEqual([]);expect(fixture.errors).toEqual([]);
+});
+
+test('clientes conectados sugiere la búsqueda de la tabla por teléfono', async ({page}) => {
+  const client={id:'123456',businessId:'1',name:'Cliente conectado',phone:'505-7777-1212',ruc:'RUC-CONECTADO-88',active:true,creditLimit:'600.00',debt:'100.00',availableCredit:'500.00',pendingPayments:'0.00',creditDays:21};
+  const fixture=await connectedFixture(page,false,false,{},[client]);
+  await page.locator('#clearCartBtn').click();
+  await expect(page.locator('#customConfirmModal')).toBeVisible();
+  await page.locator('#customConfirmBtn').click();
+  await page.locator('#navClientsBtn').click();
+  await expect(page.locator('#clientsView')).toBeVisible();
+  await page.locator('#clientSearchInput').fill('505-7777');
+  const clientSearchSuggestion=page.locator('[role="listbox"] [role="option"]').filter({hasText:'Cliente conectado'}).first();
+  await expect(clientSearchSuggestion).toBeVisible();
+  await page.locator('#clientSearchInput').press('ArrowDown');
+  await page.locator('#clientSearchInput').press('Enter');
+  await expect(page.locator('#clientSearchInput')).toHaveValue('Cliente conectado');
+  await expect(page.locator('#clientsTableBody tr')).toHaveCount(1);
+  expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,queue:0});
+  expect(fixture.unexpected).toEqual([]);expect(fixture.errors).toEqual([]);
+});
+
+test('credit client picker stays readable in a narrow checkout panel', async ({page}) => {
+  await page.setViewportSize({width:390,height:844});
+  const client={id:'123456',businessId:'1',name:'Cliente conectado',phone:'505-7777-1212',ruc:'RUC-CONECTADO-88',active:true,creditLimit:'600.00',debt:'100.00',availableCredit:'500.00',pendingPayments:'0.00',creditDays:21};
+  const fixture=await connectedFixture(page,false,false,{},[client]);
+  await page.locator('input[name=paymentMethod][value=credit]').check();
+  await page.locator('#creditClientSearch').fill('505-7777');
+  const suggestion=page.locator('[role="listbox"] [role="option"]').filter({hasText:'Cliente conectado'}).first();
+  await expect(suggestion).toBeVisible();
+  const listId=await page.locator('#creditClientSearch').getAttribute('aria-controls');
+  const list=page.locator(`#${listId}`);
+  await expect(list).toBeVisible();
+  const inspectGeometry=async()=>{
+    const geometry=await page.evaluate(()=>{
+      const getRect=selector=>{
+        const {left,right,top,bottom,width,height}=document.querySelector(selector).getBoundingClientRect();
+        return {left,right,top,bottom,width,height};
+      };
+      return {
+        container:getRect('#creditClientContainer'),
+        search:getRect('#creditClientSearch'),
+        select:getRect('#creditClientSelect'),
+        add:getRect('#quickAddClientBtn'),
+        list:getRect(`#${document.querySelector('#creditClientSearch').getAttribute('aria-controls')}`),
+        viewportWidth:innerWidth
+      };
+    });
+    expect(geometry.container.width).toBeLessThan(400);
+    expect(geometry.search.width).toBeGreaterThanOrEqual(260);
+    expect(geometry.select.width).toBeGreaterThanOrEqual(160);
+    expect(geometry.add.width).toBeGreaterThanOrEqual(80);
+    expect(geometry.list.width).toBeGreaterThanOrEqual(260);
+    expect(geometry.list.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.list.right).toBeLessThanOrEqual(geometry.viewportWidth);
+    expect(Math.abs(geometry.select.top-geometry.add.top)).toBeLessThanOrEqual(4);
+  };
+  await inspectGeometry();
+  await page.screenshot({path:test.info().outputPath('credit-client-mobile.png')});
+  await page.setViewportSize({width:1100,height:844});
+  await inspectGeometry();
+  await page.screenshot({path:test.info().outputPath('credit-client-narrow-panel.png')});
+  expect(fixture.unexpected).toEqual([]);expect(fixture.errors).toEqual([]);
 });

@@ -33,17 +33,24 @@
     async delete(key) { this.values.delete(String(key)); }
     async clear() { this.values.clear(); }
     where(criteria) {
-      const matches = value => typeof criteria === 'object' && criteria !== null
-        ? Object.entries(criteria).every(([key, expected]) => value[key] === expected)
-        : false;
-      return { toArray: async () => (await this.toArray()).filter(matches) };
+      const filter = expected => {
+        const matches = value => typeof criteria === 'object' && criteria !== null
+          ? Object.entries(criteria).every(([key, match]) => value[key] === match)
+          : typeof criteria === 'string' && value[criteria] === expected;
+        return {
+          toArray: async () => (await this.toArray()).filter(matches),
+          first: async () => (await this.toArray()).find(matches),
+          count: async () => (await this.toArray()).filter(matches).length
+        };
+      };
+      return { ...filter(undefined), equals: expected => filter(expected) };
     }
   }
   class MemoryDexie {
     constructor(name) {
       this.name = name;
-      this.tables = databases.get(name) || new Map();
-      databases.set(name, this.tables);
+      this._tableMap = databases.get(name) || new Map();
+      databases.set(name, this._tableMap);
       return new Proxy(this, {
         get(target, property, receiver) {
           if (Reflect.has(target, property)) {
@@ -55,12 +62,18 @@
         }
       });
     }
-    version() { return { stores: definitions => { for (const [name, definition] of Object.entries(definitions)) if (!this.tables.has(name)) this.tables.set(name, new MemoryTable(definition)); return this; } }; }
+    get tables() { return [...this._tableMap].map(([name, table]) => { table.name = name; return table; }); }
+    version() { return { stores: definitions => { for (const [name, definition] of Object.entries(definitions)) if (!this._tableMap.has(name)) this._tableMap.set(name, new MemoryTable(definition)); return this; } }; }
     table(name) {
-      if (!this.tables.has(name)) this.tables.set(name, new MemoryTable('id'));
-      return this.tables.get(name);
+      if (!this._tableMap.has(name)) this._tableMap.set(name, new MemoryTable('id'));
+      return this._tableMap.get(name);
     }
     async open() { return this; }
+    async transaction(...args) {
+      const callback = args.at(-1);
+      if (typeof callback !== 'function') throw new Error('Transaction callback is required');
+      return callback();
+    }
     close() {}
   }
   window.Dexie = MemoryDexie;

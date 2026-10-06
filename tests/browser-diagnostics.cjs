@@ -3,6 +3,7 @@ const reportedExternalFailures = new Set();
 
 function monitorRequests(page, errors) {
   const externalFailures = new Set();
+  page.route(`${APP_ORIGIN}/favicon.ico`, route => route.fulfill({ status: 204, body: "" }));
   page.on("pageerror", error => errors.push(`pageerror: ${error.message}`));
   page.on("console", message => {
     if (message.type() !== "error") return;

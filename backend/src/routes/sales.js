@@ -24,6 +24,7 @@ function salesRoutes(authentication, service, customers) {
   router.post('/receivables/:id/payments', async (req, res) => res.status(201).json(await customers.pay(req.auth, v.id(req.params.id), require('../services/client-values').payment(req.body, values.operationKey))));
   router.get('/sales/clients', async (req, res) => { v.body(req.query, ['limit', 'offset', 'q'], []); const options = page({ limit: req.query.limit, offset: req.query.offset }); const q = req.query.q === undefined ? null : v.text(req.query.q, 100); res.json({ clients: await customers.clientOptions(req.auth, { ...options, q }) }); });
   router.post('/sales/quote', async (req, res) => res.json({ quote: await service.quote(req.auth, values.quote(req.body)) }));
+  router.get('/sales/next-invoice', async (req, res) => { v.body(req.query, []); res.json(await service.nextInvoiceNumber(req.auth)); });
   router.post('/sales', async (req, res) => res.status(201).json(await service.create(req.auth, values.sale(req.body))));
   router.get('/business-settings/sales-flow', async (req, res) => res.json(await service.getSalesFlow(req.auth)));
   router.put('/business-settings/sales-flow', async (req, res) => res.json(await service.setSalesFlow(req.auth, values.salesFlow(req.body))));

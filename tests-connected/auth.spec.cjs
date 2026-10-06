@@ -5,7 +5,7 @@ const { readConfig } = require('../backend/src/config/environment');
 const business = process.env.POS_TEST_BUSINESS, businessB = process.env.POS_TEST_BUSINESS_B, apiBase = process.env.POS_TEST_API;
 const password = 'Browser-fixture-password-123!';
 const errors = new WeakMap();
-test.beforeEach(async ({ page }) => { const list = []; errors.set(page, list); page.on('pageerror', e => list.push(e.message)); });
+test.beforeEach(async ({ page, context }) => { await context.addInitScript({ path: require.resolve('../tests/dexie-search-shim.js') }); const list = []; errors.set(page, list); page.on('pageerror', e => list.push(e.message)); });
 test.afterEach(async ({ page }) => { expect(errors.get(page)).toEqual([]); });
 async function open(page) { await page.goto('/?mode=connected'); await expect(page.locator('#loginForm button')).toBeEnabled(); }
 async function login(page, username = 'browseradmin', id = business, pass = password) {
