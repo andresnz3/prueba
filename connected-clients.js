@@ -1,4 +1,4 @@
-﻿/* global connectedMode */
+/* global connectedMode */
 'use strict';
 (() => {
   if (!connectedMode) return;
@@ -39,7 +39,7 @@
     for (const client of clients) {
       if (client.businessId !== window.PosRuntime.salesInput().businessId) throw new window.PosApiError('INVALID_RESPONSE');
       const row = document.createElement('tr'); row.dataset.clientId = client.id;
-      appendCell(row, client.id + '\n' + client.name);
+      appendCell(row, client.name);
       appendCell(row, [client.phone, client.ruc].filter(Boolean).join(' · ') || '-');
       appendCell(row, money(client.creditLimit));
       appendCell(row, money(client.availableCredit));
@@ -58,6 +58,7 @@
     if (!receivables.length) { const row = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 9; cell.className = 'text-center'; cell.textContent = 'No hay cuentas por cobrar que coincidan.'; row.append(cell); body.append(row); return; }
     for (const item of receivables) {
       const row = document.createElement('tr'); row.dataset.saleId = item.id;
+      row.dataset.tableDate = window.PosTables.dateKey(item.date);
       appendCell(row, item.clientName); appendCell(row, '#' + item.invoiceNumber); appendCell(row, formatDate(item.date));
       appendCell(row, money(item.total)); appendCell(row, money(item.paid)); appendCell(row, money(item.balance));
       appendCell(row, formatDate(item.dueAt)); appendCell(row, statusText(item.status));

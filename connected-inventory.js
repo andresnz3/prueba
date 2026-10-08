@@ -172,7 +172,8 @@
       publish(result.product);
       el('kardexModalTitle').textContent = 'Kardex: ' + result.product.name;
       el('kardexModalSubtitle').textContent = 'Codigo: ' + result.product.barcode + ' | Stock actual: ' + result.product.stock;
-      el('kardexTableBody').innerHTML = result.movements.length ? result.movements.map(item => '<tr><td>' + escapeHtml(new Date(item.createdAt).toLocaleString()) + '</td><td>' + escapeHtml(item.type) + '</td><td>' + item.quantity + '</td><td>' + item.unitCost.toFixed(2) + '</td><td>' + (item.stockAfter ?? '-') + '</td><td>' + escapeHtml(item.reason) + '</td><td>' + escapeHtml(item.userName) + '</td></tr>').join('') : '<tr><td colspan="7">No hay movimientos.</td></tr>';
+      el('kardexTableBody').innerHTML = result.movements.length ? result.movements.map(item => '<tr data-table-date="' + window.PosTables.dateKey(item.createdAt) + '"><td>' + escapeHtml(new Date(item.createdAt).toLocaleString()) + '</td><td>' + escapeHtml(item.type) + '</td><td>' + item.quantity + '</td><td>' + item.unitCost.toFixed(2) + '</td><td>' + (item.stockAfter ?? '-') + '</td><td>' + escapeHtml(item.reason) + '</td><td>' + escapeHtml(item.userName) + '</td></tr>').join('') : '<tr><td colspan="7">No hay movimientos.</td></tr>';
+      window.PosTables.setupDataTable(el('kardexTableBody'), { label: 'Kardex', fileName: 'kardex', dateColumn: 0, rebuild: true });
       el('kardexModal').classList.remove('hidden');
     });
   }

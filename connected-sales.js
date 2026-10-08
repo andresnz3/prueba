@@ -263,6 +263,7 @@
       body.replaceChildren();
       for (const item of rows) {
         const row = document.createElement('tr');
+        row.dataset.tableDate = window.PosTables.dateKey(item.date);
         for (const value of [new Date(item.date).toLocaleString(), item.reference, item.user, item.method, money(item.amount), item.kind === 'payment' ? 'Pendiente de confirmación' : (historical ? 'Pendiente histórico · sin factura' : 'Orden pendiente · sin factura ni descuento de inventario')]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
         if (item.kind === 'sale') row.cells[5].textContent = 'Venta registrada';
         if (item.kind === 'collection') row.cells[5].textContent = 'Cobro registrado';
@@ -287,6 +288,7 @@
         let status = movement.status === 'VOID' ? 'Anulado' : movement.status === 'PENDING' ? (method ? method + ' pendiente de confirmación' : 'Pendiente') : (method ? method + ' confirmado' : 'Confirmado');
         if (movement.status === 'CONFIRMED' && method && method !== 'Efectivo' && movement.confirmedBy) status += ' · ' + movement.confirmedBy + ' · ' + new Date(movement.confirmedAt).toLocaleString();
         const row = document.createElement('tr');
+        row.dataset.tableDate = window.PosTables.dateKey(movement.createdAt);
         for (const value of [new Date(movement.createdAt).toLocaleString(), method || (movement.type === 'REVERSAL' ? 'Reversión' : movement.type), movement.description || '', money(movement.amount), movement.userName, status]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
         const actionCell = document.createElement('td');
         if (movement.status === 'PENDING' && ['CARD', 'TRANSFER'].includes(movement.paymentMethod)) { const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-sm btn-success'; button.textContent = 'Confirmar recibido'; button.dataset.action = 'confirm-payment'; button.dataset.id = movement.id; actionCell.append(button); }

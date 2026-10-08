@@ -1,3 +1,4 @@
+/* global salesHistory, clients, suppliers, purchasesHistory, actualizarTablaClientes, actualizarTablaCuentasPorPagar */
 const fs = require("node:fs/promises");
 const zlib = require("node:zlib");
 const { test, expect } = require("@playwright/test");
@@ -21,6 +22,29 @@ async function iniciarSesion(page, username = "andres", password = "4321") {
   await page.locator("#loginPassword").fill(password);
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#salesView")).toBeVisible();
+}
+
+async function instalarStubXlsx(page) {
+  await page.addInitScript(() => {
+    const excelColumn = index => { let value = index + 1, result = ""; while (value) { value -= 1; result = String.fromCharCode(65 + value % 26) + result; value = Math.floor(value / 26); } return result; };
+    window.XLSX = {
+      utils: {
+        aoa_to_sheet(rows) {
+          const sheet = { "!data": rows };
+          rows.forEach((row, rowIndex) => row.forEach((value, columnIndex) => { sheet[`${excelColumn(columnIndex)}${rowIndex + 1}`] = { v: value, t: typeof value === "number" ? "n" : "s" }; }));
+          return sheet;
+        },
+        book_new() { return { SheetNames: [], Sheets: {} }; },
+        book_append_sheet(book, sheet, name) { book.SheetNames.push(name); book.Sheets[name] = sheet; }
+      },
+      writeFile(book, filename) {
+        window.__excelExport = { book, filename };
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(new Blob([JSON.stringify({ book, filename })], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+        link.download = filename; document.body.append(link); link.click(); link.remove();
+      }
+    };
+  });
 }
 
 async function abrirReportes(page) {
@@ -210,8 +234,8 @@ test("Reportes carga valores cero, estados vacíos, pestañas e inventario", asy
   await expect(page.getByRole("button", { name: "Esta Semana" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Este Mes" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Todo", exact: true })).toBeVisible();
-  await expect(page.locator('button[onclick*="Reporte_Ventas"]')).toBeVisible();
-  await expect(page.locator('button[onclick*="Reporte_Vendedores"]')).toBeVisible();
+  await expect(page.locator('button[onclick*="ventas"]')).toBeVisible();
+  await expect(page.locator('button[onclick*="vendedores"]')).toBeVisible();
 });
 
 test("Reportes calcula todas las métricas de operaciones conocidas y excluye anulaciones", async ({ page }) => {
@@ -563,22 +587,170 @@ test("Reportes exporta ambos Excel con los datos actualmente visibles", async ({
   await abrirReportes(page);
 
   const salesDownloadPromise = page.waitForEvent("download");
-  await page.locator('button[onclick*="Reporte_Ventas"]').click();
+  await page.locator('button[onclick*="ventas"]').click();
   const salesDownload = await salesDownloadPromise;
-  expect(salesDownload.suggestedFilename()).toMatch(/^Reporte_Ventas_.*\.xlsx$/);
+  expect(salesDownload.suggestedFilename()).toMatch(/^ventas_.*\.xlsx$/);
   const salesWorkbook = await extractWorkbookText(salesDownload);
   expect(salesWorkbook).toContain("Tarjeta");
   expect(salesWorkbook).toContain("Producto exportado");
-  expect(salesWorkbook).toContain("15.00");
+  expect(salesWorkbook).toContain("<v>15</v>");
 
   const sellersDownloadPromise = page.waitForEvent("download");
-  await page.locator('button[onclick*="Reporte_Vendedores"]').click();
+  await page.locator('button[onclick*="vendedores"]').click();
   const sellersDownload = await sellersDownloadPromise;
-  expect(sellersDownload.suggestedFilename()).toMatch(/^Reporte_Vendedores_.*\.xlsx$/);
+  expect(sellersDownload.suggestedFilename()).toMatch(/^vendedores_.*\.xlsx$/);
   const sellersWorkbook = await extractWorkbookText(sellersDownload);
   expect(sellersWorkbook).toContain("andres");
   expect(sellersWorkbook).toContain("Tarjeta");
-  expect(sellersWorkbook).toContain("15.00");
+  expect(sellersWorkbook).toContain("<v>15</v>");
+});
+
+test("Ventas exporta solo lo visible y muestra un mensaje cuando no hay ventas", async ({ page }) => {
+  await page.route("https://**/*", route => route.abort());
+  await page.addInitScript({ path: require.resolve("./dexie-search-shim.js") });
+  await instalarStubXlsx(page);
+  await iniciarSesion(page);
+  await page.evaluate(() => {
+    const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).getTime(), yesterday = today - 86400000;
+    const makeSale = (id, timestamp, medioPago, name, total) => ({ id, numero: id, fechaTS: timestamp, fecha: new Date(timestamp).toLocaleString(), metodo: "Contado", medioPago, total, anulada: false, vendedor: "Prueba", tarifa: "Menudeo", items: [{ name, cantidad: 1, retailPrice: total, wholesalePrice: total, cost: 5 }] });
+    salesHistory.splice(0, salesHistory.length, makeSale(7101, today, "card", "Producto de hoy", 15), makeSale(7102, today, "transfer", "Producto transferencia", 20), makeSale(7103, yesterday, "cash", "Producto antiguo", 40));
+  });
+  await page.locator("#navReportesBtn").click();
+  await expect(page.locator("#reportesView")).toBeVisible();
+  await expect(page.locator('button[onclick*="exportarExcelReporte"][onclick*="ventas"]')).toHaveText("Exportar Excel de Ventas");
+  await expect(page.locator('button[onclick*="exportarExcelReporte"][onclick*="vendedores"]')).toHaveText("Exportar Excel de Vendedores");
+  await expect(page.locator("#repVentasBox .data-table-export").first()).toHaveText(/^Exportar Excel de Ventas por /);
+  await expect(page.locator("#repVentasBox .data-table-export").nth(1)).toHaveText(/^Exportar Excel de Productos /);
+  await expect(page.locator("#repVendedoresBox .data-table-export")).toHaveText(/^Exportar Excel de Ventas por vendedor$/);
+  const reportTableLabels = await page.locator("#reportesView button.data-table-export").allTextContents();
+  expect(reportTableLabels).toHaveLength(9);
+  expect(reportTableLabels.every(label => label.startsWith("Exportar Excel de "))).toBe(true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const topExportBounds = await page.locator("#reportesView button.report-export-button").evaluateAll(buttons => buttons.map(button => {
+    const rect = button.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, viewport: document.documentElement.clientWidth };
+  }));
+  expect(topExportBounds.every(rect => rect.left >= 0 && rect.right <= rect.viewport)).toBe(true);
+  await page.locator("#filtroHoyBtn").click();
+  await expect(page.locator("#repVentas")).toHaveText("C$35.00");
+  await page.locator("#repVentasBox table .data-table-column-filter").first().fill("Tarjeta");
+  await expect(page.locator("#repVentasMetodoBody tr:visible:not(.data-table-no-results)")).toHaveCount(1);
+
+  let downloads = 0;
+  page.on("download", () => { downloads += 1; });
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.locator('button[onclick*="exportarExcelReporte"][onclick*="ventas"]').click()
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^ventas_\d{4}-\d{2}-\d{2}\.xlsx$/);
+  const exported = JSON.parse(await fs.readFile(await download.path(), "utf8"));
+  expect(exported.book.SheetNames).toHaveLength(2);
+  expect(new Set(exported.book.SheetNames).size).toBe(2);
+  const methodSheet = Object.values(exported.book.Sheets).find(sheet => sheet["!data"][0][0] === "Método");
+  expect(methodSheet["!data"].slice(1, -1)).toEqual([["Tarjeta", 1, 15]]);
+  const productsSheet = Object.values(exported.book.Sheets).find(sheet => sheet["!data"][0][0] === "Producto");
+  expect(productsSheet["!data"].some(row => row.includes("Producto antiguo"))).toBe(false);
+  expect(downloads).toBe(1);
+
+  const twoDaysAgo = await page.evaluate(() => { const date = new Date(); date.setDate(date.getDate() - 2); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; });
+  await page.locator("#reporteDesdeInput").fill(twoDaysAgo);
+  await page.locator("#reporteHastaInput").fill(twoDaysAgo);
+  await page.locator("#aplicarFiltroReporteBtn").click();
+  await expect(page.locator("#repVentas")).toHaveText("C$0.00");
+  await page.locator('button[onclick*="exportarExcelReporte"][onclick*="ventas"]').click();
+  await expect(page.locator("#customAlertModal")).toBeVisible();
+  await expect(page.locator("#customAlertMessage")).toContainText("No hay ventas visibles para exportar");
+  expect(downloads).toBe(1);
+});
+
+test("Inventario, clientes, CxC, proveedores, CxP y compras generan Excel", async ({ page }) => {
+  await page.route("https://**/*", route => route.abort());
+  await page.addInitScript({ path: require.resolve("./dexie-search-shim.js") });
+  await instalarStubXlsx(page);
+  await iniciarSesion(page);
+
+  const exports = [
+    { nav: "#navInventoryBtn", view: "#inventoryView", button: "#inventoryView .data-table-export", file: "inventario" },
+    { nav: "#navClientsBtn", view: "#clientsView", button: "#clientsView .data-table-export", file: "clientes", nth: 0 },
+    { nav: "#navClientsBtn", view: "#clientsView", button: "#clientsView .data-table-export", file: "cuentas_por_cobrar", nth: 1, reveal: "#connectedReceivablesPanel" },
+    { nav: "#navSuppliersBtn", view: "#suppliersView", button: "#suppliersView .data-table-export", file: "proveedores" },
+    { nav: "#navPayablesBtn", view: "#payablesView", button: "#payablesView .data-table-export", file: "cuentas_por_pagar" },
+    { nav: "#navPurchasesBtn", view: "#purchasesView", button: "#purchasesView .data-table-export", file: "compras" }
+  ];
+
+  for (const item of exports) {
+    await page.locator(item.nav).click();
+    await expect(page.locator(item.view)).toBeVisible();
+    if (item.reveal) await page.locator(item.reveal).evaluate(element => element.classList.remove("hidden"));
+    const button = page.locator(item.button).nth(item.nth || 0);
+    await expect(button).toHaveText("Exportar Excel");
+    const [download] = await Promise.all([page.waitForEvent("download"), button.click()]);
+    expect(download.suggestedFilename()).toMatch(new RegExp(`^${item.file}_\\d{4}-\\d{2}-\\d{2}\\.xlsx$`));
+    const file = JSON.parse(await fs.readFile(await download.path(), "utf8"));
+    expect(file.book.SheetNames).toHaveLength(1);
+    expect(Object.values(file.book.Sheets)[0]["!data"][0].length).toBeGreaterThan(0);
+  }
+});
+
+test("Clientes y CxP ocultan IDs internos en tabla y Excel, y conservan acciones", async ({ page }) => {
+  await page.route("https://**/*", route => route.abort());
+  await page.addInitScript({ path: require.resolve("./dexie-search-shim.js") });
+  await instalarStubXlsx(page);
+  await iniciarSesion(page);
+  const technicalClientId = "1791253461494";
+  const technicalSupplierId = "1791253461495";
+  const technicalPurchaseId = "1791253461496";
+  await page.evaluate(({ technicalClientId, technicalSupplierId, technicalPurchaseId }) => {
+    clients.push({ id: Number(technicalClientId), name: "Cliente sin ID visible", phone: "555-1100", ruc: "", address: "", creditLimit: 100, debt: 25, active: true });
+    suppliers.push({ id: Number(technicalSupplierId), name: "Proveedor sin ID visible", phone: "555-2200", contact: "", ruc: "", address: "", debt: 50, active: true });
+    purchasesHistory.push({ id: Number(technicalPurchaseId), factura: "PAYABLE-TECH-001", proveedor: "Proveedor sin ID visible", tipo: "credito", anulada: false, total: 50, vencimiento: "2099-12-31", fecha: "2026-10-01", fechaTS: 1790812800000 });
+    actualizarTablaClientes();
+    actualizarTablaCuentasPorPagar();
+  }, { technicalClientId, technicalSupplierId, technicalPurchaseId });
+
+  await page.locator("#navClientsBtn").click();
+  await expect(page.locator("#clientsView thead th").first()).toHaveText("Cliente");
+  const clientRow = page.locator("#clientsTableBody tr").filter({ hasText: "Cliente sin ID visible" });
+  await expect(clientRow).toBeVisible();
+  await expect(clientRow).not.toContainText(technicalClientId);
+  const [clientDownload] = await Promise.all([page.waitForEvent("download"), page.locator("#clientsView .data-table-export").first().click()]);
+  const clientBook = JSON.parse(await fs.readFile(await clientDownload.path(), "utf8")).book;
+  const clientSheet = Object.values(clientBook.Sheets)[0];
+  expect(clientSheet["!data"][0]).toContain("Cliente");
+  expect(clientSheet["!data"][0]).not.toContain("ID");
+  expect(JSON.stringify(clientSheet)).not.toContain(technicalClientId);
+
+  await page.locator("#navPayablesBtn").click();
+  await expect(page.locator("#payablesView thead tr:first-child th")).toHaveText(["Proveedor", "Teléfono", "Próx. Vencimiento", "Deuda Actual", "Acciones"]);
+  const payableRow = page.locator("#payablesTableBody tr").filter({ hasText: "Proveedor sin ID visible" });
+  await expect(payableRow).toBeVisible();
+  await expect(payableRow.locator("td")).toHaveCount(5);
+  await expect(payableRow).toContainText("C$50.00");
+  await expect(payableRow).toContainText("2099-12-31");
+  await expect(payableRow).not.toContainText(technicalSupplierId);
+  await expect(payableRow).not.toContainText(technicalPurchaseId);
+  await page.locator("#payablesView .data-table-column-filter").first().fill("Proveedor sin ID visible");
+  await expect(page.locator("#payablesTableBody tr:visible:not(.data-table-no-results)")).toHaveCount(1);
+  const [payableDownload] = await Promise.all([page.waitForEvent("download"), page.locator("#payablesView .data-table-export").click()]);
+  const payableBook = JSON.parse(await fs.readFile(await payableDownload.path(), "utf8")).book;
+  const payableSheet = Object.values(payableBook.Sheets)[0];
+  expect(payableSheet["!data"][0]).toEqual(["Proveedor", "Teléfono", "Próx. Vencimiento", "Deuda Actual"]);
+  expect(JSON.stringify(payableSheet)).toContain("2099-12-31");
+  expect(JSON.stringify(payableSheet)).not.toContain(technicalSupplierId);
+  expect(JSON.stringify(payableSheet)).not.toContain(technicalPurchaseId);
+
+  await payableRow.getByRole("button", { name: "Ver Facturas" }).click();
+  await expect(page.locator("#statementModalTitle")).toContainText("Proveedor sin ID visible");
+  const payableInvoice = page.locator("#statementTableBody tr").filter({ hasText: "PAYABLE-TECH-001" });
+  await expect(payableInvoice).toContainText("C$50.00");
+  await payableInvoice.getByRole("button", { name: "Abonar" }).click();
+  await page.locator("#payInvoiceAmount").fill("20");
+  await page.locator("#payInvoiceMethod").selectOption("transferencia");
+  await page.locator("#paymentInvoiceForm button[type='submit']").click();
+  await expect(page.locator("#customAlertMessage")).toContainText("Pago de factura registrado");
+  await page.locator("#customAlertModal .close-modal-btn").click();
+  await expect(payableRow).toContainText("C$30.00");
+  await expect(payableRow).not.toContainText(technicalSupplierId);
 });
 
 test("el rol vendedor requiere clave de gestor para acceder a Reportes", async ({ page }) => {

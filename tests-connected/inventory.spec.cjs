@@ -49,6 +49,24 @@ test('búsqueda conectada encuentra el código de barras exacto en inventario y 
   await page.locator('#searchProductInput').fill(name.toUpperCase()); await expect(card.first()).toBeVisible();
   expect(await page.evaluate(async () => ({ sales: await localDB.sales.count(), queue: await localDB.sync_queue.count() }))).toEqual({ sales: 0, queue: 0 });
 });
+test('filtros y orden de inventario conectado son solo de lectura y no escriben en Dexie', async ({ page }) => {
+  await login(page); await inventory(page);
+  const first = await create(page, '5.125'), second = await create(page, '7.25');
+  const rowFor = name => page.locator('#inventoryTableBody tr').filter({ hasText: name });
+  const initialRowCount = await page.locator('#inventoryTableBody tr:visible:not(.data-table-no-results)').count();
+  const before = await page.evaluate(async () => ({ products: await localDB.products.count(), sales: await localDB.sales.count(), queue: await localDB.sync_queue.count() }));
+  await page.locator('#inventorySearchInput').fill(first.barcode);
+  await expect(rowFor(first.name)).toBeVisible(); await expect(rowFor(second.name)).toBeHidden();
+  await page.locator('#inventoryView .data-table-column-filter').nth(1).fill(first.name);
+  await expect(rowFor(first.name)).toBeVisible(); await expect(page.locator('#inventoryTableBody tr:visible:not(.data-table-no-results)')).toHaveCount(1);
+  await page.locator('#inventoryView .data-table-clear').click();
+  await expect(page.locator('#inventoryTableBody tr:visible:not(.data-table-no-results)')).toHaveCount(initialRowCount);
+  await page.locator('#inventoryView table thead tr:first-child th').nth(3).locator('button').click();
+  const stockOrder = await page.locator('#inventoryTableBody tr:visible:not(.data-table-no-results)').evaluateAll(rows => rows.map(row => Number(row.cells[3].textContent.match(/[\d.]+/)[0])));
+  expect(stockOrder).toEqual([...stockOrder].sort((left, right) => left - right));
+  const after = await page.evaluate(async () => ({ products: await localDB.products.count(), sales: await localDB.sales.count(), queue: await localDB.sync_queue.count() }));
+  expect(after).toEqual(before);
+});
 test('crear y editar sin proveedor no bloquea el formulario ni envia datos ficticios', async ({ page }) => {
   const writes = [];
   page.on('request', request => {
@@ -146,7 +164,7 @@ test('fallo de lectura no utiliza productos de Dexie como respaldo', async ({ pa
 test('fallo de escritura no crea producto fantasma ni reintenta automaticamente', async ({ page }) => {
   await login(page); await inventory(page); let writes = 0; await page.route(api + '/products', route => { writes++; return route.abort(); }); await page.locator('#addNewProductBtn').click();
   for (const [id, value] of Object.entries({ prodBarcode: 'NETWORK-' + randomBytes(4).toString('hex'), prodName: 'Fallo de red', prodCost: '2', prodStock: '0' })) await page.locator('#' + id).fill(value);
-  await page.locator('#productForm button[type=submit]').click(); await expect(page.locator('#customAlertMessage')).toContainText('conectar'); expect(writes).toBe(1); await expect(page.locator('#inventoryTableBody tr')).toHaveCount(0);
+  await page.locator('#productForm button[type=submit]').click(); await expect(page.locator('#customAlertMessage')).toContainText('conectar'); expect(writes).toBe(1); await expect(page.locator('#inventoryTableBody tr').filter({ hasText: 'Fallo de red' })).toHaveCount(0);
 });
 test('ventas y caja MySQL, compras bloqueadas, sin documentos en Dexie', async ({ page }) => {
   await login(page); await inventory(page); const item = await create(page, '3'); await page.locator('#navSalesBtn').click(); await expect(page.locator('#salesView')).toBeVisible();

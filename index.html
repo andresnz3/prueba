@@ -181,7 +181,7 @@
             <div id="payablesView" class="view-panel hidden">
                 <section class="history-container">
                     <div class="page-heading"><div><h1>Cuentas por Pagar</h1></div></div>
-                    <div class="history-table-container"><table class="history-table"><thead><tr><th>ID</th><th>Proveedor</th><th>Teléfono</th><th>Próx. Vencimiento</th><th>Deuda Actual</th><th>Acciones</th></tr></thead><tbody id="payablesTableBody"><tr><td colspan="6" class="text-center">No hay cuentas por pagar pendientes.</td></tr></tbody></table></div>
+                    <div class="history-table-container"><table class="history-table"><thead><tr><th>Proveedor</th><th>Teléfono</th><th>Próx. Vencimiento</th><th>Deuda Actual</th><th>Acciones</th></tr></thead><tbody id="payablesTableBody"><tr><td colspan="5" class="text-center">No hay cuentas por pagar pendientes.</td></tr></tbody></table></div>
                 </section>
             </div>
 
@@ -196,7 +196,7 @@
                     <div id="connectedClientsControls" class="connected-clients-controls hidden"><label for="clientSearchInput">Buscar cliente</label><input id="clientSearchInput" type="search" placeholder="Nombre, tel&#233;fono o identificaci&#243;n" autocomplete="off"><p id="clientsNotice" class="message" role="status" aria-live="polite"></p></div>
                     <div class="history-table-container">
                         <table class="history-table">
-                            <thead><tr><th>ID / Cliente</th><th>Contacto</th><th>Límite de Crédito</th><th>Crédito Disponible</th><th>Deuda Actual</th><th>Estado</th><th>Acciones</th></tr></thead>
+                            <thead><tr><th>Cliente</th><th>Contacto</th><th>Límite de Crédito</th><th>Crédito Disponible</th><th>Deuda Actual</th><th>Estado</th><th>Acciones</th></tr></thead>
                             <tbody id="clientsTableBody"></tbody>
                         </table>
                     </div>
@@ -357,8 +357,8 @@
                             <button id="filtroSemanaBtn" class="btn btn-secondary">Esta Semana</button>
                             <button id="filtroMesBtn" class="btn btn-secondary">Este Mes</button>
                             <button id="filtroTodoBtn" class="btn btn-secondary">Todo</button>
-                            <button onclick="window.exportarExcelReporte('repVentasBox', 'Reporte_Ventas')" class="btn btn-secondary" style="background:#107c41; color:white;">📊 Excel (Ventas)</button>
-                            <button onclick="window.exportarExcelReporte('repVendedoresBox', 'Reporte_Vendedores')" class="btn btn-secondary" style="background:#107c41; color:white;">📊 Excel (Vendedores)</button>
+                            <button onclick="window.exportarExcelReporte('repVentasBox', 'ventas')" class="btn btn-secondary btn-export-excel report-export-button">Exportar Excel de Ventas</button>
+                            <button onclick="window.exportarExcelReporte('repVendedoresBox', 'vendedores')" class="btn btn-secondary btn-export-excel report-export-button">Exportar Excel de Vendedores</button>
                         </div>
                         <p id="reporteRangoLabel" style="margin-top: 10px; color: #666; font-size: 0.9rem;"></p>
                     </div>
@@ -408,7 +408,7 @@
                             <p>Indicadores clave del negocio y cálculo de ganancia real en tiempo real.</p>
                         </div>
                         <div>
-                            <button onclick="window.generarExcelDashboard()" class="btn btn-secondary" style="background:#107c41; color:#fff; border-color:#107c41;">📊 Exportar Dashboard a Excel</button>
+                            <button onclick="window.generarExcelDashboard()" class="btn btn-secondary btn-export-excel">Exportar Excel</button>
                         </div>
                     </div>
 
@@ -808,6 +808,7 @@
 <form id="localOrderForm" novalidate><div class="form-group"><label for="localOrderMethod">Método de pago</label><select id="localOrderMethod"><option value="cash">Efectivo</option><option value="card">Tarjeta</option><option value="transfer">Transferencia</option><option value="credit">Crédito del cliente de la orden</option></select></div>
 <div id="localOrderCashGroup" class="form-group"><label for="localOrderReceived">Efectivo recibido</label><input id="localOrderReceived" type="number" min="0" step="0.01" inputmode="decimal"></div>
 <div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button id="localOrderConfirmBtn" type="submit" class="btn btn-primary">Confirmar y cobrar</button></div></form></div></div>
+    <script src="data-tables.js"></script>
     <script src="app.js"></script>
     <script src="connected-inventory.js"></script>
     <script src="connected-sales.js"></script>

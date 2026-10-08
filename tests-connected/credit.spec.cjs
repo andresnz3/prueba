@@ -22,7 +22,7 @@ async function createClient(page,name) {
 }
 test('clientes MySQL: crear, editar, inactivar y excluir de la lista de credito',async({page})=>{
   await login(page); const name='Cliente '+randomUUID().slice(0,8); const client=await createClient(page,name); expect(client.creditDays).toBe(15);
-  const row=page.locator('#clientsTableBody tr[data-client-id="'+client.id+'"]'); await row.getByRole('button',{name:'Editar'}).click(); await page.locator('#clientPhone').fill('555-EDIT'); await page.locator('#clientForm button[type=submit]').click(); await expect(row).toContainText('555-EDIT');
+  const row=page.locator('#clientsTableBody tr[data-client-id="'+client.id+'"]'); await expect(page.locator('#clientsView thead th').first()).toHaveText('Cliente'); await expect(row.locator('td').first()).toHaveText(name); await expect(row).not.toContainText(client.id); await row.getByRole('button',{name:'Editar'}).click(); await page.locator('#clientPhone').fill('555-EDIT'); await page.locator('#clientForm button[type=submit]').click(); await expect(row).toContainText('555-EDIT');
   await row.getByRole('button',{name:'Inactivar'}).click(); await expect(row).toContainText('Inactivo');
   await page.locator('#navSalesBtn').click(); await page.locator('input[name=paymentMethod][value=credit]').check(); await expect(page.locator('#creditClientSelect option')).not.toContainText(name);
   expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,queue:0});

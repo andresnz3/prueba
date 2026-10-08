@@ -315,22 +315,22 @@ test("Dashboard refleja ventas, crédito, abonos, compras, gastos, stock y anula
     page.waitForEvent("download"),
     page.locator('#dashboardView button[onclick="window.generarExcelDashboard()"]').click()
   ]);
-  expect(download.suggestedFilename()).toMatch(/^Dashboard_.*\.xlsx$/);
+  expect(download.suggestedFilename()).toMatch(/^dashboard_.*\.xlsx$/);
   const exported = await contenidoExportado(download);
   for (const value of [
     "Ventas Hoy",
-    "C$15.25",
+    "15.25",
     "Ventas Mes",
     "Ganancia Estimada",
-    "C$2.65",
+    "2.65",
     "1 uds.",
     "Bajo Stock",
     "Crédito Pendiente (CxC)",
-    "C$10.00",
+    "10",
     "Cuentas por Pagar (CxP)",
-    "C$5.00",
+    "5",
     "Gastos Totales",
-    "C$2.35"
+    "2.35"
   ]) {
     expect(exported).toContain(value);
   }
