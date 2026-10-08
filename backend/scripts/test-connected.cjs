@@ -28,7 +28,7 @@ async function runBrowserTests({ config, database, playwrightArgs = [] }) {
     for (const [businessId, username, role] of [[business, 'browseradmin', 'ADMIN'], [business, 'browserseller', 'VENDEDOR'], [businessB, 'otheradmin', 'ADMIN']]) await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessId, username, username, passwordHash, role]);
     let apiUrl;
     const root = resolve(__dirname, '../..');
-    const publicFiles = new Set(['index.html', 'app.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'local-cash-flow.js']);
+    const publicFiles = new Set(['index.html', 'app.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'connected-reports.js', 'local-cash-flow.js']);
     web = createServer((req, res) => {
       const name = new URL(req.url, 'http://localhost').pathname.slice(1) || 'index.html';
       if (name === 'api-config.js') { res.setHeader('Content-Type', 'application/javascript'); res.end('window.POS_API_BASE_URL = ' + JSON.stringify(apiUrl) + ';'); return; }

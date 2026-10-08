@@ -81,7 +81,7 @@
     const previous = activeView; const version = generation;
     try {
       await verify();
-      if (['reportesView', 'dashboardView'].includes(view)) { message('connectedNotice', 'Reportes y Dashboard conectados están pendientes de integrar todos los módulos financieros. No se muestran indicadores incompletos.'); return; }
+      if (view === 'dashboardView') { message('connectedNotice', 'Dashboard conectado pendiente. Reportes ya consulta ventas, caja, inventario y cuentas por cobrar desde MySQL; compras y gastos siguen pendientes.'); return; }
       if (previous && previous !== view && grant) { await api.leave(views[previous]); grant = null; clearTimeout(grantTimer); }
       if (view === 'usersView') {
         // /users autoriza en el servidor; un cambio visual de rol nunca habilita esta ruta.
@@ -92,6 +92,7 @@
       await api.enter(views[view]); assertGeneration(version);
       await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version);
       activeView = view; renderPosView(view); pendingView = null;
+      if (view === 'reportesView') { await window.PosReports.load(); assertGeneration(version); }
     } catch (failure) {
       if (failure.code === 'STALE_REQUEST') return;
       grant = null; clearTimeout(grantTimer);
@@ -128,6 +129,7 @@
       await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version);
       grant = { view, until: Date.parse(value.expiresAt) }; activeView = view; pendingView = null;
       el('authModal').classList.add('hidden'); renderPosView(view);
+      if (view === 'reportesView') await window.PosReports.load();
       clearTimeout(grantTimer); grantTimer = setTimeout(() => { grant = null; navigate('salesView'); }, Math.max(0, grant.until - Date.now()));
     } catch (failure) { error(failure, 'authError'); }
     finally { el('gestorPassword').value = ''; button.disabled = false; busy = false; }

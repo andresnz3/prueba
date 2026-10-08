@@ -79,7 +79,8 @@
     PRODUCT_ARCHIVED: 'El producto est\u00e1 archivado; su historial se conserva.',
     DATABASE_UNAVAILABLE: 'La base de datos no est\u00e1 disponible. Intenta consultar nuevamente.',
     RETRY_OPERATION: 'La operaci\u00f3n no se complet\u00f3 por concurrencia. Consulta el inventario antes de reintentar.',
-    INTERNAL_ERROR: 'El servidor no pudo completar la solicitud.'
+    INTERNAL_ERROR: 'El servidor no pudo completar la solicitud.',
+    REPORTS_UNAVAILABLE: 'Los reportes conectados no están disponibles con la versión actual del servidor.'
   };
   class ApiError extends Error {
     constructor(code, status = 0) { super(messages[code] || 'No se pudo completar la solicitud.'); this.code = code; this.status = status; }
@@ -183,6 +184,16 @@
     async salesFlow() { const value=await this.#request('/business-settings/sales-flow'); if(value?.businessId!==this.#identity?.businessId||!['DIRECT','CENTRALIZED'].includes(value.salesFlow)) throw new ApiError('INVALID_RESPONSE'); return value; }
     async setSalesFlow(salesFlow) { const value=await this.#write('/business-settings/sales-flow','PUT',{salesFlow}); if(value?.businessId!==this.#identity?.businessId||value.salesFlow!==salesFlow) throw new ApiError('INVALID_RESPONSE'); return value; }
     async cashOverview() { const value=await this.#request('/cash/overview'); if(!value?.overview) throw new ApiError('INVALID_RESPONSE'); return this.#salesResult({overview:value.overview}).overview; }
+    async connectedReport(from = null, until = null) {
+      const query = new URLSearchParams();
+      if (from) query.set('from', from);
+      if (until) query.set('until', until);
+      const queryString = query.toString();
+      const value = await this.#request('/reports/connected' + (queryString ? '?' + queryString : ''));
+      const report = value?.report;
+      if (report?.businessId !== this.#identity?.businessId || !report.sales || !report.cash || !report.inventory || !report.receivables || !Array.isArray(report.sales.history) || !Array.isArray(report.sales.paymentMethods) || !Array.isArray(report.sales.sellers) || !Array.isArray(report.sales.topProducts) || !Array.isArray(report.cash.closures) || !Array.isArray(report.cash.movements) || !Array.isArray(report.inventory.products) || !Array.isArray(report.receivables.clients) || !Array.isArray(report.receivables.payments)) throw new ApiError('INVALID_RESPONSE');
+      return report;
+    }
     async confirmPayment(id,data) { return this.#salesResult(await this.#write('/cash/payments/'+encodeURIComponent(id)+'/confirm','POST',data)); }
     async prepareOrder(data) { return this.#salesResult(await this.#write('/sales/orders','POST',data)); }
     async quoteOrder(id,paymentMethod) { const value=await this.#write('/cash/orders/'+encodeURIComponent(id)+'/quote','POST',{paymentMethod}); if(!value?.quote||value.quote.businessId!==this.#identity?.businessId||value.quote.orderId!==String(id)||!/^[a-f0-9]{64}$/.test(value.quote.quoteToken)||!/^\d+\.\d{2}$/.test(value.quote.total)||!/^\d+\.\d{2}$/.test(value.quote.estimatedTotal)) throw new ApiError('INVALID_RESPONSE'); return value.quote; }

@@ -257,6 +257,9 @@ input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
 .btn-export-excel, .report-export-button { background:#166534; color:#fff; border-color:#166534; }
 .btn-export-excel:hover, .report-export-button:hover { background:#14532d; border-color:#14532d; color:#fff; }
 .btn-export-excel:focus-visible, .report-export-button:focus-visible { outline:3px solid rgb(22 101 52 / 30%); outline-offset:2px; }
+.connected-report-note, .connected-report-pending { margin:0 0 14px; padding:11px 13px; border:1px solid #dbe4ef; border-radius:8px; background:#f8fafc; color:#334155; line-height:1.45; }
+.connected-report-pending { border-color:#fed7aa; background:#fff7ed; color:#7c2d12; }
+.report-table-note { margin:0 0 10px; color:var(--text-muted); font-size:.85rem; }
 .history-table th[aria-sort] { color:#1e40af; }
 .history-table tbody tr[hidden] { display:none !important; }
 @media (max-width:600px) {

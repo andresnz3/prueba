@@ -136,7 +136,7 @@
       const exportLabel = options.exportLabel || (table.closest('.rep-subview') && options.label);
       exportButton.type = 'button'; exportButton.className = 'btn btn-secondary data-table-export btn-export-excel'; exportButton.textContent = exportLabel ? `Exportar Excel de ${exportLabel}` : 'Exportar Excel';
       exportButton.addEventListener('click', () => exportTableToXlsx(table, { fileName: options.fileName || options.label || tableName(table) }));
-      actions.append(exportButton);
+      actions.append(exportButton); state.exportButton = exportButton;
     }
     tools.append(actions);
 
@@ -257,6 +257,8 @@
     }
   }
   function tableName(table) {
+    const configuredLabel = states.get(table)?.options?.exportLabel || states.get(table)?.options?.label;
+    if (configuredLabel) return configuredLabel;
     const container = table.closest('.history-table-container, .table-container');
     let preceding = container?.previousElementSibling;
     while (preceding?.matches('.data-table-toolbar')) preceding = preceding.previousElementSibling;
@@ -289,7 +291,8 @@
     const rows = [...(table.tBodies[0]?.rows || [])].filter(row => !row.hidden && !isStatusRow(row) && row !== state?.empty);
     const aoa = [columns.map(column => column.heading)];
     const currencyCells = [];
-    const sumColumns = columns.map((column, index) => ({ ...column, exportIndex: index })).filter(column => sumHeader.test(column.heading));
+    const configuredSums = state?.options?.sumColumns;
+    const sumColumns = configuredSums === false ? [] : columns.map((column, index) => ({ ...column, exportIndex: index })).filter(column => sumHeader.test(column.heading) && (!Array.isArray(configuredSums) || configuredSums.includes(column.index)));
     const totals = new Map(sumColumns.map(column => [column.exportIndex, 0]));
     rows.forEach((row, rowIndex) => {
       const values = columns.map((column, columnIndex) => {
@@ -355,6 +358,14 @@
     return true;
   }
   function exportTableToXlsx(target, options = {}) { return exportTablesToXlsx([target], options); }
+  function setDataTableExportEnabled(target, enabled) {
+    const table = tableFor(target), state = table && states.get(table);
+    if (!state?.exportButton) return false;
+    state.exportButton.disabled = !enabled;
+    state.exportButton.hidden = !enabled;
+    state.exportButton.style.display = enabled ? '' : 'none';
+    return true;
+  }
   function exportDataToXlsx(rows, options = {}) {
     if (typeof window.XLSX === 'undefined' || !Array.isArray(rows) || !rows.length) return false;
     const workbook = window.XLSX.utils.book_new(), worksheet = window.XLSX.utils.aoa_to_sheet(rows);
@@ -372,6 +383,10 @@
     return true;
   }
   const tableConfigs = [
+    ['repVentasHistorialBody', { label: 'Historial de ventas', fileName: 'ventas_conectadas', dateColumn: 0, sumColumns: false }],
+    ['repCxCPagosBody', { label: 'Abonos a cuentas por cobrar', fileName: 'abonos_cuentas_por_cobrar', dateColumn: 0 }],
+    ['repCajaMetodosBody', { label: 'Ventas de caja por medio de pago', fileName: 'caja_ventas_por_metodo' }],
+    ['repCajaMovimientosBody', { label: 'Movimientos de caja', fileName: 'reporte_movimientos_caja', dateColumn: 0, sumColumns: false }],
     ['inventoryTableBody', { label: 'Inventario', fileName: 'inventario', searchInputId: 'inventorySearchInput', ignoreColumns: [0, 7] }],
     ['purchasesTableBody', { label: 'Compras locales', fileName: 'compras', dateColumn: 0, ignoreColumns: [6] }],
     ['payablesTableBody', { label: 'Cuentas por pagar locales', fileName: 'cuentas_por_pagar', ignoreColumns: [4] }],
@@ -390,21 +405,23 @@
     ['repTopProductosBody', { label: 'Productos más vendidos', fileName: 'productos_mas_vendidos' }],
     ['repVendedoresBody', { label: 'Ventas por vendedor', fileName: 'ventas_por_vendedor' }],
     ['repComprasBody', { label: 'Compras del período', fileName: 'reporte_compras', dateColumn: 0 }],
-    ['repInventarioBody', { label: 'Estado de inventario', fileName: 'reporte_inventario' }],
+    ['repInventarioBody', { label: 'Estado de inventario', fileName: 'reporte_inventario', sumColumns: [3] }],
     ['repCajaBody', { label: 'Cierres de caja por período', fileName: 'reporte_caja', dateColumn: 1 }],
     ['repGastosCategoriaBody', { label: 'Gastos por categoría', fileName: 'reporte_gastos' }],
     ['repCxCBody', { label: 'Cuentas por cobrar', fileName: 'reporte_cuentas_por_cobrar' }],
     ['repCxPBody', { label: 'Cuentas por pagar', fileName: 'reporte_cuentas_por_pagar' }]
   ];
   function setupAll() {
+    const connected = new URLSearchParams(location.search).get('mode') === 'connected';
     for (const [bodyId, options] of tableConfigs) {
       const body = document.getElementById(bodyId);
       if (!body) continue;
+      if (!connected && body.closest('.connected-report-only')) continue;
       if (bodyId === 'clientsTableBody') document.getElementById('connectedClientsControls')?.classList.remove('hidden');
       setupDataTable(body, options);
     }
   }
-  window.PosTables = Object.freeze({ setupDataTable, refreshDataTable, exportTableToXlsx, exportTablesToXlsx, exportDataToXlsx, dateKey });
+  window.PosTables = Object.freeze({ setupDataTable, refreshDataTable, exportTableToXlsx, exportTablesToXlsx, exportDataToXlsx, setDataTableExportEnabled, dateKey });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupAll, { once: true });
   else setupAll();
 })();

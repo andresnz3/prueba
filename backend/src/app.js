@@ -29,6 +29,8 @@ function createApp({ config, checkDatabase, authentication }) {
     const customers = require('./services/customer-accounts').createCustomerService(authentication);
     const sales = require('./services/sales').createSalesService({ ...authentication, creditSnapshot: customers.creditSnapshot });
     app.use('/api', require('./routes/sales').salesRoutes(authentication, sales, customers));
+    const connectedReports = require('./services/connected-reports').createConnectedReportService(authentication);
+    app.use('/api', require('./routes/reports').reportsRoutes(authentication, connectedReports));
     app.use('/api', require('./routes/auth').authRoutes(authentication));
   }
   app.use((req, res, next) => next(httpError(404, 'NOT_FOUND')));

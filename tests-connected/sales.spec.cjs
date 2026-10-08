@@ -145,8 +145,8 @@ test('caja abierta y arqueo se restauran sin usar Dexie',async({page})=>{
 test('doble confirmación solo registra una factura',async({page})=>{
   const {product}=await fixture(page);await add(page,product);await checkout(page);await page.locator('#connectedCashReceived').fill('100');await page.evaluate(()=>{document.getElementById('confirmConnectedSaleBtn').click();document.getElementById('confirmConnectedSaleBtn').click();});await expect(page.locator('#ticketModal')).toBeVisible();expect((await call(page,'sales')).filter(s=>s.items.some(i=>i.productId===product.id))).toHaveLength(1);expect((await call(page,'product',product.id)).stock).toBe(9.125);
 });
-test('reportes incompletos permanecen bloqueados y el historial muestra datos MySQL',async({page})=>{
-  await login(page);await page.locator('#navReportesBtn').click();await expect(page.locator('#connectedNotice')).toContainText('No se muestran indicadores incompletos');await expect(page.locator('#reportesView')).toBeHidden();await page.locator('#navDashboardBtn').click();await expect(page.locator('#dashboardView')).toBeHidden();
+test('reportes conectados muestran datos disponibles y pendientes, dashboard sigue bloqueado',async({page})=>{
+  await login(page);await page.locator('#navReportesBtn').click();await expect(page.locator('#reportesView')).toBeVisible();await expect(page.locator('#connectedReportScope')).toBeVisible();await expect(page.locator('#repComprasPending')).toContainText('compras conectadas');await page.locator('#navDashboardBtn').click();await expect(page.locator('#dashboardView')).toBeHidden();
 });
 test('cobro movil mantiene controles visibles, accesibilidad y foco',async({page})=>{
   const {product}=await fixture(page);await page.setViewportSize({width:390,height:844});await add(page,product);await checkout(page);await expect(page.locator('#connectedCashReceived')).toBeFocused();await expect(page.locator('#confirmConnectedSaleBtn')).toBeInViewport();expect(await page.locator('#connectedCheckoutModal').getAttribute('aria-modal')).toBe('true');await page.screenshot({path:'test-results-connected/phase53-checkout-mobile.png',fullPage:true});

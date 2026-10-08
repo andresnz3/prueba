@@ -2324,8 +2324,13 @@ function initReportesFiltros() {
     const desdeInput = document.getElementById("reporteDesdeInput"), hastaInput = document.getElementById("reporteHastaInput");
     if (!desdeInput || !hastaInput) return;
     const hoy = new Date();
-    if (!desdeInput.value) desdeInput.value = fechaLocalISO(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+    if (!desdeInput.value && (!connectedMode || !reporteHastaManual)) desdeInput.value = fechaLocalISO(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
     if (!reporteHastaManual) hastaInput.value = fechaLocalISO(hoy);
+    if (connectedMode) {
+        const label = document.getElementById("reporteRangoLabel");
+        if (label) label.textContent = `Mostrando datos conectados desde ${desdeInput.value || 'el inicio'} hasta ${hastaInput.value || 'hoy'}.`;
+        return;
+    }
     aplicarFiltroReporte();
 }
 function setRangoFechasReporte(desdeDate, hastaDate) {
@@ -2336,13 +2341,14 @@ function setRangoFechasReporte(desdeDate, hastaDate) {
     aplicarFiltroReporte();
 }
 document.getElementById("reporteHastaInput")?.addEventListener("change", () => { reporteHastaManual = true; });
-function aplicarFiltroReporte() { const desdeVal = document.getElementById("reporteDesdeInput")?.value; const hastaVal = document.getElementById("reporteHastaInput")?.value; reporteDesdeTS = desdeVal ? new Date(desdeVal + "T00:00:00").getTime() : 0; reporteHastaTS = hastaVal ? new Date(hastaVal + "T23:59:59").getTime() : Date.now(); const label = document.getElementById("reporteRangoLabel"); if (label) label.textContent = `Mostrando datos desde ${desdeVal || 'el inicio'} hasta ${hastaVal || 'hoy'}.`; renderReportes(); }
+function aplicarFiltroReporte() { const desdeVal = document.getElementById("reporteDesdeInput")?.value; const hastaVal = document.getElementById("reporteHastaInput")?.value; reporteDesdeTS = desdeVal ? new Date(desdeVal + "T00:00:00").getTime() : 0; reporteHastaTS = hastaVal ? new Date(hastaVal + "T23:59:59").getTime() : Date.now(); const label = document.getElementById("reporteRangoLabel"); if (label) label.textContent = `Mostrando datos ${connectedMode ? 'conectados ' : ''}desde ${desdeVal || 'el inicio'} hasta ${hastaVal || 'hoy'}.`; if (connectedMode) return window.PosReports?.load(); renderReportes(); }
 document.getElementById("aplicarFiltroReporteBtn")?.addEventListener("click", aplicarFiltroReporte);
 document.getElementById("filtroHoyBtn")?.addEventListener("click", () => { const hoy = new Date(); setRangoFechasReporte(hoy, hoy); });
 document.getElementById("filtroSemanaBtn")?.addEventListener("click", () => { const hoy = new Date(); const inicio = new Date(hoy); inicio.setDate(hoy.getDate() - hoy.getDay()); setRangoFechasReporte(inicio, hoy); });
 document.getElementById("filtroMesBtn")?.addEventListener("click", () => { const hoy = new Date(); const inicio = new Date(hoy.getFullYear(), hoy.getMonth(), 1); setRangoFechasReporte(inicio, hoy); });
-document.getElementById("filtroTodoBtn")?.addEventListener("click", () => { const inicio = new Date(2000, 0, 1); const hoy = new Date(); setRangoFechasReporte(inicio, hoy); });
+document.getElementById("filtroTodoBtn")?.addEventListener("click", () => { if (connectedMode) { document.getElementById("reporteDesdeInput").value = ""; document.getElementById("reporteHastaInput").value = ""; reporteHastaManual = true; aplicarFiltroReporte(); return; } const inicio = new Date(2000, 0, 1); const hoy = new Date(); setRangoFechasReporte(inicio, hoy); });
 function renderReportes() {
+    if (connectedMode) { window.PosReports?.render(); return; }
     if (reporteDesdeTS === null) return;
     const ventasFiltradas = salesHistory.filter(s => (s.fechaTS || s.id) >= reporteDesdeTS && (s.fechaTS || s.id) <= reporteHastaTS); const ventasValidas = ventasFiltradas.filter(v => !v.anulada); const comprasFiltradas = purchasesHistory.filter(p => (!p.fechaTS || (p.fechaTS >= reporteDesdeTS && p.fechaTS <= reporteHastaTS)) && !p.anulada); const gastosFiltrados = gastosHistory.filter(g => g.fechaTS >= reporteDesdeTS && g.fechaTS <= reporteHastaTS && !g.anulado); const cajasFiltradas = cajaHistorial.filter(c => c.estado === "cerrada" && c.fechaCierreTS >= reporteDesdeTS && c.fechaCierreTS <= reporteHastaTS);
     const totalVentas = ventasValidas.reduce((s, v) => s + v.total, 0); const totalCompras = comprasFiltradas.reduce((s, p) => s + p.total, 0); const totalGastos = gastosFiltrados.reduce((s, g) => s + g.monto, 0);
@@ -2415,7 +2421,8 @@ window.exportarExcelReporte = function(containerId, nombreArchivo) {
         return false;
     }
     if (!window.XLSX) { showAlert("No se pudo cargar la librería de Excel. Verifica la conexión e inténtalo de nuevo."); return false; }
-    if (!window.PosTables?.exportTablesToXlsx(tablasConDatos, { fileName: nombreArchivo })) { showAlert("No se pudo preparar el archivo de Excel."); return false; }
+    const exportName = connectedMode ? `${nombreArchivo}_conectado` : nombreArchivo;
+    if (!window.PosTables?.exportTablesToXlsx(tablasConDatos, { fileName: exportName })) { showAlert("No se pudo preparar el archivo de Excel."); return false; }
     return true;
 };
 

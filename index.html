@@ -362,6 +362,8 @@
                         </div>
                         <p id="reporteRangoLabel" style="margin-top: 10px; color: #666; font-size: 0.9rem;"></p>
                     </div>
+                    <p id="connectedReportStatus" class="connected-report-note hidden" role="status" aria-live="polite"></p>
+                    <p id="connectedReportScope" class="connected-report-note hidden">El rango aplica a ventas, movimientos y cierres. Inventario y Cuentas por Cobrar muestran el estado actual del negocio.</p>
 
                     <div class="summary-cards">
                         <div class="summary-card" style="border-left:4px solid #28a745;"><span>Ventas</span><h3 id="repVentas">C$0.00</h3></div>
@@ -388,15 +390,26 @@
                         <div class="history-table-container" style="margin-bottom:25px;"><table class="history-table"><thead><tr><th>Método</th><th># Ventas</th><th>Total</th></tr></thead><tbody id="repVentasMetodoBody"></tbody></table></div>
                         <h2 style="margin-bottom:10px;">Productos Más Vendidos</h2>
                         <div class="history-table-container"><table class="history-table"><thead><tr><th>Producto</th><th>Cantidad Vendida</th><th>Total Generado</th></tr></thead><tbody id="repTopProductosBody"></tbody></table></div>
+                        <div class="connected-report-only hidden">
+                            <p id="repVentasHistoryNote" class="report-table-note"></p>
+                            <h2 style="margin:20px 0 10px;">Historial de ventas del período</h2>
+                            <div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Factura</th><th>Vendedor</th><th>Medio de pago</th><th>Total</th><th>Estado</th></tr></thead><tbody id="repVentasHistorialBody"></tbody></table></div>
+                        </div>
                     </div>
 
                     <div id="repVendedoresBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Ventas por Vendedor</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Vendedor</th><th># Ventas</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Crédito</th><th>Total</th></tr></thead><tbody id="repVendedoresBody"></tbody></table></div></div>
-                    <div id="repComprasBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Compras del Periodo</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Factura</th><th>Proveedor</th><th>Condición</th><th>Total</th></tr></thead><tbody id="repComprasBody"></tbody></table></div></div>
-                    <div id="repInventarioBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Estado de Inventario</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Producto</th><th>Stock</th><th>Costo</th><th>Valor en Costo</th><th>Estado</th></tr></thead><tbody id="repInventarioBody"></tbody></table></div></div>
-                    <div id="repCajaBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cierres de Caja</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Apertura</th><th>Cierre</th><th>Cerrado por</th><th>Esperado</th><th>Real</th><th>Diferencia</th></tr></thead><tbody id="repCajaBody"></tbody></table></div></div>
-                    <div id="repGastosBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Gastos por Categoría</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Categoría</th><th># Gastos</th><th>Total</th></tr></thead><tbody id="repGastosCategoriaBody"></tbody></table></div></div>
-                    <div id="repCxCBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cuentas por Cobrar</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Cliente</th><th>Límite</th><th>Deuda</th><th>Estado</th></tr></thead><tbody id="repCxCBody"></tbody></table></div></div>
-                    <div id="repCxPBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cuentas por Pagar</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Proveedor</th><th>Deuda</th></tr></thead><tbody id="repCxPBody"></tbody></table></div></div>
+                    <div id="repComprasBox" class="rep-subview hidden"><p class="connected-report-pending hidden" id="repComprasPending">Reporte disponible cuando compras conectadas esté implementado.</p><h2 style="margin-bottom:10px;">Compras del Periodo</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Factura</th><th>Proveedor</th><th>Condición</th><th>Total</th></tr></thead><tbody id="repComprasBody"></tbody></table></div></div>
+                    <div id="repInventarioBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Estado de Inventario</h2><p id="connectedInventorySummary" class="connected-report-note connected-report-only hidden"></p><div class="history-table-container"><table class="history-table"><thead><tr><th>Producto</th><th>Stock</th><th>Costo</th><th>Valor en Costo</th><th>Estado</th></tr></thead><tbody id="repInventarioBody"></tbody></table></div></div>
+                    <div id="repCajaBox" class="rep-subview hidden">
+                        <h2 style="margin-bottom:10px;">Ventas por medio de pago</h2>
+                        <div class="connected-report-only hidden"><div class="history-table-container"><table class="history-table"><thead><tr><th>Medio de pago</th><th>Ventas</th><th>Total facturado</th></tr></thead><tbody id="repCajaMetodosBody"></tbody></table></div></div>
+                        <h2 style="margin:20px 0 10px;">Movimientos registrados en Caja</h2>
+                        <div class="connected-report-only hidden"><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Dirección</th><th>Medio de pago</th><th>Estado</th><th>Monto</th></tr></thead><tbody id="repCajaMovimientosBody"></tbody></table></div></div>
+                        <h2 style="margin:20px 0 10px;">Cierres de Caja</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Apertura</th><th>Cierre</th><th>Cerrado por</th><th>Esperado</th><th>Real</th><th>Diferencia</th></tr></thead><tbody id="repCajaBody"></tbody></table></div>
+                    </div>
+                    <div id="repGastosBox" class="rep-subview hidden"><p class="connected-report-pending hidden" id="repGastosPending">Reporte de gastos disponible cuando el módulo conectado esté implementado.</p><h2 style="margin-bottom:10px;">Gastos por Categoría</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Categoría</th><th># Gastos</th><th>Total</th></tr></thead><tbody id="repGastosCategoriaBody"></tbody></table></div></div>
+                    <div id="repCxCBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cuentas por Cobrar</h2><p id="connectedReceivablesSummary" class="connected-report-note connected-report-only hidden"></p><div class="history-table-container"><table class="history-table"><thead><tr><th>Cliente</th><th>Límite</th><th>Deuda</th><th>Estado</th></tr></thead><tbody id="repCxCBody"></tbody></table></div><div class="connected-report-only hidden"><h2 style="margin:20px 0 10px;">Abonos registrados en el período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Cliente</th><th>Factura</th><th>Medio de pago</th><th>Estado</th><th>Monto</th></tr></thead><tbody id="repCxCPagosBody"></tbody></table></div></div></div>
+                    <div id="repCxPBox" class="rep-subview hidden"><p class="connected-report-pending hidden" id="repCxPPending">Reporte disponible cuando compras conectadas esté implementado.</p><h2 style="margin-bottom:10px;">Cuentas por Pagar</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Proveedor</th><th>Deuda</th></tr></thead><tbody id="repCxPBody"></tbody></table></div></div>
                 </section>
             </div>
 
@@ -813,6 +826,7 @@
     <script src="connected-inventory.js"></script>
     <script src="connected-sales.js"></script>
     <script src="connected-clients.js"></script>
+    <script src="connected-reports.js"></script>
     <script src="local-cash-flow.js"></script>
     <script src="connected-auth.js"></script>
     <script src="icons.js"></script>
