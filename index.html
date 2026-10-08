@@ -44,7 +44,7 @@
                 <button id="navCajaBtn" class="nav-btn">💰 Caja</button>
                 <button id="navGastosBtn" class="nav-btn">🧾 Gastos</button>
                 <button id="navReportesBtn" class="nav-btn">📈 Reportes</button>
-                <button id="navDashboardBtn" class="nav-btn">📊 Dashboard</button>
+                <button id="navDashboardBtn" class="nav-btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="12" x2="12" y1="20" y2="10"></line><line x1="18" x2="18" y1="20" y2="4"></line><line x1="6" x2="6" y1="20" y2="16"></line></svg>Dashboard</button>
                 <button id="navConfigBtn" class="nav-btn">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: sub; margin-right: 5px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
     Configuración
@@ -415,95 +415,85 @@
 
             <div id="dashboardView" class="view-panel hidden">
                 <section class="history-container">
-                    <div class="page-heading" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-                        <div>
-                            <h1>Dashboard de Gestión</h1>
-                            <p>Indicadores clave del negocio y cálculo de ganancia real en tiempo real.</p>
+                    <div class="page-heading dashboard-heading">
+                        <div><h1>Dashboard de Gestión</h1><p>Indicadores del negocio para el período seleccionado.</p></div>
+                        <button onclick="window.generarExcelDashboard()" class="btn btn-export-excel">Exportar Excel del Dashboard</button>
+                    </div>
+                    <section class="dashboard-period-panel" aria-labelledby="dashboardPeriodTitle">
+                        <div class="dashboard-period-heading"><div><h2 id="dashboardPeriodTitle">Período del Dashboard</h2><p>Ventas, movimientos y resultados siguen este rango. Inventario y saldos muestran el estado actual.</p></div></div>
+                        <div class="dashboard-period-controls">
+                            <div class="dashboard-date-fields"><label for="dashboardFromInput">Desde<input id="dashboardFromInput" type="date"></label><label for="dashboardUntilInput">Hasta<input id="dashboardUntilInput" type="date"></label></div>
+                            <button type="button" id="dashboardApplyBtn" class="btn btn-primary">Aplicar</button>
+                            <div class="dashboard-period-presets" role="group" aria-label="Períodos rápidos">
+                                <button type="button" class="btn btn-secondary" data-dashboard-preset="today">Hoy</button>
+                                <button type="button" class="btn btn-secondary" data-dashboard-preset="week">Esta Semana</button>
+                                <button type="button" class="btn btn-secondary" data-dashboard-preset="month">Este Mes</button>
+                                <button type="button" class="btn btn-secondary" data-dashboard-preset="all">Todo</button>
+                            </div>
                         </div>
-                        <div>
-                            <button onclick="window.generarExcelDashboard()" class="btn btn-secondary btn-export-excel">Exportar Excel</button>
+                        <p id="dashboardPeriodLabel" class="dashboard-period-label" aria-live="polite"></p>
+                        <p id="dashboardStatus" class="dashboard-period-status hidden" role="status" aria-live="polite"></p>
+                    </section>
+                    <div id="dashboardLocalContent" class="local-dashboard-only">
+                        <section class="buyer-section dashboard-profit-panel">
+                            <h2>Ganancia estimada del período</h2>
+                            <div class="dashboard-profit-values">
+                                <div><span>Ventas:</span><strong id="dashGananciaVentas">C$0.00</strong></div>
+                                <div><span>Costo de mercancía:</span><strong id="dashGananciaCosto">C$0.00</strong></div>
+                                <div class="dashboard-profit-total"><span>Ganancia bruta:</span><strong id="dashGananciaBruta">C$0.00</strong></div>
+                                <div><span>Gastos:</span><strong id="dashGananciaGastos">C$0.00</strong></div>
+                                <div class="dashboard-profit-net"><span>Ganancia estimada:</span><strong id="dashGananciaEstimada">C$0.00</strong></div>
+                            </div>
+                        </section>
+                        <h2 class="dashboard-section-title">Indicadores del negocio</h2>
+                        <div class="summary-cards">
+                            <div class="summary-card"><span>Ventas del período</span><h3 id="dashVentasPeriodo">C$0.00</h3></div>
+                            <div class="summary-card"><span>Ventas realizadas</span><h3 id="dashCantidadVentas">0</h3></div>
+                            <div class="summary-card"><span>Promedio por venta</span><h3 id="dashTicketPromedio">C$0.00</h3></div>
+                            <div class="summary-card"><span>Compras del período</span><h3 id="dashComprasPeriodo">C$0.00</h3></div>
+                            <div class="summary-card"><span>Productos vendidos</span><h3 id="dashProdsVendidos">0 uds.</h3></div>
+                            <div class="summary-card"><span>Productos con bajo stock</span><h3 id="dashBajoStock">0</h3></div>
+                            <div class="summary-card"><span>Productos activos</span><h3 id="dashProductosActivos">0</h3></div>
+                            <div class="summary-card"><span>Valor de inventario a costo</span><h3 id="dashValorInventario">C$0.00</h3></div>
+                            <div class="summary-card"><span>Crédito pendiente (CxC)</span><h3 id="dashCxC">C$0.00</h3></div>
+                            <div class="summary-card"><span>Cuentas por pagar (CxP)</span><h3 id="dashCxP">C$0.00</h3></div>
+                            <div class="summary-card"><span>Gastos del período</span><h3 id="dashGastos">C$0.00</h3></div>
+                            <div class="summary-card"><span>Abonos recibidos en el período</span><h3 id="dashAbonosPeriodo">C$0.00</h3></div>
+                            <div class="summary-card"><span>Entradas de efectivo del período</span><h3 id="dashEntradasEfectivo">C$0.00</h3></div>
+                            <div class="summary-card"><span>Salidas de efectivo del período</span><h3 id="dashSalidasEfectivo">C$0.00</h3></div>
+                            <div class="summary-card"><span>Efectivo esperado en caja abierta</span><h3 id="dashEfectivoEsperado">Sin caja abierta</h3></div>
+                        </div>
+                        <div class="dashboard-tables-grid">
+                            <section><h2>Ventas por medio de pago</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Medio de pago</th><th>Ventas</th><th>Total</th></tr></thead><tbody id="dashMetodosBody"></tbody></table></div></section>
+                            <section><h2>Ventas por vendedor</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Vendedor</th><th>Ventas realizadas</th><th>Total vendido</th></tr></thead><tbody id="dashVendedoresBody"></tbody></table></div></section>
+                            <section><h2>Productos más vendidos</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Producto</th><th>Unidades</th><th>Total</th></tr></thead><tbody id="dashProductosBody"></tbody></table></div></section>
                         </div>
                     </div>
-
-                    <div class="buyer-section" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 20px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
-                        <h2 style="margin-bottom: 15px; color: #0f172a; font-size: 1.15rem; border-bottom: 2px solid #2563eb; padding-bottom: 8px;">💰 Ganancia Real (Análisis del Negocio)</h2>
-                        <div style="max-width: 450px; font-family: monospace; font-size: 1.05rem; background: #f8fafc; padding: 18px; border-radius: 8px; border: 1px solid #e2e8f0;">
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                                <span>Ventas:</span>
-                                <strong id="dashGananciaVentas" style="color: #2563eb;">C$0.00</strong>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                                <span>Costo mercancía:</span>
-                                <strong id="dashGananciaCosto" style="color: #dc2626;">C$0.00</strong>
-                            </div>
-                            <div style="border-top: 2px dashed #94a3b8; margin: 10px 0;"></div>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-weight: bold; font-size: 1.15rem;">
-                                <span>Ganancia bruta:</span>
-                                <strong id="dashGananciaBruta" style="color: #16a34a;">C$0.00</strong>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; color: #64748b;">
-                                <span>- Gastos:</span>
-                                <strong id="dashGananciaGastos" style="color: #dc2626;">C$0.00</strong>
-                            </div>
-                            <div style="border-top: 2px double #0f172a; margin: 10px 0; padding-top: 6px;"></div>
-                            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.25rem; background: #e0f2fe; padding: 10px; border-radius: 6px;">
-                                <span>= Ganancia estimada:</span>
-                                <strong id="dashGananciaEstimada" style="color: #0284c7;">C$0.00</strong>
-                            </div>
+                    <div id="dashboardConnectedContent" class="connected-dashboard-only hidden" aria-live="polite">
+                        <p id="connectedDashboardStatus" class="connected-report-note" role="status"></p>
+                        <div class="summary-cards">
+                            <div class="summary-card"><span>Ventas del período</span><h3 id="connectedDashSalesTotal">C$0.00</h3></div>
+                            <div class="summary-card"><span>Ventas realizadas</span><h3 id="connectedDashSalesCount">0</h3></div>
+                            <div class="summary-card"><span>Promedio por venta</span><h3 id="connectedDashTicketAverage">C$0.00</h3></div>
+                            <div class="summary-card"><span>Ganancia bruta del período</span><h3 id="connectedDashGrossProfit">C$0.00</h3></div>
+                            <div class="summary-card"><span>Entradas de efectivo confirmadas</span><h3 id="connectedDashCashIn">C$0.00</h3></div>
+                            <div class="summary-card"><span>Salidas de efectivo confirmadas</span><h3 id="connectedDashCashOut">C$0.00</h3></div>
+                            <div class="summary-card"><span>Efectivo esperado en caja abierta</span><h3 id="connectedDashCashExpected">Sin caja abierta</h3></div>
+                            <div class="summary-card"><span>Productos activos</span><h3 id="connectedDashActiveProducts">0</h3></div>
+                            <div class="summary-card"><span>Valor de inventario a costo</span><h3 id="connectedDashStockValue">C$0.00</h3></div>
+                            <div class="summary-card"><span>Deuda actual por cobrar</span><h3 id="connectedDashReceivableBalance">C$0.00</h3></div>
+                            <div class="summary-card"><span>Saldo vencido por cobrar</span><h3 id="connectedDashReceivableOverdue">C$0.00</h3></div>
+                            <div class="summary-card"><span>Abonos recibidos en el período</span><h3 id="connectedDashPaymentsTotal">C$0.00</h3></div>
                         </div>
-                    </div>
-
-                    <h2 style="margin-bottom: 15px; color: #0f172a;">📊 Indicadores Clave en Tiempo Real</h2>
-                    <div class="summary-cards">
-                        <div class="summary-card" style="border-left: 4px solid #2563eb;">
-                            <span>Ventas de Hoy</span>
-                            <h3 id="dashVentasHoy" style="color: #2563eb;">C$0.00</h3>
-                        </div>
-                        <div class="summary-card" style="border-left: 4px solid #16a34a;">
-                            <span>Ventas del Mes</span>
-                            <h3 id="dashVentasMes" style="color: #16a34a;">C$0.00</h3>
-                        </div>
-                        <div class="summary-card" style="border-left: 4px solid #0284c7;">
-                            <span>Ganancia Estimada</span>
-                            <h3 id="dashGanancia" style="color: #0284c7;">C$0.00</h3>
-                        </div>
-                        <div class="summary-card" style="border-left: 4px solid #8b5cf6;">
-                            <span>Productos Vendidos</span>
-                            <h3 id="dashProdsVendidos">0 uds.</h3>
-                        </div>
-                        <div class="summary-card" style="border-left: 4px solid #d97706;">
-                            <span>Productos con bajo stock</span>
-                            <h3 id="dashBajoStock" style="color: #d97706;">0</h3>
-                        </div>
-                        <div class="summary-card" style="border-left: 4px solid #dc2626;">
-                            <span>Crédito pendiente (CxC)</span>
-                            <h3 id="dashCxC" style="color: #dc2626;">C$0.00</h3>
-                        </div>
-                        <div class="summary-card" style="border-left: 4px solid #e11d48;">
-                            <span>Cuentas por pagar (CxP)</span>
-                            <h3 id="dashCxP" style="color: #e11d48;">C$0.00</h3>
-                        </div>
-                        <div class="summary-card" style="border-left: 4px solid #64748b;">
-                            <span>Gastos Totales</span>
-                            <h3 id="dashGastos" style="color: #64748b;">C$0.00</h3>
-                        </div>
-                    </div>
-
-                    <div style="margin-top: 25px;">
-                        <h2 style="margin-bottom: 12px; color: #0f172a;">👥 Ventas por Vendedor</h2>
-                        <div class="history-table-container">
-                            <table class="history-table">
-                                <thead>
-                                    <tr>
-                                        <th>Vendedor</th>
-                                        <th># Ventas Realizadas</th>
-                                        <th>Total Vendido</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="dashVendedoresBody">
-                                    <tr><td colspan="3" class="text-center">Cargando datos del equipo...</td></tr>
-                                </tbody>
-                            </table>
+                        <p class="connected-report-note">Compras, Cuentas por Pagar y gastos no se incluyen porque esos módulos todavía no están conectados a MySQL.</p>
+                        <div class="dashboard-tables-grid">
+                            <section><h2>Ventas por medio de pago</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Medio de pago</th><th>Ventas</th><th>Total</th></tr></thead><tbody id="connectedDashMethodsBody"></tbody></table></div></section>
+                            <section><h2>Ventas por vendedor</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Vendedor</th><th>Ventas realizadas</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Crédito</th><th>Total</th></tr></thead><tbody id="connectedDashSellersBody"></tbody></table></div></section>
+                            <section><h2>Productos más vendidos</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Producto</th><th>Unidades</th><th>Total vendido</th></tr></thead><tbody id="connectedDashProductsBody"></tbody></table></div></section>
+                            <section><h2>Ventas del período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Factura</th><th>Vendedor</th><th>Medio de pago</th><th>Total</th><th>Estado</th></tr></thead><tbody id="connectedDashHistoryBody"></tbody></table></div></section>
+                            <section><h2>Clientes con deuda actual</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Cliente</th><th>Deuda</th><th>Estado</th></tr></thead><tbody id="connectedDashDebtorsBody"></tbody></table></div></section>
+                            <section><h2>Abonos recibidos en el período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Cliente</th><th>Factura</th><th>Medio de pago</th><th>Estado</th><th>Monto</th></tr></thead><tbody id="connectedDashPaymentsBody"></tbody></table></div></section>
+                            <section><h2>Movimientos de efectivo del período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Dirección</th><th>Medio de pago</th><th>Estado</th><th>Monto</th></tr></thead><tbody id="connectedDashCashBody"></tbody></table></div></section>
                         </div>
                     </div>
                 </section>
@@ -827,6 +817,8 @@
     <script src="connected-sales.js"></script>
     <script src="connected-clients.js"></script>
     <script src="connected-reports.js"></script>
+    <script src="dashboard-period.js"></script>
+    <script src="connected-dashboard.js"></script>
     <script src="local-cash-flow.js"></script>
     <script src="connected-auth.js"></script>
     <script src="icons.js"></script>

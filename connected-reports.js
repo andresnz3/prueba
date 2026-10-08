@@ -143,5 +143,9 @@
       return false;
     }
   }
+  document.addEventListener('connected:report-data-changed', () => {
+    report = null;
+    if (!el('reportesView')?.classList.contains('hidden')) load();
+  });
   window.PosReports = Object.freeze({ load, render: () => render(report) });
 })();

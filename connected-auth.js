@@ -14,7 +14,7 @@
   el('adminUsernameGroup').classList.remove('hidden'); el('grantAdminUsername').disabled = false; el('grantAdminUsername').required = true;
   el('modeDescription').textContent = 'Acceso verificado. Productos e inventario en MySQL; ventas de contado y caja MySQL; crédito y compras pendientes.';
   const api = new window.PosApiClient(window.POS_API_BASE_URL);
-  const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'dashboard', configView: 'settings' };
+  const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'reports', configView: 'settings' };
   let identity = null, boundBusiness = null, activeView = null, grant = null, pendingView = null;
   let generation = 0;
   const assertGeneration = value => { if (generation !== value) throw new window.PosApiError('STALE_REQUEST'); };
@@ -81,7 +81,6 @@
     const previous = activeView; const version = generation;
     try {
       await verify();
-      if (view === 'dashboardView') { message('connectedNotice', 'Dashboard conectado pendiente. Reportes ya consulta ventas, caja, inventario y cuentas por cobrar desde MySQL; compras y gastos siguen pendientes.'); return; }
       if (previous && previous !== view && grant) { await api.leave(views[previous]); grant = null; clearTimeout(grantTimer); }
       if (view === 'usersView') {
         // /users autoriza en el servidor; un cambio visual de rol nunca habilita esta ruta.
@@ -93,6 +92,7 @@
       await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version);
       activeView = view; renderPosView(view); pendingView = null;
       if (view === 'reportesView') { await window.PosReports.load(); assertGeneration(version); }
+      if (view === 'dashboardView') { await window.PosDashboard.load(); assertGeneration(version); }
     } catch (failure) {
       if (failure.code === 'STALE_REQUEST') return;
       grant = null; clearTimeout(grantTimer);

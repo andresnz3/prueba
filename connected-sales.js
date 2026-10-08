@@ -83,6 +83,7 @@
     if (result.cash) el('cierreCajaModal').classList.add('hidden');
     if (window.PosConnected.canManageModule('cajaView')) await load('cajaView');
     if (result.cash) showAlert(result.kind === 'OPEN_CASH' ? 'Caja abierta en MySQL.' : 'Caja cerrada en MySQL.');
+    if (result.sale || result.payment || result.cash || result.order) document.dispatchEvent(new Event('connected:report-data-changed'));
   }
   const uncertain = error => error.status >= 500 || ['NETWORK_ERROR', 'INVALID_RESPONSE', 'STALE_REQUEST', 'INVALID_SESSION'].includes(error.code);
   async function perform(kind, data, action) {

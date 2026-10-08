@@ -382,6 +382,38 @@
     window.XLSX.writeFile(workbook, `${fileName}_${fileDate()}.xlsx`);
     return true;
   }
+  function exportWorkbookToXlsx(sheets, options = {}) {
+    if (typeof window.XLSX === 'undefined' || !Array.isArray(sheets) || !sheets.some(sheet => Array.isArray(sheet?.rows) && sheet.rows.length)) return false;
+    const workbook = window.XLSX.utils.book_new();
+    const names = new Set();
+    sheets.filter(sheet => Array.isArray(sheet?.rows) && sheet.rows.length).forEach((sheet, index) => {
+      const name = safeSheetName(sheet.name, index);
+      let unique = name, suffix = 2;
+      while (names.has(unique)) { const marker = ` ${suffix++}`; unique = `${name.slice(0, 31 - marker.length)}${marker}`; }
+      names.add(unique);
+      const rows = sheet.rows, worksheet = window.XLSX.utils.aoa_to_sheet(rows);
+      const columnCount = Math.max(...rows.map(row => row.length));
+      worksheet['!cols'] = Array.from({ length: columnCount }, (_, index) => {
+        const width = Math.max(...rows.map(row => String(row[index] ?? '').length));
+        return { wch: Math.min(44, Math.max(12, width + 2)) };
+      });
+      if (rows.length > 1) worksheet['!autofilter'] = { ref: `A1:${excelColumn(columnCount - 1)}${rows.length}` };
+      rows.slice(1).forEach((row, rowIndex) => row.forEach((value, columnIndex) => {
+        const moneyHeading = sheet.name === 'Resumen' && columnCount === 2 ? String(row[0] || '') : String(rows[0][columnIndex] || '');
+        const summaryMoney = sheet.name === 'Resumen' && /ventas del per[ií]odo|promedio|ganancia|gastos|compras del per[ií]odo|inventario a costo|cr[eé]dito pendiente|cuentas por pagar|abonos recibidos|efectivo/i.test(moneyHeading);
+        if ((moneyHeader.test(moneyHeading) || summaryMoney) && typeof value === 'string' && /C\$/i.test(value)) {
+          const address = `${excelColumn(columnIndex)}${rowIndex + 2}`, number = parseNumber(value);
+          if (number !== null && worksheet[address]) { worksheet[address].v = number; worksheet[address].t = 'n'; worksheet[address].z = moneyFormat; }
+        } else if (moneyHeader.test(moneyHeading) && typeof value === 'number' && worksheet[`${excelColumn(columnIndex)}${rowIndex + 2}`]) {
+          worksheet[`${excelColumn(columnIndex)}${rowIndex + 2}`].z = moneyFormat;
+        }
+      }));
+      window.XLSX.utils.book_append_sheet(workbook, worksheet, unique);
+    });
+    const fileName = String(options.fileName || 'dashboard').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'dashboard';
+    window.XLSX.writeFile(workbook, `${fileName}_${fileDate()}.xlsx`);
+    return true;
+  }
   const tableConfigs = [
     ['repVentasHistorialBody', { label: 'Historial de ventas', fileName: 'ventas_conectadas', dateColumn: 0, sumColumns: false }],
     ['repCxCPagosBody', { label: 'Abonos a cuentas por cobrar', fileName: 'abonos_cuentas_por_cobrar', dateColumn: 0 }],
@@ -416,12 +448,13 @@
     for (const [bodyId, options] of tableConfigs) {
       const body = document.getElementById(bodyId);
       if (!body) continue;
-      if (!connected && body.closest('.connected-report-only')) continue;
+      if (!connected && body.closest('.connected-report-only, .connected-dashboard-only')) continue;
+      if (connected && body.closest('.local-dashboard-only')) continue;
       if (bodyId === 'clientsTableBody') document.getElementById('connectedClientsControls')?.classList.remove('hidden');
       setupDataTable(body, options);
     }
   }
-  window.PosTables = Object.freeze({ setupDataTable, refreshDataTable, exportTableToXlsx, exportTablesToXlsx, exportDataToXlsx, setDataTableExportEnabled, dateKey });
+  window.PosTables = Object.freeze({ setupDataTable, refreshDataTable, exportTableToXlsx, exportTablesToXlsx, exportDataToXlsx, exportWorkbookToXlsx, setDataTableExportEnabled, dateKey });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupAll, { once: true });
   else setupAll();
 })();

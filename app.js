@@ -654,34 +654,93 @@ function obtenerCostoHistoricoItem(item) {
     return prod ? (prod.cost || 0) : 0;
 }
 
-function renderDashboard() {
-    const hoyStr = new Date().toLocaleDateString(); const ahora = new Date(); const mesActual = ahora.getMonth(); const anoActual = ahora.getFullYear();
-    const ventasValidas = salesHistory.filter(v => !v.anulada);
-    const ventasHoy = ventasValidas.filter(v => new Date(v.fechaTS || v.id).toLocaleDateString() === hoyStr).reduce((sum, v) => sum + (v.total || 0), 0);
-    const ventasMesValidas = ventasValidas.filter(v => { const d = new Date(v.fechaTS || v.id); return d.getMonth() === mesActual && d.getFullYear() === anoActual; });
-    const ventasMes = ventasMesValidas.reduce((sum, v) => sum + (v.total || 0), 0);
-    const totalVentasHistoricas = ventasValidas.reduce((sum, v) => sum + (v.total || 0), 0);
-    
-    let costoMercanciaTotal = 0; ventasValidas.forEach(v => { if (v.items) { v.items.forEach(i => { costoMercanciaTotal += obtenerCostoHistoricoItem(i) * (i.cantidad || 0); }); } });
-    const gananciaBrutaTotal = totalVentasHistoricas - costoMercanciaTotal; const gastosTotales = gastosHistory.filter(g => !g.anulado).reduce((sum, g) => sum + (g.monto || 0), 0); const gananciaEstimadaTotal = gananciaBrutaTotal - gastosTotales;
-    const prodsVendidosCount = ventasValidas.reduce((sum, v) => { return sum + (v.items ? v.items.reduce((s, i) => s + (i.cantidad || 0), 0) : 0); }, 0);
-    
-    const stockMinimoSys = sysConfig.minStock !== undefined ? sysConfig.minStock : 5;
-    const bajoStockCount = products.filter(p => !p.deleted && p.active !== false && (p.stock || 0) <= (p.minStock !== undefined ? p.minStock : stockMinimoSys)).length;
-    
-    const cxcTotal = clients.reduce((sum, c) => sum + (c.debt || 0), 0); const cxpTotal = suppliers.reduce((sum, s) => sum + (s.debt || 0), 0);
-
-    const setEl = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
-    setEl("dashGananciaVentas", `${sysConfig.currency}${totalVentasHistoricas.toFixed(2)}`); setEl("dashGananciaCosto", `${sysConfig.currency}${costoMercanciaTotal.toFixed(2)}`); setEl("dashGananciaBruta", `${sysConfig.currency}${gananciaBrutaTotal.toFixed(2)}`); setEl("dashGananciaGastos", `${sysConfig.currency}${gastosTotales.toFixed(2)}`); setEl("dashGananciaEstimada", `${sysConfig.currency}${gananciaEstimadaTotal.toFixed(2)}`);
-    setEl("dashVentasHoy", `${sysConfig.currency}${ventasHoy.toFixed(2)}`); setEl("dashVentasMes", `${sysConfig.currency}${ventasMes.toFixed(2)}`); setEl("dashGanancia", `${sysConfig.currency}${gananciaEstimadaTotal.toFixed(2)}`); setEl("dashProdsVendidos", `${prodsVendidosCount} uds.`); setEl("dashBajoStock", `${bajoStockCount}`); setEl("dashCxC", `${sysConfig.currency}${cxcTotal.toFixed(2)}`); setEl("dashCxP", `${sysConfig.currency}${cxpTotal.toFixed(2)}`); setEl("dashGastos", `${sysConfig.currency}${gastosTotales.toFixed(2)}`);
-
-    const porVendedor = {}; ventasValidas.forEach(v => { const vend = v.vendedor || 'Desconocido'; if(!porVendedor[vend]) porVendedor[vend] = { ventas: 0, total: 0 }; porVendedor[vend].ventas++; porVendedor[vend].total += (v.total || 0); });
-    const vendBody = document.getElementById("dashVendedoresBody");
-    if(vendBody) {
-        const sortedVend = Object.entries(porVendedor).sort((a,b) => b[1].total - a[1].total);
-        if(sortedVend.length === 0) { vendBody.innerHTML = `<tr><td colspan="3" class="text-center">Sin registros.</td></tr>`; } else { vendBody.innerHTML = sortedVend.map(([nombre, d]) => `<tr><td><strong>${escapeHtml(nombre)}</strong></td><td>${d.ventas}</td><td style="font-weight:bold; color:#16a34a;">${sysConfig.currency}${d.total.toFixed(2)}</td></tr>`).join(""); }
-    }
+function dashboardDay(value) {
+    if (value === null || value === undefined || value === "") return "";
+    const numeric = typeof value === "number" || /^\d{10,}$/.test(String(value)) ? Number(value) : null;
+    const date = numeric !== null ? new Date(numeric) : new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
+function dashboardInRange(value, range) {
+    const day = dashboardDay(value);
+    if (!day) return !range.from && !range.until;
+    return (!range.from || day >= range.from) && (!range.until || day <= range.until);
+}
+function dashboardRows(bodyId, headings, rows) {
+    const body = document.getElementById(bodyId);
+    if (!body) return;
+    body.innerHTML = rows.length ? rows.map(cells => `<tr>${cells.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${headings}" class="text-center">Sin registros en este período.</td></tr>`;
+    window.PosTables?.refreshDataTable(body);
+}
+let dashboardLocalExportSheets = null;
+function renderDashboard() {
+    const localContent = document.getElementById("dashboardLocalContent"), connectedContent = document.getElementById("dashboardConnectedContent");
+    localContent?.classList.toggle("hidden", connectedMode);
+    connectedContent?.classList.toggle("hidden", !connectedMode);
+    if (connectedMode) return;
+    const range = window.PosDashboardPeriod?.range() || { from: "", until: "" };
+    if (range.error) return;
+    const currency = sysConfig.currency || "C$", money = value => `${currency}${Number(value || 0).toFixed(2)}`;
+    const setEl = (id, val) => { const node = document.getElementById(id); if (node) node.textContent = val; };
+    const salesForPeriod = salesHistory.filter(sale => dashboardInRange(sale.fechaTS || sale.id || sale.fecha, range));
+    const sales = salesForPeriod.filter(sale => !sale.anulada);
+    const totalSales = sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+    const countSales = sales.length, ticketAverage = countSales ? totalSales / countSales : 0;
+    let cost = 0, soldUnits = 0;
+    const methodSummary = new Map(), sellerSummary = new Map(), productSummary = new Map();
+    for (const sale of sales) {
+        const seller = sale.vendedor || "Desconocido";
+        const sellerRow = sellerSummary.get(seller) || { count: 0, total: 0 };
+        sellerRow.count += 1; sellerRow.total += Number(sale.total || 0); sellerSummary.set(seller, sellerRow);
+        const method = sale.metodo === "Crédito" ? "Crédito" : ({ cash: "Efectivo", card: "Tarjeta", transfer: "Transferencia" })[obtenerMedioPagoVenta(sale)] || sale.metodo || "Otro";
+        const methodRow = methodSummary.get(method) || { count: 0, total: 0 };
+        methodRow.count += 1; methodRow.total += Number(sale.total || 0); methodSummary.set(method, methodRow);
+        for (const item of sale.items || []) {
+            const quantity = Number(item.cantidad || 0), name = item.name || "Producto";
+            cost += Number(obtenerCostoHistoricoItem(item) || 0) * quantity; soldUnits += quantity;
+            const productRow = productSummary.get(name) || { quantity: 0, total: 0 };
+            productRow.quantity += quantity; productRow.total += Number(item.total ?? ((item.precio || item.price || 0) * quantity)); productSummary.set(name, productRow);
+        }
+    }
+    const expenses = gastosHistory.filter(expense => !expense.anulado && dashboardInRange(expense.fechaTS || expense.id || expense.fecha, range));
+    const expenseTotal = expenses.reduce((sum, expense) => sum + Number(expense.monto || 0), 0);
+    const purchases = purchasesHistory.filter(purchase => !purchase.anulada && dashboardInRange(purchase.fechaTS || purchase.id || purchase.fecha, range));
+    const purchaseTotal = purchases.reduce((sum, purchase) => sum + Number(purchase.total || 0), 0);
+    const grossProfit = totalSales - cost, estimatedProfit = grossProfit - expenseTotal;
+    const stockMin = sysConfig.minStock !== undefined ? sysConfig.minStock : 5;
+    const activeProducts = products.filter(product => !product.deleted && product.active !== false);
+    const lowStock = activeProducts.filter(product => Number(product.stock || 0) <= Number(product.minStock !== undefined ? product.minStock : stockMin)).length;
+    const inventoryValue = activeProducts.reduce((sum, product) => sum + Number(product.stock || 0) * Number(product.cost || 0), 0);
+    const cxc = clients.reduce((sum, client) => sum + Number(client.debt || 0), 0), cxp = suppliers.reduce((sum, supplier) => sum + Number(supplier.debt || 0), 0);
+    const customerPayments = abonosHistory.filter(payment => payment.tipo === "cliente" && !payment.anulado && dashboardInRange(payment.fechaTS || payment.id || payment.fecha, range));
+    const paymentTotal = customerPayments.reduce((sum, payment) => sum + Number(payment.monto || 0), 0);
+    const sessions = cajaHistorial || [], movements = sessions.flatMap(session => (session.movimientos || []).filter(movement => !movement.anulado && dashboardInRange(movement.fechaTS || movement.fecha, range)).map(movement => ({ ...movement, paymentMethod: movement.metodoPago })));
+    const cashSales = sales.filter(sale => sale.metodo === "Contado" && obtenerMedioPagoVenta(sale) === "cash").reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+    const cashIn = cashSales + movements.filter(movement => movement.tipo === "entrada" && (!movement.metodoPago || movement.metodoPago === "efectivo")).reduce((sum, movement) => sum + Number(movement.monto || 0), 0);
+    const cashOut = movements.filter(movement => movement.tipo === "salida" && (!movement.metodoPago || movement.metodoPago === "efectivo")).reduce((sum, movement) => sum + Number(movement.monto || 0), 0);
+    const expectedCash = cajaActual?.estado === "abierta" ? calcularResumenCaja({ ...cajaActual, movimientos: cajaActual.movimientos || [] }).esperado : null;
+
+    setEl("dashGananciaVentas", money(totalSales)); setEl("dashGananciaCosto", money(cost)); setEl("dashGananciaBruta", money(grossProfit)); setEl("dashGananciaGastos", money(expenseTotal)); setEl("dashGananciaEstimada", money(estimatedProfit));
+    setEl("dashVentasPeriodo", money(totalSales)); setEl("dashCantidadVentas", String(countSales)); setEl("dashTicketPromedio", money(ticketAverage)); setEl("dashComprasPeriodo", money(purchaseTotal)); setEl("dashProdsVendidos", `${Number(soldUnits.toFixed(3))} uds.`); setEl("dashBajoStock", String(lowStock)); setEl("dashProductosActivos", String(activeProducts.length)); setEl("dashValorInventario", money(inventoryValue)); setEl("dashCxC", money(cxc)); setEl("dashCxP", money(cxp)); setEl("dashGastos", money(expenseTotal));
+    setEl("dashEntradasEfectivo", money(cashIn)); setEl("dashSalidasEfectivo", money(cashOut)); setEl("dashEfectivoEsperado", expectedCash === null ? "Sin caja abierta" : money(expectedCash)); setEl("dashAbonosPeriodo", money(paymentTotal));
+    dashboardRows("dashMetodosBody", 3, [...methodSummary].sort((a, b) => b[1].total - a[1].total).map(([name, value]) => [escapeHtml(name), String(value.count), money(value.total)]));
+    dashboardRows("dashVendedoresBody", 3, [...sellerSummary].sort((a, b) => b[1].total - a[1].total).map(([name, value]) => [`<strong>${escapeHtml(name)}</strong>`, String(value.count), money(value.total)]));
+    dashboardRows("dashProductosBody", 3, [...productSummary].sort((a, b) => b[1].quantity - a[1].quantity).slice(0, 15).map(([name, value]) => [escapeHtml(name), Number(value.quantity.toFixed(3)).toString(), money(value.total)]));
+    const periodLabel = window.PosDashboardPeriod?.label(range) || "Período seleccionado";
+    dashboardLocalExportSheets = [
+        { name: "Resumen", rows: [["Indicador", "Valor"], ["Período", periodLabel], ["Ventas del período", money(totalSales)], ["Ventas realizadas", countSales], ["Promedio por venta", money(ticketAverage)], ["Costo de mercancía", money(cost)], ["Ganancia bruta", money(grossProfit)], ["Gastos del período", money(expenseTotal)], ["Ganancia estimada", money(estimatedProfit)], ["Compras del período", money(purchaseTotal)], ["Unidades vendidas", Number(soldUnits.toFixed(3))], ["Productos activos", activeProducts.length], ["Productos con bajo stock", lowStock], ["Valor de inventario a costo", money(inventoryValue)], ["Crédito pendiente", money(cxc)], ["Cuentas por pagar", money(cxp)], ["Abonos recibidos en el período", money(paymentTotal)], ["Entradas de efectivo del período", money(cashIn)], ["Salidas de efectivo del período", money(cashOut)], ["Efectivo esperado en caja abierta", expectedCash === null ? "Sin caja abierta" : money(expectedCash)]] },
+        { name: "Ventas por medio", rows: [["Medio de pago", "Ventas", "Total"], ...[...methodSummary].map(([name, value]) => [name, value.count, Number(value.total.toFixed(2))])] },
+        { name: "Ventas por vendedor", rows: [["Vendedor", "Ventas", "Total vendido"], ...[...sellerSummary].map(([name, value]) => [name, value.count, Number(value.total.toFixed(2))])] },
+        { name: "Productos vendidos", rows: [["Producto", "Unidades", "Total vendido"], ...[...productSummary].map(([name, value]) => [name, Number(value.quantity.toFixed(3)), Number(value.total.toFixed(2))])] },
+        { name: "Ventas del período", rows: [["Fecha", "Factura", "Vendedor", "Medio de pago", "Total", "Estado"], ...salesForPeriod.map(sale => [sale.fecha || new Date(sale.fechaTS || sale.id).toLocaleString("es-NI"), `#${String(sale.numero || "").padStart(6, "0")}`, sale.vendedor || "Desconocido", sale.metodo === "Crédito" ? "Crédito" : ({ cash: "Efectivo", card: "Tarjeta", transfer: "Transferencia" })[obtenerMedioPagoVenta(sale)] || sale.metodo || "Otro", Number(sale.total || 0), sale.anulada ? "Anulada" : "Completada"])] },
+        { name: "Compras del período", rows: [["Fecha", "Factura", "Proveedor", "Tipo", "Total"], ...purchases.map(purchase => [purchase.fecha || "", purchase.factura || "", purchase.proveedor || "", purchase.tipo || "", Number(purchase.total || 0)])] },
+        { name: "Inventario actual", rows: [["Producto", "Unidades", "Costo unitario", "Valor a costo"], ...activeProducts.map(product => [product.name || "", Number(product.stock || 0), Number(product.cost || 0), Number((Number(product.stock || 0) * Number(product.cost || 0)).toFixed(2))])] },
+        { name: "Cuentas por cobrar", rows: [["Cliente", "Saldo actual"], ...clients.filter(client => Number(client.debt || 0) > 0).map(client => [client.name || "", Number(client.debt || 0)])] },
+        { name: "Cuentas por pagar", rows: [["Proveedor", "Saldo actual"], ...suppliers.filter(supplier => Number(supplier.debt || 0) > 0).map(supplier => [supplier.name || "", Number(supplier.debt || 0)])] },
+        { name: "Abonos del período", rows: [["Fecha", "Tipo", "Cliente o proveedor", "Factura", "Medio de pago", "Monto"], ...customerPayments.map(payment => { const related = payment.tipo === "proveedor" ? suppliers.find(supplier => String(supplier.id) === String(payment.referenciaId)) : clients.find(client => String(client.id) === String(payment.referenciaId)); return [payment.fecha || new Date(payment.fechaTS || payment.id).toLocaleString("es-NI"), payment.tipo === "proveedor" ? "Proveedor" : "Cliente", related?.name || "", payment.facturaId ? salesHistory.find(sale => String(sale.id) === String(payment.facturaId))?.numero || "" : "", payment.metodoPago || "", Number(payment.monto || 0)]; })] },
+        { name: "Movimientos de caja", rows: [["Fecha", "Tipo", "Concepto", "Monto"], ...movements.map(movement => [movement.fecha || new Date(movement.fechaTS).toLocaleString("es-NI"), movement.tipo, movement.concepto || "", Number(movement.monto || 0)])] }
+    ];
+}
+document.addEventListener("dashboard:period-changed", () => { if (!connectedMode && !document.getElementById("dashboardView")?.classList.contains("hidden")) renderDashboard(); });
 
 document.getElementsByName("buyerType").forEach(radio => { radio.addEventListener("change", (e) => { buyerType = e.target.value; const applied = document.getElementById("appliedRate"); if(applied) applied.textContent = buyerType === "retail" ? "Menudeo" : "Mayoreo"; actualizarCarrito(); actualizarCatalogo(); }); });
 function refrescarSelectClientesCredito(seleccionarId) {
@@ -2426,27 +2485,11 @@ window.exportarExcelReporte = function(containerId, nombreArchivo) {
     return true;
 };
 
-// FUNCIÓN DE EXPORTACIÓN A EXCEL DEL DASHBOARD FALTANTE (BUG 3)
 window.generarExcelDashboard = function() {
     if (!window.XLSX) { showAlert("No se pudo cargar la librería de Excel. Verifica la conexión e inténtalo de nuevo."); return; }
-    
-    let wb = window.XLSX.utils.book_new();
-    let ws_data = [
-        ["Métrica", "Valor"],
-        ["Ventas Hoy", document.getElementById("dashVentasHoy")?.textContent || "0"],
-        ["Ventas Mes", document.getElementById("dashVentasMes")?.textContent || "0"],
-        ["Ganancia Estimada", document.getElementById("dashGanancia")?.textContent || "0"],
-        ["Productos Vendidos", document.getElementById("dashProdsVendidos")?.textContent || "0"],
-        ["Bajo Stock", document.getElementById("dashBajoStock")?.textContent || "0"],
-        ["Crédito Pendiente (CxC)", document.getElementById("dashCxC")?.textContent || "0"],
-        ["Cuentas por Pagar (CxP)", document.getElementById("dashCxP")?.textContent || "0"],
-        ["Gastos Totales", document.getElementById("dashGastos")?.textContent || "0"]
-    ];
-    
-    if (window.PosTables?.exportDataToXlsx(ws_data, { fileName: "dashboard", sheetName: "Resumen" })) return;
-    let ws = window.XLSX.utils.aoa_to_sheet(ws_data);
-    window.XLSX.utils.book_append_sheet(wb, ws, "Resumen Dashboard");
-    window.XLSX.writeFile(wb, `dashboard_${tableDate(Date.now())}.xlsx`);
+    const sheets = connectedMode ? window.PosDashboard?.exportSheets() : dashboardLocalExportSheets;
+    if (!sheets) { showAlert("Espera a que termine de cargar el Dashboard para exportar sus datos."); return; }
+    if (!window.PosTables?.exportWorkbookToXlsx(sheets, { fileName: connectedMode ? "dashboard_conectado" : "dashboard_local" })) showAlert("No se pudo preparar el archivo de Excel.");
 };
 // Puente de estado del POS: no concede permisos en la API.
 window.PosRuntime = Object.freeze({

@@ -191,7 +191,8 @@
       const queryString = query.toString();
       const value = await this.#request('/reports/connected' + (queryString ? '?' + queryString : ''));
       const report = value?.report;
-      if (report?.businessId !== this.#identity?.businessId || !report.sales || !report.cash || !report.inventory || !report.receivables || !Array.isArray(report.sales.history) || !Array.isArray(report.sales.paymentMethods) || !Array.isArray(report.sales.sellers) || !Array.isArray(report.sales.topProducts) || !Array.isArray(report.cash.closures) || !Array.isArray(report.cash.movements) || !Array.isArray(report.inventory.products) || !Array.isArray(report.receivables.clients) || !Array.isArray(report.receivables.payments)) throw new ApiError('INVALID_RESPONSE');
+      const moneyValue = candidate => typeof candidate === 'string' && /^-?\d{1,10}\.\d{2}$/.test(candidate);
+      if (report?.businessId !== this.#identity?.businessId || !report.sales || !report.cash || !report.inventory || !report.receivables || !moneyValue(report.sales.total) || !moneyValue(report.sales.cost) || !moneyValue(report.sales.grossProfit) || !moneyValue(report.cash.periodIn) || !moneyValue(report.cash.periodOut) || !(report.cash.currentExpected === null || moneyValue(report.cash.currentExpected)) || !Array.isArray(report.sales.history) || !Array.isArray(report.sales.paymentMethods) || !Array.isArray(report.sales.sellers) || !Array.isArray(report.sales.topProducts) || !Array.isArray(report.cash.closures) || !Array.isArray(report.cash.movements) || !Array.isArray(report.inventory.products) || !Array.isArray(report.receivables.clients) || !Array.isArray(report.receivables.payments)) throw new ApiError('INVALID_RESPONSE');
       return report;
     }
     async confirmPayment(id,data) { return this.#salesResult(await this.#write('/cash/payments/'+encodeURIComponent(id)+'/confirm','POST',data)); }

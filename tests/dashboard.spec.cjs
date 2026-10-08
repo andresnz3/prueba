@@ -1,11 +1,25 @@
+/* global localDB */
 const fs = require("node:fs/promises");
-const zlib = require("node:zlib");
 const { test, expect } = require("@playwright/test");
 const { monitorRequests } = require("./browser-diagnostics.cjs");
 
 const browserErrors = new WeakMap();
 
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript({ path: require.resolve("./dexie-search-shim.js") });
+  await page.addInitScript(() => {
+    const column = index => { let value = index + 1, result = ""; while (value) { value -= 1; result = String.fromCharCode(65 + value % 26) + result; value = Math.floor(value / 26); } return result; };
+    window.XLSX = {
+      utils: {
+        aoa_to_sheet(rows) { const sheet = { "!data": rows }; rows.forEach((row, y) => row.forEach((value, x) => { sheet[`${column(x)}${y + 1}`] = { v: value, t: typeof value === "number" ? "n" : "s" }; })); return sheet; },
+        book_new() { return { SheetNames: [], Sheets: {} }; },
+        book_append_sheet(book, sheet, name) { book.SheetNames.push(name); book.Sheets[name] = sheet; }
+      },
+      writeFile(book, filename) {
+        const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify({ book, filename })])); link.download = filename; document.body.append(link); link.click(); link.remove();
+      }
+    };
+  });
   const errors = [];
   browserErrors.set(page, errors);
   monitorRequests(page, errors);
@@ -58,7 +72,9 @@ async function crearCliente(page, name) {
   await page.locator("#clientForm button[type='submit']").click();
   const row = page.locator("#clientsTableBody tr").filter({ hasText: name });
   await expect(row).toBeVisible();
-  return (await row.locator("td").first().innerText()).split("\n")[0];
+  const option = page.locator("#creditClientSelect option").filter({ hasText: name });
+  await expect(option).toHaveCount(1);
+  return option.getAttribute("value");
 }
 
 async function crearProveedor(page, name) {
@@ -114,53 +130,9 @@ async function registrarVenta(page, barcode, method, clientId) {
   await expect(page.locator("#ticketModal")).toBeHidden();
 }
 
-async function leerEntradaZip(fileBuffer, nombreObjetivo) {
-  let endOffset = -1;
-  for (let offset = fileBuffer.length - 22; offset >= Math.max(0, fileBuffer.length - 65557); offset -= 1) {
-    if (fileBuffer.readUInt32LE(offset) === 0x06054b50) {
-      endOffset = offset;
-      break;
-    }
-  }
-  if (endOffset < 0) throw new Error("El XLSX descargado no tiene directorio ZIP.");
-
-  const entryCount = fileBuffer.readUInt16LE(endOffset + 10);
-  let directoryOffset = fileBuffer.readUInt32LE(endOffset + 16);
-  for (let entry = 0; entry < entryCount; entry += 1) {
-    if (fileBuffer.readUInt32LE(directoryOffset) !== 0x02014b50) {
-      throw new Error("El XLSX descargado tiene un directorio ZIP inválido.");
-    }
-    const method = fileBuffer.readUInt16LE(directoryOffset + 10);
-    const compressedSize = fileBuffer.readUInt32LE(directoryOffset + 20);
-    const nameLength = fileBuffer.readUInt16LE(directoryOffset + 28);
-    const extraLength = fileBuffer.readUInt16LE(directoryOffset + 30);
-    const commentLength = fileBuffer.readUInt16LE(directoryOffset + 32);
-    const name = fileBuffer.toString("utf8", directoryOffset + 46, directoryOffset + 46 + nameLength);
-    const localOffset = fileBuffer.readUInt32LE(directoryOffset + 42);
-    if (name === nombreObjetivo) {
-      const localNameLength = fileBuffer.readUInt16LE(localOffset + 26);
-      const localExtraLength = fileBuffer.readUInt16LE(localOffset + 28);
-      const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
-      const compressed = fileBuffer.subarray(dataOffset, dataOffset + compressedSize);
-      if (method === 0) return compressed.toString("utf8");
-      if (method === 8) return zlib.inflateRawSync(compressed).toString("utf8");
-      throw new Error(`Método de compresión XLSX no soportado: ${method}`);
-    }
-    directoryOffset += 46 + nameLength + extraLength + commentLength;
-  }
-  throw new Error(`No se encontró una entrada XLSX: ${nombreObjetivo}`);
-}
-
 async function contenidoExportado(download) {
-  const workbook = await fs.readFile(await download.path());
-  const sheet = await leerEntradaZip(workbook, "xl/worksheets/sheet1.xml");
-  let sharedStrings = "";
-  try {
-    sharedStrings = await leerEntradaZip(workbook, "xl/sharedStrings.xml");
-  } catch (error) {
-    if (!error.message.startsWith("No se encontró una entrada XLSX:")) throw error;
-  }
-  return `${sheet}\n${sharedStrings}`;
+  const workbook = JSON.parse(await fs.readFile(await download.path(), "utf8"));
+  return { book: workbook.book, text: JSON.stringify(workbook.book) };
 }
 
 test("Dashboard de gestor carga sus indicadores y resumen vacíos", async ({ page }) => {
@@ -173,9 +145,9 @@ test("Dashboard de gestor carga sus indicadores y resumen vacíos", async ({ pag
     ["dashGananciaBruta", "C$0.00"],
     ["dashGananciaGastos", "C$0.00"],
     ["dashGananciaEstimada", "C$0.00"],
-    ["dashVentasHoy", "C$0.00"],
-    ["dashVentasMes", "C$0.00"],
-    ["dashGanancia", "C$0.00"],
+    ["dashVentasPeriodo", "C$0.00"],
+    ["dashCantidadVentas", "0"],
+    ["dashTicketPromedio", "C$0.00"],
     ["dashProdsVendidos", "0 uds."],
     ["dashBajoStock", "0"],
     ["dashCxC", "C$0.00"],
@@ -185,9 +157,45 @@ test("Dashboard de gestor carga sus indicadores y resumen vacíos", async ({ pag
     await expect(page.locator(`#${id}`)).toHaveText(value);
   }
   await expect(page.locator("#dashVendedoresBody tr")).toHaveCount(1);
-  await expect(page.locator("#dashVendedoresBody")).toContainText("Sin registros.");
-  await expect(page.locator("#dashboardView input, #dashboardView select")).toHaveCount(0);
+  await expect(page.locator("#dashVendedoresBody")).toContainText("Sin registros en este período.");
+  await expect(page.locator("#dashboardView input[type='date']")).toHaveCount(2);
   await expect(page.locator('#dashboardView button[onclick="window.generarExcelDashboard()"]')).toBeVisible();
+});
+
+test("Dashboard filtra por Hoy, Todo y un rango personalizado, también en móvil", async ({ page }) => {
+  await iniciarSesion(page);
+  await abrirCaja(page);
+  const barcode = "DASH-PERIOD-001";
+  await crearProducto(page, barcode, "Producto período Dashboard", 5, 1);
+  await registrarVenta(page, barcode, "card");
+  await page.evaluate(async () => {
+    const sale = (await localDB.sales.toArray())[0];
+    sale.fechaTS = new Date(2000, 0, 2).getTime(); sale.fecha = "02/01/2000";
+    await localDB.sales.put(sale);
+  });
+  await page.reload();
+  await iniciarSesion(page);
+  await abrirDashboard(page);
+  await expect(page.locator("#dashVentasPeriodo")).toHaveText("C$0.00");
+
+  await page.locator('[data-dashboard-preset="all"]').click();
+  await expect(page.locator('[data-dashboard-preset="all"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#dashVentasPeriodo")).toHaveText("C$15.25");
+  await page.locator('[data-dashboard-preset="today"]').click();
+  await expect(page.locator("#dashVentasPeriodo")).toHaveText("C$0.00");
+
+  await page.locator("#dashboardFromInput").fill("2000-01-02");
+  await page.locator("#dashboardUntilInput").fill("2000-01-02");
+  await page.locator("#dashboardApplyBtn").click();
+  await expect(page.locator("#dashVentasPeriodo")).toHaveText("C$15.25");
+  await expect(page.locator("#dashboardPeriodLabel")).toContainText("02/01/2000");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const panel = await page.locator(".dashboard-period-panel").boundingBox();
+  expect(panel.x).toBeGreaterThanOrEqual(0);
+  expect(panel.x + panel.width).toBeLessThanOrEqual(391);
+  await expect(page.locator("#dashboardApplyBtn")).toBeInViewport();
+  await expect(page.locator('[data-dashboard-preset="today"]')).toBeInViewport();
 });
 
 test("Dashboard refleja ventas, crédito, abonos, compras, gastos, stock y anulaciones", async ({ page }) => {
@@ -212,8 +220,9 @@ test("Dashboard refleja ventas, crédito, abonos, compras, gastos, stock y anula
 
   await registrarVenta(page, barcode, "cash");
   await abrirDashboard(page);
-  await expect(page.locator("#dashVentasHoy")).toHaveText("C$15.25");
-  await expect(page.locator("#dashVentasMes")).toHaveText("C$15.25");
+  await expect(page.locator("#dashVentasPeriodo")).toHaveText("C$15.25");
+  await expect(page.locator("#dashCantidadVentas")).toHaveText("1");
+  await expect(page.locator("#dashTicketPromedio")).toHaveText("C$15.25");
   await expect(page.locator("#dashGananciaVentas")).toHaveText("C$15.25");
   await expect(page.locator("#dashGananciaCosto")).toHaveText("C$10.25");
   await expect(page.locator("#dashGananciaBruta")).toHaveText("C$5.00");
@@ -226,12 +235,13 @@ test("Dashboard refleja ventas, crédito, abonos, compras, gastos, stock y anula
   const depletedProduct = page.locator("#inventoryTableBody tr").filter({ hasText: barcode });
   await expect(depletedProduct).toContainText("0 (Agotado)");
   await abrirDashboard(page);
-  await expect(page.locator("#dashVentasHoy")).toHaveText("C$30.50");
-  await expect(page.locator("#dashVentasMes")).toHaveText("C$30.50");
+  await expect(page.locator("#dashVentasPeriodo")).toHaveText("C$30.50");
+  await expect(page.locator("#dashCantidadVentas")).toHaveText("2");
+  await expect(page.locator("#dashTicketPromedio")).toHaveText("C$15.25");
   await expect(page.locator("#dashGananciaVentas")).toHaveText("C$30.50");
   await expect(page.locator("#dashGananciaCosto")).toHaveText("C$20.50");
   await expect(page.locator("#dashGananciaBruta")).toHaveText("C$10.00");
-  await expect(page.locator("#dashGanancia")).toHaveText("C$10.00");
+  await expect(page.locator("#dashGananciaEstimada")).toHaveText("C$10.00");
   await expect(page.locator("#dashProdsVendidos")).toHaveText("2 uds.");
   await expect(page.locator("#dashBajoStock")).toHaveText("1");
   await expect(page.locator("#dashCxC")).toHaveText("C$15.25");
@@ -292,14 +302,13 @@ test("Dashboard refleja ventas, crédito, abonos, compras, gastos, stock y anula
   await cerrarAlerta(page);
 
   await abrirDashboard(page);
-  await expect(page.locator("#dashVentasHoy")).toHaveText("C$15.25");
-  await expect(page.locator("#dashVentasMes")).toHaveText("C$15.25");
+  await expect(page.locator("#dashVentasPeriodo")).toHaveText("C$15.25");
+  await expect(page.locator("#dashCantidadVentas")).toHaveText("1");
   await expect(page.locator("#dashGananciaVentas")).toHaveText("C$15.25");
   await expect(page.locator("#dashGananciaCosto")).toHaveText("C$10.25");
   await expect(page.locator("#dashGananciaBruta")).toHaveText("C$5.00");
   await expect(page.locator("#dashGananciaGastos")).toHaveText("C$2.35");
   await expect(page.locator("#dashGananciaEstimada")).toHaveText("C$2.65");
-  await expect(page.locator("#dashGanancia")).toHaveText("C$2.65");
   await expect(page.locator("#dashProdsVendidos")).toHaveText("1 uds.");
   await expect(page.locator("#dashBajoStock")).toHaveText("1");
   await expect(page.locator("#dashCxC")).toHaveText("C$10.00");
@@ -315,21 +324,26 @@ test("Dashboard refleja ventas, crédito, abonos, compras, gastos, stock y anula
     page.waitForEvent("download"),
     page.locator('#dashboardView button[onclick="window.generarExcelDashboard()"]').click()
   ]);
-  expect(download.suggestedFilename()).toMatch(/^dashboard_.*\.xlsx$/);
-  const exported = await contenidoExportado(download);
+  expect(download.suggestedFilename()).toMatch(/^dashboard_local_\d{4}-\d{2}-\d{2}\.xlsx$/);
+  const { book, text: exported } = await contenidoExportado(download);
+  expect(book.SheetNames).toContain("Resumen");
+  expect(book.Sheets.Resumen["!autofilter"]).toBeTruthy();
+  expect(book.Sheets.Resumen["!cols"]).toHaveLength(2);
+  expect(book.Sheets.Resumen.B3.z).toContain("C$");
+  expect(book.SheetNames).toContain("Ventas del período");
   for (const value of [
-    "Ventas Hoy",
+    "Ventas del período",
     "15.25",
-    "Ventas Mes",
-    "Ganancia Estimada",
+    "Ventas realizadas",
+    "Ganancia estimada",
     "2.65",
-    "1 uds.",
-    "Bajo Stock",
-    "Crédito Pendiente (CxC)",
+    "Unidades vendidas",
+    "Productos con bajo stock",
+    "Crédito pendiente",
     "10",
-    "Cuentas por Pagar (CxP)",
+    "Cuentas por pagar",
     "5",
-    "Gastos Totales",
+    "Gastos del período",
     "2.35"
   ]) {
     expect(exported).toContain(value);
@@ -364,8 +378,8 @@ test("Dashboard agrega muchos movimientos sin duplicarlos y refleja stock cero",
   await expect(productRow).toContainText("0 (Agotado)");
 
   await abrirDashboard(page);
-  await expect(page.locator("#dashVentasHoy")).toHaveText("C$152.50");
-  await expect(page.locator("#dashVentasMes")).toHaveText("C$152.50");
+  await expect(page.locator("#dashVentasPeriodo")).toHaveText("C$152.50");
+  await expect(page.locator("#dashCantidadVentas")).toHaveText("10");
   await expect(page.locator("#dashGananciaVentas")).toHaveText("C$152.50");
   await expect(page.locator("#dashGananciaCosto")).toHaveText("C$102.50");
   await expect(page.locator("#dashGananciaBruta")).toHaveText("C$50.00");
@@ -380,7 +394,8 @@ test("Dashboard agrega muchos movimientos sin duplicarlos y refleja stock cero",
   await page.reload();
   await iniciarSesion(page);
   await abrirDashboard(page);
-  await expect(page.locator("#dashVentasHoy")).toHaveText("C$152.50");
+  await expect(page.locator("#dashVentasPeriodo")).toHaveText("C$152.50");
+  await expect(page.locator("#dashCantidadVentas")).toHaveText("10");
   await expect(page.locator("#dashProdsVendidos")).toHaveText("10 uds.");
   await expect(page.locator("#dashVendedoresBody tr")).toHaveCount(1);
 });

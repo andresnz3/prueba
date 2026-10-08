@@ -117,7 +117,7 @@ test('los botones muestran Exportar Excel y usan estilo verde consistente', asyn
   expect(tableStyle).toEqual({ background: 'rgb(22, 101, 52)', color: 'rgb(255, 255, 255)' });
 
   const exportButtons = page.locator('button.report-export-button, #dashboardView button.btn-export-excel');
-  await expect(exportButtons).toHaveText(['Exportar Excel de Ventas', 'Exportar Excel de Vendedores', 'Exportar Excel']);
+  await expect(exportButtons).toHaveText(['Exportar Excel de Ventas', 'Exportar Excel de Vendedores', 'Exportar Excel del Dashboard']);
   await expect(exportButtons).toHaveClass([/btn-export-excel/, /btn-export-excel/, /btn-export-excel/]);
   const exportStyles = await exportButtons.evaluateAll(buttons => buttons.map(button => ({ background: getComputedStyle(button).backgroundColor, color: getComputedStyle(button).color })));
   expect(exportStyles).toEqual(Array(3).fill({ background: 'rgb(22, 101, 52)', color: 'rgb(255, 255, 255)' }));

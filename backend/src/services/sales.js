@@ -118,7 +118,8 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
     await repo.rows(db, "UPDATE document_sequences SET current_number = ? WHERE business_id = ? AND document_type = 'SALE'", [number.toString(), current.business_id]);
     const change = data.paymentMethod === 'CASH' ? fixed(units(data.cashReceived) - units(calc.total), 2) : null;
     const paymentStatus = isCredit ? 'NOT_APPLICABLE' : data.paymentMethod === 'CASH' ? 'CONFIRMED' : units(calc.total) > 0n ? 'PENDING' : 'NOT_APPLICABLE';
-    const result = await repo.rows(db, "INSERT INTO sales (business_id, user_id, cashier_user_id, client_id, cash_session_id, invoice_number, sale_type, payment_method, subtotal, discount, discount_percent, tax, total, cash_status, sale_price_type, detail, cash_received, change_amount, due_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [current.business_id, sellerId, current.user_id, isCredit ? String(credit.client.id) : null, String(cash.id), invoice, isCredit ? 'CREDIT' : 'CASH', data.paymentMethod, calc.subtotal, calc.discount, data.discountPercent, calc.tax, calc.total, paymentStatus, data.priceType, data.detail, data.cashReceived, change, dueAt]);
+    // Reports compare UTC range boundaries against DATETIME columns; do not inherit the MySQL session timezone.
+    const result = await repo.rows(db, "INSERT INTO sales (business_id, user_id, cashier_user_id, client_id, cash_session_id, invoice_number, sale_type, payment_method, subtotal, discount, discount_percent, tax, total, cash_status, sale_price_type, detail, cash_received, change_amount, due_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))", [current.business_id, sellerId, current.user_id, isCredit ? String(credit.client.id) : null, String(cash.id), invoice, isCredit ? 'CREDIT' : 'CASH', data.paymentMethod, calc.subtotal, calc.discount, data.discountPercent, calc.tax, calc.total, paymentStatus, data.priceType, data.detail, data.cashReceived, change, dueAt]);
     const id = String(result.insertId);
     for (const line of calc.lines) {
       await repo.rows(db, 'INSERT INTO sale_items (business_id, sale_id, product_id, product_name, barcode, quantity, unit_price, tax_rate, discount, subtotal, total, cost_at_sale) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [current.business_id, id, line.productId, line.product.name, line.product.barcode, line.quantity, line.unitPrice, line.product.tax_rate, line.discount, line.subtotal, line.total, line.product.cost]);
@@ -127,7 +128,7 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
     if (!isCredit && units(calc.total) > 0n) {
       const movementStatus = data.paymentMethod === 'CASH' ? 'CONFIRMED' : 'PENDING';
       const methodLabel = data.paymentMethod === 'CASH' ? 'Efectivo confirmado' : (data.paymentMethod === 'CARD' ? 'Tarjeta pendiente' : 'Transferencia pendiente');
-      await repo.rows(db, "INSERT INTO cash_movements (business_id, cash_session_id, user_id, type, direction, amount, sale_id, reference_type, reference_id, description, status) VALUES (?, ?, ?, 'SALE', 'IN', ?, ?, 'sales', ?, ?, ?)", [current.business_id, String(cash.id), current.user_id, calc.total, id, id, 'Venta #' + invoice + ' \u00b7 ' + methodLabel, movementStatus]);
+      await repo.rows(db, "INSERT INTO cash_movements (business_id, cash_session_id, user_id, type, direction, amount, sale_id, reference_type, reference_id, description, status, created_at) VALUES (?, ?, ?, 'SALE', 'IN', ?, ?, 'sales', ?, ?, ?, UTC_TIMESTAMP(3))", [current.business_id, String(cash.id), current.user_id, calc.total, id, id, 'Venta #' + invoice + ' \u00b7 ' + methodLabel, movementStatus]);
     }
     if (orderId) await repo.rows(db, "UPDATE sale_orders SET status = 'COMPLETED', sale_id = ?, completed_at = UTC_TIMESTAMP(3), completed_by_user_id = ? WHERE business_id = ? AND id = ? AND status = 'PENDING'", [id, current.user_id, current.business_id, orderId]);
     await repo.audit(db, current, 'CREATE_SALE', 'sales', id, { invoice, total: calc.total, paymentMethod: data.paymentMethod, clientId: isCredit ? String(credit.client.id) : null, operationKey: data.operationKey });
@@ -144,7 +145,7 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
     if (quantity >= 1000000000000n) throw httpError(409, 'STOCK_LIMIT');
     const after = fixed(quantity, 3);
     await repo.rows(db, 'UPDATE products SET stock = ? WHERE business_id = ? AND id = ?', [after, current.business_id, String(product.id)]);
-    await repo.rows(db, 'INSERT INTO inventory_movements (business_id, product_id, user_id, type, quantity, stock_after, unit_cost, reference_type, reference_id, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [current.business_id, String(product.id), current.user_id, type, fixed(delta, 3), after, product.cost, 'sales', saleId, reason]);
+    await repo.rows(db, 'INSERT INTO inventory_movements (business_id, product_id, user_id, type, quantity, stock_after, unit_cost, reference_type, reference_id, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))', [current.business_id, String(product.id), current.user_id, type, fixed(delta, 3), after, product.cost, 'sales', saleId, reason]);
   }
   const cancel = (session, id, data) => work(session, 'history', (db, current) => once(db, current, 'CANCEL', { saleId: id, ...data }, async () => {
     const sale = await getSale(db, current, id);
@@ -168,7 +169,7 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
         const balance = await cashPublic(db, current, refundCash, false);
         if (units(balance.expectedAmount) < units(sale.total)) throw httpError(409, 'CASH_REFUND_INSUFFICIENT');
         const description = `Devolución Factura #${sale.invoiceNumber}; caja original #${sale.cashSessionId}; caja actual #${refundCash.id}; motivo: ${data.reason}`.slice(0, 500);
-        await repo.rows(db, "INSERT INTO cash_movements (business_id, cash_session_id, user_id, type, direction, amount, sale_id, reversal_of_movement_id, description) VALUES (?, ?, ?, 'REVERSAL', 'OUT', ?, ?, ?, ?)", [current.business_id, String(refundCash.id), current.user_id, sale.total, id, String(movement.id), description]);
+        await repo.rows(db, "INSERT INTO cash_movements (business_id, cash_session_id, user_id, type, direction, amount, sale_id, reversal_of_movement_id, description, created_at) VALUES (?, ?, ?, 'REVERSAL', 'OUT', ?, ?, ?, ?, UTC_TIMESTAMP(3))", [current.business_id, String(refundCash.id), current.user_id, sale.total, id, String(movement.id), description]);
       }
     }
     if (sale.cashStatus === 'PENDING') {
