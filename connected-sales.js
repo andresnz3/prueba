@@ -126,6 +126,23 @@
     const input = state();
     return { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, paymentMethod: input.paymentMethod, clientId: input.clientId };
   }
+  function renderCheckoutItems(items) {
+    const container = el('connectedCheckoutItems'); container.replaceChildren();
+    for (const item of items) {
+      const row = document.createElement('p'), description = document.createElement('span'), amount = document.createElement('strong');
+      row.className = 'checkout-item'; row.setAttribute('role', 'listitem');
+      description.textContent = item.name + ' × ' + Number(item.quantity); amount.textContent = 'C$' + item.total;
+      row.append(description, amount); container.append(row);
+    }
+  }
+  function updateCashChangePreview() {
+    const preview = el('connectedCashChangePreview'), input = el('connectedCashReceived');
+    if (!preview || !input) return;
+    const received = Number(input.value), total = Number(quote?.total);
+    if (quote?.paymentMethod !== 'CASH' || !input.value || !Number.isFinite(received) || received < total) { preview.classList.add('hidden'); return; }
+    el('connectedCashChangeAmount').textContent = 'C$' + Math.max(0, received - total).toFixed(2);
+    preview.classList.remove('hidden');
+  }
   async function checkout() {
     if (busy) return;
     if (pending()) { showPending(); showAlert('Comprueba la operación pendiente antes de cobrar nuevamente.'); return; }
@@ -142,17 +159,18 @@
       quoteInput = cartData(); quote = await api(client => client.quoteSale(quoteInput));
       el('connectedCheckoutTotal').textContent = 'C$' + quote.total;
       const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : quote.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Crédito';
+      el('connectedCheckoutPaymentMethod').textContent = method;
       el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · No genera movimiento de efectivo.' : method + ' · Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
-      el('connectedCheckoutItems').replaceChildren();
-      for (const item of quote.items) { const row = document.createElement('p'); row.textContent = item.name + ' × ' + Number(item.quantity) + ' — C$' + item.total; el('connectedCheckoutItems').append(row); }
+      renderCheckoutItems(quote.items);
+
       el('connectedOrderMethodGroup').classList.add('hidden'); el('connectedPriceChangeMessage').classList.add('hidden');
-      el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; window.PosValidation.clear(el('connectedCheckoutModal'));
+      el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; updateCashChangePreview(); window.PosValidation.clear(el('connectedCheckoutModal'));
       if (quote.paymentMethod === 'CARD' || quote.paymentMethod === 'TRANSFER') {
         const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: null, detail: input.detail };
         busy = false; await perform('SALE', data, (client, saleInput) => client.createSale(saleInput)); return;
       }
-      el('connectedCheckoutTitle').textContent = quote.paymentMethod === 'CREDIT' ? 'Confirmar venta a crédito' : 'Cobrar venta en efectivo';
-      el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : 'Confirmar venta';
+      el('connectedCheckoutTitle').textContent = quote.paymentMethod === 'CREDIT' ? 'Confirmar venta a crédito' : 'Cobro en Efectivo';
+      el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : 'Cobrar';
       el('connectedCheckoutModal').classList.remove('hidden');
       (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus();
     } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
@@ -199,16 +217,17 @@
     try {
       quote = await api(client => client.quoteOrder(activeOrderId, el('connectedOrderPaymentMethod').value));
       el('connectedCheckoutTitle').textContent = 'Cobrar orden #' + activeOrderId;
-      el('connectedCheckoutItems').replaceChildren();
-      for (const item of quote.items) { const row = document.createElement('p'); row.textContent = item.name + ' × ' + Number(item.quantity) + ' — C$' + item.total; el('connectedCheckoutItems').append(row); }
+      renderCheckoutItems(quote.items);
+
       el('connectedCheckoutTotal').textContent = 'C$' + quote.total;
       const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : quote.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Crédito';
+      el('connectedCheckoutPaymentMethod').textContent = method;
       el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · Sin ingreso de efectivo.' : method + ' · Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
       const difference = Number(quote.priceDelta), priceMessage = el('connectedPriceChangeMessage');
       priceMessage.textContent = quote.priceChanged ? 'El precio cambió desde que se preparó la orden: estimado C$' + quote.estimatedTotal + '; precio vigente C$' + quote.total + ' (' + (difference > 0 ? '+' : '') + 'C$' + quote.priceDelta + '). Confirma este precio vigente para continuar.' : 'Precio vigente comprobado. Total estimado al preparar: C$' + quote.estimatedTotal + '.';
       priceMessage.classList.remove('hidden'); el('connectedOrderMethodGroup').classList.remove('hidden');
-      el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; window.PosValidation.clear(el('connectedCheckoutModal'));
-      el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : quote.priceChanged ? 'Confirmar precio y cobrar' : 'Confirmar y cobrar orden';
+      el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; updateCashChangePreview(); window.PosValidation.clear(el('connectedCheckoutModal'));
+      el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : quote.paymentMethod === 'CASH' ? quote.priceChanged ? 'Confirmar precio y cobrar' : 'Cobrar orden' : quote.priceChanged ? 'Confirmar precio y continuar' : 'Confirmar orden';
       el('connectedCheckoutModal').classList.remove('hidden'); refreshed = true;
     } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { busy = false; el('confirmConnectedSaleBtn').disabled = false; if (refreshed) (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus(); }
@@ -341,6 +360,7 @@
   el('currentSaleNumber').textContent = '—';
   el('confirmConnectedSaleBtn').addEventListener('click', confirm); el('recoverSaleBtn').addEventListener('click', recover);
   el('connectedOrderPaymentMethod').addEventListener('change', refreshOrderQuote);
+  el('connectedCashReceived').addEventListener('input', updateCashChangePreview);
   el('connectedCheckoutModal').querySelector('.close-modal-btn').addEventListener('click', () => { activeOrderId = null; quote = quoteInput = null; });
   const handleOperationAction = event => {
     const button = event.target.closest('button[data-action]'); if (!button) return;

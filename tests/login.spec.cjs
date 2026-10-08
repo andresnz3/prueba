@@ -18,6 +18,27 @@ test("la pantalla de login carga correctamente", async ({ page }) => {
   await expect(page.locator("#loginScreen")).toBeVisible();
 });
 
+test("el ojito alterna la contraseña con teclado y conserva el login local en móvil", async ({ page }) => {
+  await page.addInitScript({ path: require.resolve("./dexie-search-shim.js") });
+  await page.route("http://127.0.0.1:5500/**", async route => { const response = await route.fetch(); const html = (await response.text()).replace(/\s+integrity="[^"]*"/g, ""); await route.fulfill({ response, body: html }); });
+  await page.route("https://**/*", route => route.fulfill({ status: 200, contentType: route.request().url().includes("fonts.googleapis.com") ? "text/css" : "application/javascript", body: "" }));
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/?mode=local");
+  const password = page.locator("#loginPassword"), toggle = page.locator("#toggleLoginPasswordBtn");
+  await expect(password).toHaveAttribute("type", "password");
+  await expect(toggle).toBeVisible();
+  await toggle.focus();
+  await toggle.press("Enter");
+  await expect(password).toHaveAttribute("type", "text");
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await toggle.press("Enter");
+  await expect(password).toHaveAttribute("type", "password");
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await password.fill("4321");
+  await page.locator("#loginUsername").fill("andres");
+  await page.locator("#loginForm button[type='submit']").click();
+  await expect(page.locator("#app")).toBeVisible();
+});
 test("login correcto permite entrar al sistema", async ({ page }) => {
   await page.goto("/");
 
@@ -2796,6 +2817,24 @@ async function venderProductoDesdeUI(page, barcode) {
   await page.locator("#processSaleBtn").click();
 }
 
+test("cobro local mantiene efectivo y muestra el cambio antes de confirmar", async ({ page }) => {
+  await page.addInitScript({ path: require.resolve("./dexie-search-shim.js") });
+  await page.route("http://127.0.0.1:5500/**", async route => { const response = await route.fetch(); const html = (await response.text()).replace(/\s+integrity="[^"]*"/g, ""); await route.fulfill({ response, body: html }); });
+  await page.route("https://**/*", route => route.fulfill({ status: 200, contentType: route.request().url().includes("fonts.googleapis.com") ? "text/css" : "application/javascript", body: "" }));
+  await iniciarSesion(page);
+  const barcode = "LOCAL-CHECKOUT-" + Date.now();
+  await crearProductoParaCaja(page, barcode, "Producto de cobro local");
+  await abrirCajaDesdeUI(page, "50");
+  await venderProductoDesdeUI(page, barcode);
+  await expect(page.locator("#cashModal h2")).toHaveText("Cobro en Efectivo");
+  await page.locator("#cashReceivedInput").fill("20");
+  await expect(page.locator("#localCashChangeAmount")).toHaveText("C$5.00");
+  await page.locator("#confirmCashBtn").click();
+  await expect(page.locator("#ticketModal")).toBeVisible();
+  await expect(page.locator("#ticketContent")).toContainText("C$5.00");
+});
+
+
 const cajaConsoleErrors = new WeakMap();
 
 test.describe("CAJA:", () => {
@@ -3488,7 +3527,11 @@ test.describe("CAJA:", () => {
 
     await abrirCajaDesdeUI(page, "50.00");
     await venderProductoDesdeUI(page, "CAJA-SALES-001");
+    await expect(page.locator("#cashModal h2")).toHaveText("Cobro en Efectivo");
+    await expect(page.locator("#localCashChangePreview")).toBeHidden();
     await page.locator("#cashReceivedInput").fill("20");
+    await expect(page.locator("#localCashChangePreview")).toBeVisible();
+    await expect(page.locator("#localCashChangeAmount")).toHaveText("C$5.00");
     await page.locator("#confirmCashBtn").click();
     await expect(page.locator("#ticketModal")).toBeVisible();
     await page.locator("#newSaleBtn").click();

@@ -27,8 +27,8 @@ async function login(page) {
       }
     };
   });
-  await page.goto('/?mode=connected'); await expect(page.locator('#loginForm button')).toBeEnabled();
-  await page.locator('#loginBusinessId').fill(business); await page.locator('#loginUsername').fill('browseradmin'); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button').click();
+  await page.goto('/?mode=connected'); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
+  await page.locator('#loginBusinessId').fill(business); await page.locator('#loginUsername').fill('browseradmin'); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button[type=submit]').click();
   await expect(page.locator('#app')).toBeVisible();
 }
 

@@ -6,8 +6,8 @@ const errors = new WeakMap();
 test.beforeEach(async ({page,context})=>{await context.addInitScript({path:require.resolve('../tests/dexie-search-shim.js')});const list=[];errors.set(page,list);page.on('pageerror',error=>list.push(error.message));});
 test.afterEach(async ({page})=>{expect(errors.get(page)).toEqual([]);});
 async function login(page,username='browseradmin') {
-  await page.goto('/?mode=connected');await expect(page.locator('#loginForm button')).toBeEnabled();
-  await page.locator('#loginBusinessId').fill(business);await page.locator('#loginUsername').fill(username);await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button').click();await expect(page.locator('#app')).toBeVisible();await expect(page.locator('#app')).toHaveJSProperty('inert',false);
+  await page.goto('/?mode=connected');await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
+  await page.locator('#loginBusinessId').fill(business);await page.locator('#loginUsername').fill(username);await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button[type=submit]').click();await expect(page.locator('#app')).toBeVisible();await expect(page.locator('#app')).toHaveJSProperty('inert',false);
 }
 async function call(page,method,...args) {
   return page.evaluate(async({method,args})=>{const client=new window.PosApiClient(window.POS_API_BASE_URL);await client.me();return client[method](...args);},{method,args});
@@ -25,9 +25,9 @@ async function checkout(page) {await page.locator('#processSaleBtn').click();awa
 async function confirm(page,value='100') {await page.locator('#connectedCashReceived').fill(value);await page.locator('#confirmConnectedSaleBtn').click();}
 async function closeAlert(page) {await expect(page.locator('#customAlertModal')).toBeVisible();await page.locator('#customAlertModal .close-modal-btn').click();}
 test('login: campos vacios e identificador invalido tienen errores junto al campo y foco',async({page})=>{
-  await page.goto('/?mode=connected');await expect(page.locator('#loginForm button')).toBeEnabled();await page.locator('#loginForm button').click();
+  await page.goto('/?mode=connected');await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();await page.locator('#loginForm button[type=submit]').click();
   await expect(page.locator('#loginBusinessIdFieldError')).toHaveText('Ingresa el identificador de tu negocio');await expect(page.locator('#loginUsernameFieldError')).toHaveText('Ingresa tu nombre de usuario');await expect(page.locator('#loginPasswordFieldError')).toHaveText('Ingresa tu contraseña');await expect(page.locator('#loginBusinessId')).toBeFocused();
-  await page.locator('#loginBusinessId').fill('0');await page.locator('#loginUsername').fill('usuario');await page.locator('#loginPassword').fill('conservar');await page.locator('#loginForm button').click();await expect(page.locator('#loginBusinessIdFieldError')).toHaveText('El identificador del negocio no es válido');await expect(page.locator('#loginPassword')).toHaveValue('conservar');
+  await page.locator('#loginBusinessId').fill('0');await page.locator('#loginUsername').fill('usuario');await page.locator('#loginPassword').fill('conservar');await page.locator('#loginForm button[type=submit]').click();await expect(page.locator('#loginBusinessIdFieldError')).toHaveText('El identificador del negocio no es válido');await expect(page.locator('#loginPassword')).toHaveValue('conservar');
 });
 test('productos: validacion específica conserva campos y enfoca el primer error',async({page})=>{
   await login(page);await page.locator('#navInventoryBtn').click();await page.locator('#addNewProductBtn').click();await page.locator('#prodBarcode').fill('VALID-'+randomUUID());await page.locator('#prodCost').fill('-1');await page.locator('#prodStock').fill('-2');await page.locator('#productForm button[type=submit]').click();
@@ -36,8 +36,10 @@ test('productos: validacion específica conserva campos y enfoca el primer error
 test('venta fraccionaria, descuento, factura y stock persisten al recargar',async({page})=>{
   const {product}=await fixture(page);await add(page,product);await page.locator('#cartItems input').fill('1.125');await page.locator('#cartItems input').dispatchEvent('change');
   await page.locator('input[name=descApplies][value=si]').check();await page.locator('#descuentoPct').fill('10');await checkout(page);await expect(page.locator('#connectedCheckoutTotal')).toHaveText('C$12.46');
+  await expect(page.locator('#connectedCheckoutTitle')).toHaveText('Cobro en Efectivo');await expect(page.locator('#connectedCheckoutPaymentMethod')).toHaveText('Efectivo');await expect(page.locator('#connectedCashChangePreview')).toBeHidden();
+  await page.setViewportSize({width:390,height:844});const card=page.locator('#connectedCheckoutModal .modal-card');const box=await card.evaluate(el=>({width:el.getBoundingClientRect().width,scrollWidth:el.scrollWidth,clientWidth:el.clientWidth}));expect(box.width).toBeLessThanOrEqual(390);expect(box.scrollWidth).toBeLessThanOrEqual(box.clientWidth);await expect(page.locator('#confirmConnectedSaleBtn')).toBeVisible();await page.setViewportSize({width:1280,height:900});
   await confirm(page,'1');await expect(page.locator('#connectedCashReceivedFieldError')).toContainText('suficiente');await expect(page.locator('#connectedCashReceived')).toHaveValue('1');await expect(page.locator('#connectedCashReceived')).toBeFocused();
-  await confirm(page);await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('12.46');expect((await call(page,'product',product.id)).stock).toBe(9);
+  await page.locator('#connectedCashReceived').fill('20');await expect(page.locator('#connectedCashChangePreview')).toBeVisible();await expect(page.locator('#connectedCashChangeAmount')).toHaveText('C$7.54');await page.locator('#confirmConnectedSaleBtn').click();await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('7.54');await expect(page.locator('#ticketContent')).toContainText('12.46');expect((await call(page,'product',product.id)).stock).toBe(9);
   await page.reload();await expect(page.locator('#app')).toBeVisible();await page.locator('#navHistoryBtn').click();await expect(page.locator('#historyTableBody')).toContainText('12.46');const sales=await call(page,'sales');expect(sales.find(s=>s.items.some(i=>i.productId===product.id)).total).toBe('12.46');
 });
 test('Caja e Historial distinguen efectivo confirmado y pagos pendientes',async({page})=>{

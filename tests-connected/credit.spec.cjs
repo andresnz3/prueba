@@ -5,7 +5,7 @@ const business = process.env.POS_TEST_BUSINESS;
 const errors = new WeakMap();
 test.beforeEach(async ({page,context})=>{await context.addInitScript({path:require.resolve('../tests/dexie-search-shim.js')});const list=[];errors.set(page,list);page.on('pageerror',error=>list.push(error.message));});
 test.afterEach(async ({page})=>{expect(errors.get(page)).toEqual([]);});
-async function login(page) { await page.goto('/?mode=connected'); await page.locator('#loginBusinessId').fill(business); await page.locator('#loginUsername').fill('browseradmin'); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button').click(); await expect(page.locator('#app')).toBeVisible(); }
+async function login(page) { await page.goto('/?mode=connected'); await page.locator('#loginBusinessId').fill(business); await page.locator('#loginUsername').fill('browseradmin'); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible(); }
 async function call(page,method,...args) { return page.evaluate(async({method,args})=>{const api=new window.PosApiClient(window.POS_API_BASE_URL);await api.me();return api[method](...args);},{method,args}); }
 async function fixture(page) {
   await login(page); const current=await call(page,'currentCash',true); if(current) await call(page,'closeCash',current.id,{operationKey:randomUUID(),countedAmount:current.expectedAmount});
@@ -30,7 +30,7 @@ test('clientes MySQL: crear, editar, inactivar y excluir de la lista de credito'
 test('venta a credito conectada factura, descuenta stock, crea CxC y abono tarjeta pendiente',async({page})=>{
   const product=await fixture(page), name='Cuenta '+randomUUID().slice(0,8), customer=await createClient(page,name);
   await page.locator('#navSalesBtn').click(); await page.locator('input[name=paymentMethod][value=credit]').check(); await page.locator('#creditClientSelect').selectOption(customer.id);
-  await page.locator('#barcodeInput').fill(product.barcode); await page.locator('#addBarcodeBtn').click(); await page.locator('#processSaleBtn').click(); await expect(page.locator('#connectedCheckoutModal')).toBeVisible(); await expect(page.locator('#connectedCheckoutDetail')).toContainText(name); await expect(page.locator('#connectedCashGroup')).toHaveClass(/hidden/);
+  await page.locator('#barcodeInput').fill(product.barcode); await page.locator('#addBarcodeBtn').click(); await page.locator('#processSaleBtn').click(); await expect(page.locator('#connectedCheckoutModal')).toBeVisible(); await expect(page.locator('#connectedCheckoutTitle')).toHaveText('Confirmar venta a crédito'); await expect(page.locator('#connectedCheckoutPaymentMethod')).toHaveText('Crédito'); await expect(page.locator('#connectedCheckoutDetail')).toContainText(name); await expect(page.locator('#connectedCashGroup')).toHaveClass(/hidden/); await expect(page.locator('#connectedCashChangePreview')).toHaveClass(/hidden/);
   await page.locator('#confirmConnectedSaleBtn').click(); await expect(page.locator('#ticketModal')).toBeVisible(); await expect(page.locator('#ticketContent')).toContainText('FACTURA DE CR');
   const sale=(await call(page,'sales')).find(value=>value.paymentMethod==='CREDIT'&&value.clientId===customer.id); expect(sale).toBeTruthy(); expect(Number((await call(page,'product',product.id)).stock)).toBe(19);
   expect((await call(page,'currentCash',true)).expectedAmount).toBe('100.00'); await expect(page.locator('#ticketContent')).toContainText('Saldo Pendiente');

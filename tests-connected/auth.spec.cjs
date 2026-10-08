@@ -7,9 +7,9 @@ const password = 'Browser-fixture-password-123!';
 const errors = new WeakMap();
 test.beforeEach(async ({ page, context }) => { await context.addInitScript({ path: require.resolve('../tests/dexie-search-shim.js') }); const list = []; errors.set(page, list); page.on('pageerror', e => list.push(e.message)); });
 test.afterEach(async ({ page }) => { expect(errors.get(page)).toEqual([]); });
-async function open(page) { await page.goto('/?mode=connected'); await expect(page.locator('#loginForm button')).toBeEnabled(); }
+async function open(page) { await page.goto('/?mode=connected'); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled(); }
 async function login(page, username = 'browseradmin', id = business, pass = password) {
-  await page.locator('#loginBusinessId').fill(id); await page.locator('#loginUsername').fill(username); await page.locator('#loginPassword').fill(pass); await page.locator('#loginForm button').click(); await expect(page.locator('#app')).toBeVisible();
+  await page.locator('#loginBusinessId').fill(id); await page.locator('#loginUsername').fill(username); await page.locator('#loginPassword').fill(pass); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
 }
 async function authorize(page, button = 'navInventoryBtn', view = 'inventoryView') {
   await page.locator('#' + button).click(); await expect(page.locator('#authModal')).toBeVisible();
@@ -26,6 +26,13 @@ async function expireDatabaseSession(context, table = 'sessions') {
     else await pool.execute('UPDATE session_authorizations SET expires_at = TIMESTAMPADD(SECOND, -1, UTC_TIMESTAMP(3)) WHERE business_id = ? AND session_id IN (SELECT id FROM sessions WHERE business_id = ? AND token_hash = ?)', [business, business, tokenHash]);
   } finally { await pool.end(); }
 }
+test('ojito de contraseña funciona por teclado y permite el login conectado',async({page})=>{
+  await open(page); const passwordInput=page.locator('#loginPassword'),toggle=page.locator('#toggleLoginPasswordBtn');
+  await expect(passwordInput).toHaveAttribute('type','password'); await toggle.click(); await expect(passwordInput).toHaveAttribute('type','text'); await expect(toggle).toHaveAttribute('aria-pressed','true');
+  await toggle.click(); await expect(passwordInput).toHaveAttribute('type','password'); await expect(toggle).toHaveAttribute('aria-pressed','false');
+  await login(page); await expect(page.locator('#salesView')).toBeVisible();
+});
+
 test('ADMIN inicia sesion real, negocio fijo y restauracion mediante cookies', async ({ page }) => {
   await open(page); await login(page); await expect(page.locator('#roleBadge')).toHaveText('Administrador'); await expect(page.locator('#businessContext')).toContainText(business); await expect(page.locator('#loginBusinessId')).toBeDisabled();
   await page.locator('#navInventoryBtn').click(); await expect(page.locator('#inventoryView')).toBeVisible();
@@ -35,7 +42,7 @@ test('VENDEDOR solo accede directamente a Ventas', async ({ page }) => {
   await open(page); await login(page, 'browserseller'); await expect(page.locator('#salesView')).toBeVisible(); await expect(page.locator('#navUsersBtn')).toBeHidden(); await page.locator('#navInventoryBtn').click(); await expect(page.locator('#authModal')).toBeVisible(); await expect(page.locator('#inventoryView')).toBeHidden();
 });
 test('no acepta usuarios locales en modo conectado', async ({ page }) => {
-  await open(page); await page.locator('#loginBusinessId').fill(business); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button').click(); await expect(page.locator('#loginError')).toContainText('Credenciales incorrectas'); await expect(page.locator('#app')).toBeHidden(); await expect(page.locator('#loginPassword')).toHaveValue('');
+  await open(page); await page.locator('#loginBusinessId').fill(business); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#loginError')).toContainText('Credenciales incorrectas'); await expect(page.locator('#app')).toBeHidden(); await expect(page.locator('#loginPassword')).toHaveValue('');
 });
 test('autorizacion temporal, rechazo de contrasena incorrecta y revocacion al cambiar', async ({ page }) => {
   await open(page); await login(page, 'browserseller'); await page.locator('#navInventoryBtn').click(); await page.locator('#grantAdminUsername').fill('browseradmin'); await page.locator('#gestorPassword').fill('wrong'); await page.locator('#authForm button[type=submit]').click(); await expect(page.locator('#authError')).toContainText('Credenciales incorrectas'); await expect(page.locator('#gestorPassword')).toHaveValue('');
@@ -87,12 +94,12 @@ test('Dexie separa modo local y dos negocios sin copiar datos', async ({ page })
   await open(page); await page.evaluate(async () => { const db = createPosDatabase('POS_OfflineDB'); await db.products.put({ id: 1, barcode: 'LOCAL', name: 'LOCAL SECRET' }); db.close(); }); await login(page);
   expect(await page.evaluate(() => localDB.products.count())).toBe(0);
   await page.evaluate(() => localDB.products.put({ id: 2, barcode: 'A', name: 'BUSINESS A SECRET', business_id: DEFAULT_BUSINESS_ID }));
-  await page.locator('#logoutBtn').click(); await expect(page.locator('#loginScreen')).toBeVisible(); await expect(page.locator('#loginForm button')).toBeEnabled(); await login(page, 'otheradmin', businessB);
+  await page.locator('#logoutBtn').click(); await expect(page.locator('#loginScreen')).toBeVisible(); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled(); await login(page, 'otheradmin', businessB);
   expect(await page.evaluate(() => localDB.products.count())).toBe(0); expect(await page.evaluate(() => DEFAULT_BUSINESS_ID)).toBe(businessB);
 });
 test('modo local no invoca API y cambio de modalidad recarga sin conservar identidad', async ({ page }) => {
   const requests = []; page.on('request', req => { if (req.url().startsWith(apiBase)) requests.push(req.url()); });
-  await page.goto('/'); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button').click(); await expect(page.locator('#app')).toBeVisible(); expect(requests).toEqual([]);
+  await page.goto('/'); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible(); expect(requests).toEqual([]);
   await page.locator('#logoutBtn').click(); await page.locator('#authMode').selectOption('connected'); await expect(page).toHaveURL(/mode=connected/); await expect(page.locator('#loginScreen')).toBeVisible(); expect(await page.evaluate(() => currentUser)).toBeNull();
 });
 

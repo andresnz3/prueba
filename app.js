@@ -488,6 +488,16 @@ window.confirmarAnularRegistro = function() {
     if (anularRegistroCallback) anularRegistroCallback(motivo);
 };
 
+document.getElementById("toggleLoginPasswordBtn")?.addEventListener("click", (event) => {
+    const button = event.currentTarget; const input = document.getElementById("loginPassword"); if (!input) return;
+    const showPassword = input.type === "password"; input.type = showPassword ? "text" : "password";
+    button.setAttribute("aria-pressed", String(showPassword));
+    button.setAttribute("aria-label", showPassword ? "Ocultar contraseña" : "Mostrar contraseña");
+    button.title = showPassword ? "Ocultar contraseña" : "Mostrar contraseña";
+    button.querySelector(".password-toggle-eye")?.classList.toggle("hidden", showPassword);
+    button.querySelector(".password-toggle-eye-off")?.classList.toggle("hidden", !showPassword);
+});
+
 document.getElementById("loginForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     await appInitialization;
@@ -941,6 +951,15 @@ async function registrarMovimientoKardex(productoId, tipoMovimiento, cantidadFis
     return true;
 }
 
+function actualizarCambioVistaLocal() {
+    const input = document.getElementById("cashReceivedInput"), preview = document.getElementById("localCashChangePreview"), amount = document.getElementById("localCashChangeAmount");
+    if (!input || !preview || !amount) return;
+    const received = Number(input.value);
+    if (!input.value || !Number.isFinite(received) || received < totalTemporal) { preview.classList.add("hidden"); return; }
+    amount.textContent = sysConfig.currency + Math.max(0, received - totalTemporal).toFixed(2); preview.classList.remove("hidden");
+}
+document.getElementById("cashReceivedInput")?.addEventListener("input", actualizarCambioVistaLocal);
+
 document.getElementById("processSaleBtn")?.addEventListener("click", () => {
     if (connectedMode) { window.PosSales.checkout(); return; }
     if (procesandoVenta) return;
@@ -957,6 +976,8 @@ document.getElementById("processSaleBtn")?.addEventListener("click", () => {
 
         const cRec = document.getElementById("cashReceivedInput");
         if (cRec) cRec.value = "";
+        document.getElementById("localCashChangePreview")?.classList.add("hidden");
+        document.getElementById("cashError")?.classList.add("hidden");
 
         document.getElementById("cashModal")?.classList.remove("hidden");
         setTimeout(() => document.getElementById("cashReceivedInput")?.focus(), 100);

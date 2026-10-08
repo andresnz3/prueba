@@ -6,8 +6,8 @@ const errors = new WeakMap();
 test.beforeEach(async ({ page, context }) => { await context.addInitScript({ path: require.resolve('../tests/dexie-search-shim.js') }); const list = []; errors.set(page, list); page.on('pageerror', error => list.push(error.message)); });
 test.afterEach(async ({ page }) => { expect(errors.get(page)).toEqual([]); });
 async function login(page, username = 'browseradmin', tenant = business) {
-  await page.goto('/?mode=connected'); await expect(page.locator('#loginForm button')).toBeEnabled();
-  await page.locator('#loginBusinessId').fill(tenant); await page.locator('#loginUsername').fill(username); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button').click(); await expect(page.locator('#app')).toBeVisible();
+  await page.goto('/?mode=connected'); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
+  await page.locator('#loginBusinessId').fill(tenant); await page.locator('#loginUsername').fill(username); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
 }
 async function inventory(page) { await page.locator('#navInventoryBtn').click(); await expect(page.locator('#inventoryView')).toBeVisible(); }
 async function closeAlert(page) { await expect(page.locator('#customAlertModal')).toBeVisible(); await page.locator('#customAlertModal .close-modal-btn').click(); await expect(page.locator('#customAlertModal')).toBeHidden(); }
@@ -173,8 +173,8 @@ test('permiso vencido en MySQL rechaza escritura aunque la UI aun muestre formul
 });
 test('otro negocio no ve productos ni movimientos ajenos', async ({ page }) => {
   await login(page); await inventory(page); const item = await create(page); const product = (await call(page, 'products')).value.find(p => p.barcode === item.barcode);
-  await page.locator('#logoutBtn').click(); await expect(page.locator('#loginForm button')).toBeEnabled();
-  await page.locator('#loginBusinessId').fill(businessB); await page.locator('#loginUsername').fill('otheradmin'); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button').click(); await expect(page.locator('#app')).toBeVisible();
+  await page.locator('#logoutBtn').click(); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
+  await page.locator('#loginBusinessId').fill(businessB); await page.locator('#loginUsername').fill('otheradmin'); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
   expect((await call(page, 'products')).value.some(p => p.barcode === item.barcode)).toBe(false); expect((await call(page, 'product', product.id)).code).toBe('PRODUCT_NOT_FOUND'); expect((await call(page, 'movements', product.id)).code).toBe('PRODUCT_NOT_FOUND');
 });
 test('fallo de lectura no utiliza productos de Dexie como respaldo', async ({ page }) => {
