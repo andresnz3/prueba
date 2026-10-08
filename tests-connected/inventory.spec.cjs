@@ -59,6 +59,25 @@ test('filtros y orden de inventario conectado son solo de lectura y no escriben 
   await expect(rowFor(first.name)).toBeVisible(); await expect(rowFor(second.name)).toBeHidden();
   await page.locator('#inventoryView .data-table-column-filter').nth(1).fill(first.name);
   await expect(rowFor(first.name)).toBeVisible(); await expect(page.locator('#inventoryTableBody tr:visible:not(.data-table-no-results)')).toHaveCount(1);
+  await page.evaluate(() => {
+    window.XLSX = {
+      utils: {
+        aoa_to_sheet(rows) { return { '!data': rows }; },
+        book_new() { return { SheetNames: [], Sheets: {} }; },
+        book_append_sheet(book, sheet, name) { book.SheetNames.push(name); book.Sheets[name] = sheet; }
+      },
+      writeFile(book, filename) {
+        window.__connectedTableExport = { book, filename };
+        const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob(['excel'], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        link.download = filename; document.body.append(link); link.click(); link.remove();
+      }
+    };
+    window.PosTables.setupDataTable(document.getElementById('inventoryTableBody'), { label: 'Inventario', fileName: 'inventario', searchInputId: 'inventorySearchInput', ignoreColumns: [0, 7], rebuild: true });
+  });
+  const exportButton = page.locator('#inventoryView .data-table-export'); await expect(exportButton).toHaveText('Exportar Excel'); await expect(exportButton).toHaveClass(/btn-export-excel/);
+  const [download] = await Promise.all([page.waitForEvent('download'), exportButton.click()]); expect(download.suggestedFilename()).toMatch(/^inventario_\d{4}-\d{2}-\d{2}\.xlsx$/);
+  const exported = await page.evaluate(() => { const captured = window.__connectedTableExport, sheet = captured.book.Sheets[captured.book.SheetNames[0]]; return { filename: captured.filename, rows: sheet['!data'] }; });
+  expect(exported.rows[0]).toEqual(['Código', 'Nombre', 'Stock Actual', 'Costo', 'Precios (Men/May)', 'Estado']); expect(exported.rows.slice(1).flat().join(' ')).toContain(first.name); expect(exported.rows.slice(1).flat().join(' ')).toContain(first.barcode);
   await page.locator('#inventoryView .data-table-clear').click();
   await expect(page.locator('#inventoryTableBody tr:visible:not(.data-table-no-results)')).toHaveCount(initialRowCount);
   await page.locator('#inventoryView table thead tr:first-child th').nth(3).locator('button').click();
