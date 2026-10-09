@@ -188,7 +188,7 @@
                 <section class="history-container">
                     <div class="page-heading"><div><h1>Cuentas por Pagar</h1><p id="connectedPayablesSummary" class="connected-procurement-summary hidden"></p></div></div>
                     <section class="period-filter-panel" data-period-filter="payables" data-period-default="month" aria-label="Filtrar cuentas por pagar por vencimiento">
-                        <p class="period-filter-note">El período filtra facturas por vencimiento. La deuda mostrada es el saldo actual completo y no cambia con el filtro.</p>
+                        <p class="period-filter-note">El filtro usa la fecha de vencimiento. La deuda actual no cambia con el período.</p>
                         <div class="period-filter-controls"><div class="period-filter-fields"><label>Desde<input type="date" data-period-from aria-label="Vencimiento desde"></label><label>Hasta<input type="date" data-period-until aria-label="Vencimiento hasta"></label></div><div class="period-filter-presets" role="group" aria-label="Períodos de vencimiento"><button type="button" class="btn btn-secondary" data-period-preset="today">Hoy</button><button type="button" class="btn btn-secondary" data-period-preset="week">Esta Semana</button><button type="button" class="btn btn-secondary" data-period-preset="month">Este Mes</button><button type="button" class="btn btn-secondary" data-period-preset="all">Todo</button></div></div><p class="period-filter-label" data-period-label aria-live="polite"></p><p class="period-filter-message hidden" data-period-message role="status" aria-live="polite"></p>
                     </section>
                     <div class="local-procurement-content history-table-container"><table class="history-table"><thead><tr><th>Proveedor</th><th>Teléfono</th><th>Próx. Vencimiento</th><th>Deuda Actual</th><th>Acciones</th></tr></thead><tbody id="payablesTableBody"><tr><td colspan="5" class="text-center">No hay cuentas por pagar pendientes.</td></tr></tbody></table></div>
@@ -202,7 +202,7 @@
                     <div class="page-heading">
                         <div><h1>Cobros y Créditos (Clientes)</h1><p>Control de límites, historial de abonos y créditos vencidos.</p></div>
                         <div style="display:flex; gap:10px;">
-                            <button id="addNewClientBtn" class="btn btn-primary" style="padding: 10px 20px;">➕ Nuevo Cliente</button>
+                            <button id="addNewClientBtn" class="btn btn-primary" style="padding: 10px 20px;">+ Nuevo Cliente</button>
                         </div>
                     </div>
                     <div id="connectedClientsControls" class="connected-clients-controls hidden"><label for="clientSearchInput">Buscar cliente</label><input id="clientSearchInput" type="search" placeholder="Nombre, tel&#233;fono o identificaci&#243;n" autocomplete="off"><p id="clientsNotice" class="message" role="status" aria-live="polite"></p></div>
@@ -227,12 +227,12 @@
                     <div class="page-heading">
                         <div><h1>Proveedores</h1></div>
                         <div style="display:flex; gap:10px;">
-                            <button id="addNewSupplierBtn" class="btn btn-primary" style="padding: 10px 20px;">➕ Nuevo Proveedor</button>
+                            <button id="addNewSupplierBtn" class="btn btn-primary" style="padding: 10px 20px;">+ Nuevo Proveedor</button>
                         </div>
                     </div>
-                    <div id="connectedSuppliersControls" class="connected-procurement-controls hidden"><label for="connectedSuppliersSearch">Buscar proveedor</label><input id="connectedSuppliersSearch" type="search" placeholder="Nombre, contacto o teléfono" autocomplete="off"><span id="connectedSuppliersStatus" role="status" aria-live="polite"></span></div>
+                    <div id="connectedSuppliersControls" class="connected-procurement-controls hidden"><label class="visually-hidden" for="connectedSuppliersSearch">Buscar proveedor</label><input id="connectedSuppliersSearch" type="search" placeholder="Buscar en la tabla" autocomplete="off"><span id="connectedSuppliersStatus" role="status" aria-live="polite"></span></div>
                     <div class="local-procurement-content history-table-container"><table class="history-table"><thead><tr><th>Empresa</th><th>Contacto</th><th>Dirección</th><th>Total Comprado</th><th>Deuda Actual</th><th>Acciones</th></tr></thead><tbody id="suppliersTableBody"></tbody></table></div>
-                    <div class="connected-procurement-content hidden history-table-container"><table class="history-table"><thead><tr><th>Empresa</th><th>Contacto</th><th>Dirección</th><th>Total Comprado</th><th>Deuda Actual</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="connectedSuppliersTableBody"></tbody></table></div>
+                    <div class="connected-procurement-content hidden history-table-container"><table class="history-table"><thead><tr><th>Empresa</th><th>Contacto</th><th>Dirección</th><th>Total Comprado</th><th>Deuda Actual</th><th>Acciones</th></tr></thead><tbody id="connectedSuppliersTableBody"></tbody></table></div>
                 </section>
             </div>
 
@@ -243,6 +243,7 @@
                         <p class="period-filter-note">El período filtra ventas y sus indicadores por método de pago. Ventas de hoy conserva el acumulado de hoy.</p>
                         <div class="period-filter-controls"><div class="period-filter-fields"><label>Desde<input type="date" data-period-from aria-label="Fecha inicial del historial"></label><label>Hasta<input type="date" data-period-until aria-label="Fecha final del historial"></label></div><div class="period-filter-presets" role="group" aria-label="Períodos del historial"><button type="button" class="btn btn-secondary" data-period-preset="today">Hoy</button><button type="button" class="btn btn-secondary" data-period-preset="week">Esta Semana</button><button type="button" class="btn btn-secondary" data-period-preset="month">Este Mes</button><button type="button" class="btn btn-secondary" data-period-preset="all">Todo</button></div></div><p class="period-filter-label" data-period-label aria-live="polite"></p><p class="period-filter-message hidden" data-period-message role="status" aria-live="polite"></p>
                     </section>
+                    <p id="connectedHistoryStatus" class="connected-report-note hidden" role="status" aria-live="polite"></p>
                     <div class="summary-cards" style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 20px;">
                         <div class="summary-card" style="flex: 1; min-width: 150px; border-left: 4px solid #0066cc;"><span>Ventas del Día</span><h3 id="summaryTodaySales" style="color: #0066cc;">C$0.00</h3></div>
                         <div class="summary-card" style="flex: 1; min-width: 150px; border-left: 4px solid #28a745;"><span>Ventas del período</span><h3 id="summaryTotalSales" style="color: #28a745;">C$0.00</h3></div>
@@ -396,22 +397,20 @@
                             <button id="filtroSemanaBtn" class="btn btn-secondary">Esta Semana</button>
                             <button id="filtroMesBtn" class="btn btn-secondary">Este Mes</button>
                             <button id="filtroTodoBtn" class="btn btn-secondary">Todo</button>
-                            <button onclick="window.exportarExcelReporte('repVentasBox', 'ventas')" class="btn btn-secondary btn-export-excel report-export-button">Exportar Excel de Ventas</button>
-                            <button onclick="window.exportarExcelReporte('repVendedoresBox', 'vendedores')" class="btn btn-secondary btn-export-excel report-export-button">Exportar Excel de Vendedores</button>
+                            <button id="exportReportsSalesBtn" onclick="window.exportarExcelReporte('repVentasBox', 'ventas')" class="btn btn-secondary btn-export-excel report-export-button local-report-only">Exportar Excel de Ventas</button>
+                            <button id="exportReportsSellersBtn" onclick="window.exportarExcelReporte('repVendedoresBox', 'vendedores')" class="btn btn-secondary btn-export-excel report-export-button local-report-only">Exportar Excel de Vendedores</button>
+                            <button type="button" class="btn btn-export-excel connected-report-only hidden" onclick="window.PosReports?.exportExcel()">Exportar Excel</button>
                         </div>
                         <p id="reporteRangoLabel" style="margin-top: 10px; color: #666; font-size: 0.9rem;"></p>
+                        <p id="connectedReportScope" class="connected-report-scope connected-report-only hidden">El período filtra las actividades; Cuentas por Cobrar, Cuentas por Pagar e inventario muestran el estado actual.</p>
                     </div>
                     <p id="connectedReportStatus" class="connected-report-note hidden" role="status" aria-live="polite"></p>
-                    <p id="connectedReportScope" class="connected-report-note hidden">El rango aplica a ventas, movimientos y cierres. Inventario y Cuentas por Cobrar muestran el estado actual del negocio.</p>
-                    <div class="connected-report-only hidden" style="margin:10px 0;"><button type="button" class="btn btn-export-excel" onclick="window.PosReports?.exportExcel()">Exportar reporte conectado a Excel</button></div>
 
                     <div class="summary-cards">
-                        <div class="summary-card" style="border-left:4px solid #28a745;"><span>Ventas</span><h3 id="repVentas">C$0.00</h3></div>
-                        <div class="summary-card connected-report-only hidden"><span>Costo vendido</span><h3 id="repCostoVendido">C$0.00</h3></div>
-                        <div class="summary-card connected-report-only hidden"><span>Utilidad bruta</span><h3 id="repGananciaBruta">C$0.00</h3></div>
+                        <div class="summary-card" style="border-left:4px solid #28a745;"><span>Ventas</span><h3 id="repVentas">C$0.00</h3><small class="connected-report-detail connected-report-only hidden">Costo vendido: <strong id="repCostoVendido">C$0.00</strong></small></div>
                         <div class="summary-card" style="border-left:4px solid #d32f2f;"><span>Compras</span><h3 id="repCompras">C$0.00</h3></div>
                         <div class="summary-card" style="border-left:4px solid #ff9800;"><span>Gastos</span><h3 id="repGastos">C$0.00</h3></div>
-                        <div class="summary-card" style="border-left:4px solid #0066cc;"><span>Utilidad Neta Aprox.</span><h3 id="repUtilidad">C$0.00</h3></div>
+                        <div class="summary-card" style="border-left:4px solid #0066cc;"><span>Utilidad Neta Aprox.</span><h3 id="repUtilidad">C$0.00</h3><small class="connected-report-detail connected-report-only hidden">Utilidad bruta: <strong id="repGananciaBruta">C$0.00</strong></small></div>
                         <div class="summary-card"><span>Cuentas por Cobrar</span><h3 id="repCxC" style="color:#d32f2f;">C$0.00</h3></div>
                         <div class="summary-card"><span>Cuentas por Pagar</span><h3 id="repCxP" style="color:#d32f2f;">C$0.00</h3></div>
                     </div>
@@ -449,9 +448,9 @@
                         <div class="connected-report-only hidden"><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Dirección</th><th>Medio de pago</th><th>Estado</th><th>Monto</th></tr></thead><tbody id="repCajaMovimientosBody"></tbody></table></div></div>
                         <h2 style="margin:20px 0 10px;">Cierres de Caja</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Apertura</th><th>Cierre</th><th>Cerrado por</th><th>Esperado</th><th>Real</th><th>Diferencia</th></tr></thead><tbody id="repCajaBody"></tbody></table></div>
                     </div>
-                    <div id="repGastosBox" class="rep-subview hidden"><p class="connected-report-pending hidden" id="repGastosPending">Reporte de gastos disponible cuando el módulo conectado esté implementado.</p><h2 style="margin-bottom:10px;">Gastos por Categoría</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Categoría</th><th># Gastos</th><th>Total</th></tr></thead><tbody id="repGastosCategoriaBody"></tbody></table></div><div class="connected-report-only hidden"><h2 style="margin:20px 0 10px;">Historial de gastos del período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Categoría</th><th>Descripción</th><th>Comprobante</th><th>Medio</th><th>Estado</th><th>Monto</th><th>Registrado por</th></tr></thead><tbody id="repGastosHistoryBody"></tbody></table></div></div></div>
+                    <div id="repGastosBox" class="rep-subview hidden"><p class="connected-report-pending hidden" id="repGastosPending">Cargando gastos del período…</p><h2 style="margin-bottom:10px;">Gastos por Categoría</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Categoría</th><th># Gastos</th><th>Total</th></tr></thead><tbody id="repGastosCategoriaBody"></tbody></table></div><div class="connected-report-only hidden"><h2 style="margin:20px 0 10px;">Historial de gastos del período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Categoría</th><th>Descripción</th><th>Comprobante</th><th>Medio</th><th>Estado</th><th>Monto</th><th>Registrado por</th></tr></thead><tbody id="repGastosHistoryBody"></tbody></table></div></div></div>
                     <div id="repCxCBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cuentas por Cobrar</h2><p id="connectedReceivablesSummary" class="connected-report-note connected-report-only hidden"></p><div class="history-table-container"><table class="history-table"><thead><tr><th>Cliente</th><th>Límite</th><th>Deuda</th><th>Estado</th></tr></thead><tbody id="repCxCBody"></tbody></table></div><div class="connected-report-only hidden"><h2 style="margin:20px 0 10px;">Abonos registrados en el período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Cliente</th><th>Factura</th><th>Medio de pago</th><th>Estado</th><th>Monto</th></tr></thead><tbody id="repCxCPagosBody"></tbody></table></div></div></div>
-                    <div id="repCxPBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cuentas por Pagar</h2><div class="history-table-container local-report-only"><table class="history-table"><thead><tr><th>Proveedor</th><th>Deuda</th></tr></thead><tbody id="repCxPBody"></tbody></table></div><div class="connected-report-only hidden"><div class="connected-procurement-summary" id="connectedReportPayablesSummary"></div><div class="history-table-container"><table class="history-table"><thead><tr><th>Factura</th><th>Proveedor</th><th>Fecha</th><th>Vencimiento</th><th>Total</th><th>Abonado</th><th>Saldo</th><th>Estado</th></tr></thead><tbody id="repConnectedCxPBody"></tbody></table></div></div></div>
+                     <div id="repCxPBox" class="rep-subview hidden"><h2 style="margin-bottom:10px;">Cuentas por Pagar</h2><div class="history-table-container local-report-only"><table class="history-table"><thead><tr><th>Proveedor</th><th>Deuda</th></tr></thead><tbody id="repCxPBody"></tbody></table></div><div class="connected-report-only hidden"><div class="connected-procurement-summary" id="connectedReportPayablesSummary"></div><div class="history-table-container"><table class="history-table"><thead><tr><th>Factura</th><th>Proveedor</th><th>Fecha</th><th>Vencimiento</th><th>Total</th><th>Abonado</th><th>Saldo</th><th>Estado</th></tr></thead><tbody id="repConnectedCxPBody"></tbody></table></div></div></div>
                 </section>
             </div>
 
@@ -512,32 +511,43 @@
                         </div>
                     </div>
                     <div id="dashboardConnectedContent" class="connected-dashboard-only hidden" aria-live="polite">
-                        <p id="connectedDashboardStatus" class="connected-report-note" role="status"></p>
+                        <p id="connectedDashboardStatus" class="connected-report-note connected-dashboard-status" role="status"></p>
+                        <section class="buyer-section dashboard-profit-panel">
+                            <h2>Ganancia estimada del período</h2>
+                            <div class="dashboard-profit-values">
+                                <div><span>Ventas:</span><strong id="connectedDashProfitSales">C$0.00</strong></div>
+                                <div><span>Costo de mercancía:</span><strong id="connectedDashSalesCost">C$0.00</strong></div>
+                                <div class="dashboard-profit-total"><span>Ganancia bruta:</span><strong id="connectedDashGrossProfit">C$0.00</strong></div>
+                                <div><span>Gastos:</span><strong id="connectedDashExpenseTotal">C$0.00</strong></div>
+                                <div class="dashboard-profit-net"><span>Ganancia estimada:</span><strong id="connectedDashNetProfit">C$0.00</strong></div>
+                            </div>
+                        </section>
+                        <h2 class="dashboard-section-title">Indicadores del negocio</h2>
                         <div class="summary-cards">
                             <div class="summary-card"><span>Ventas del período</span><h3 id="connectedDashSalesTotal">C$0.00</h3></div>
                             <div class="summary-card"><span>Ventas realizadas</span><h3 id="connectedDashSalesCount">0</h3></div>
                             <div class="summary-card"><span>Promedio por venta</span><h3 id="connectedDashTicketAverage">C$0.00</h3></div>
-                            <div class="summary-card"><span>Costo vendido del período</span><h3 id="connectedDashSalesCost">C$0.00</h3></div>
-                            <div class="summary-card"><span>Ganancia bruta del período</span><h3 id="connectedDashGrossProfit">C$0.00</h3></div>
-                            <div class="summary-card"><span>Gastos del período</span><h3 id="connectedDashExpenseTotal">C$0.00</h3></div>
-                            <div class="summary-card"><span>Ganancia neta del período</span><h3 id="connectedDashNetProfit">C$0.00</h3></div>
-                            <div class="summary-card"><span>Entradas de efectivo confirmadas</span><h3 id="connectedDashCashIn">C$0.00</h3></div>
-                            <div class="summary-card"><span>Salidas de efectivo confirmadas</span><h3 id="connectedDashCashOut">C$0.00</h3></div>
-                            <div class="summary-card"><span>Efectivo esperado en caja abierta</span><h3 id="connectedDashCashExpected">Sin caja abierta</h3></div>
+                            <div class="summary-card"><span>Compras del período</span><h3 id="connectedDashPurchasesTotal">C$0.00</h3></div>
+                            <div class="summary-card"><span>Productos vendidos</span><h3 id="connectedDashUnitsSold">0 uds.</h3></div>
+                            <div class="summary-card"><span>Productos con bajo stock</span><h3 id="connectedDashLowStock">0</h3></div>
                             <div class="summary-card"><span>Productos activos</span><h3 id="connectedDashActiveProducts">0</h3></div>
                             <div class="summary-card"><span>Valor de inventario a costo</span><h3 id="connectedDashStockValue">C$0.00</h3></div>
-                            <div class="summary-card"><span>Deuda actual por cobrar</span><h3 id="connectedDashReceivableBalance">C$0.00</h3></div>
-                            <div class="summary-card"><span>Saldo vencido por cobrar</span><h3 id="connectedDashReceivableOverdue">C$0.00</h3></div>
+                            <div class="summary-card"><span>Crédito pendiente (CxC)</span><h3 id="connectedDashReceivableBalance">C$0.00</h3><small class="connected-dashboard-card-detail">Vencido: <strong id="connectedDashReceivableOverdue">C$0.00</strong></small></div>
+                            <div class="summary-card"><span>Cuentas por pagar (CxP)</span><h3 id="connectedDashPayablesBalance">C$0.00</h3><small class="connected-dashboard-card-detail">Pagos por confirmar del período: <strong id="connectedDashSupplierPaymentsPending">C$0.00</strong></small></div>
+                            <div class="summary-card"><span>Gastos del período</span><h3 id="connectedDashExpenseCard">C$0.00</h3></div>
                             <div class="summary-card"><span>Abonos recibidos en el período</span><h3 id="connectedDashPaymentsTotal">C$0.00</h3></div>
-                            <div class="summary-card"><span>Compras del período</span><h3 id="connectedDashPurchasesTotal">C$0.00</h3></div>
-                            <div class="summary-card"><span>Deuda actual por pagar</span><h3 id="connectedDashPayablesBalance">C$0.00</h3></div>
-                            <div class="summary-card"><span>Pagos a proveedores pendientes de confirmar</span><h3 id="connectedDashSupplierPaymentsPending">C$0.00</h3></div>
+                            <div class="summary-card"><span>Entradas de efectivo del período</span><h3 id="connectedDashCashIn">C$0.00</h3></div>
+                            <div class="summary-card"><span>Salidas de efectivo del período</span><h3 id="connectedDashCashOut">C$0.00</h3></div>
+                            <div class="summary-card"><span>Efectivo esperado en caja abierta</span><h3 id="connectedDashCashExpected">Sin caja abierta</h3></div>
                         </div>
-                        <p class="connected-report-note">Compras, gastos y pagos a proveedores siguen el período elegido. Las cuentas por pagar muestran el saldo actual.</p>
                         <div class="dashboard-tables-grid">
                             <section><h2>Ventas por medio de pago</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Medio de pago</th><th>Ventas</th><th>Total</th></tr></thead><tbody id="connectedDashMethodsBody"></tbody></table></div></section>
-                            <section><h2>Ventas por vendedor</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Vendedor</th><th>Ventas realizadas</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Crédito</th><th>Total</th></tr></thead><tbody id="connectedDashSellersBody"></tbody></table></div></section>
+                            <section><h2>Ventas por vendedor</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Vendedor</th><th>Ventas realizadas</th><th>Total vendido</th></tr></thead><tbody id="connectedDashSellersBody"></tbody></table></div></section>
                             <section><h2>Productos más vendidos</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Producto</th><th>Unidades</th><th>Total vendido</th></tr></thead><tbody id="connectedDashProductsBody"></tbody></table></div></section>
+                        </div>
+                        <details class="connected-dashboard-details">
+                            <summary>Más detalles conectados</summary>
+                            <div class="dashboard-tables-grid">
                             <section><h2>Ventas del período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Factura</th><th>Vendedor</th><th>Medio de pago</th><th>Total</th><th>Estado</th></tr></thead><tbody id="connectedDashHistoryBody"></tbody></table></div></section>
                             <section><h2>Clientes con deuda actual</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Cliente</th><th>Deuda</th><th>Estado</th></tr></thead><tbody id="connectedDashDebtorsBody"></tbody></table></div></section>
                             <section><h2>Abonos recibidos en el período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Cliente</th><th>Factura</th><th>Medio de pago</th><th>Estado</th><th>Monto</th></tr></thead><tbody id="connectedDashPaymentsBody"></tbody></table></div></section>
@@ -547,6 +557,7 @@
                             <section><h2>Pagos a proveedores del período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Proveedor</th><th>Factura</th><th>Medio de pago</th><th>Estado</th><th>Monto</th></tr></thead><tbody id="connectedDashSupplierPaymentsBody"></tbody></table></div></section>
                             <section><h2>Movimientos de efectivo del período</h2><div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Dirección</th><th>Medio de pago</th><th>Estado</th><th>Monto</th></tr></thead><tbody id="connectedDashCashBody"></tbody></table></div></section>
                         </div>
+                        </details>
                     </div>
                 </section>
             </div>
@@ -598,7 +609,24 @@
     <!-- MODALES -->
     <div id="authModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Autorización Requerida</h2><form id="authForm" onsubmit="event.preventDefault();"><div class="form-group"><label id="adminUsernameGroup" class="hidden" for="grantAdminUsername">Usuario administrador<input id="grantAdminUsername" autocomplete="off" disabled></label><label for="gestorPassword">Contraseña de gestor</label><input type="password" id="gestorPassword" placeholder="Contraseña de gestor" required style="background:#fff!important; color:#000!important;"></div><div id="authError" class="message error hidden">Contraseña incorrecta.</div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-primary">Autorizar</button></div></form></div></div>
     
-    <div id="connectedCheckoutModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="connectedCheckoutTitle"><div class="modal-overlay"></div><div class="modal-card connected-checkout-card"><h2 id="connectedCheckoutTitle">Confirmar cobro</h2><p class="checkout-intro">Precios y total verificados en línea.</p><div class="checkout-summary"><div class="checkout-summary-heading"><span>Detalle de la venta</span><span id="connectedCheckoutPaymentMethod" class="checkout-payment-method" aria-live="polite">Efectivo</span></div><div id="connectedCheckoutItems" class="checkout-items" role="list" aria-label="Productos incluidos"></div><div class="checkout-total-row"><span>Total a pagar</span><strong id="connectedCheckoutTotal"></strong></div></div><p id="connectedCheckoutDetail" class="checkout-detail"></p><p id="connectedPriceChangeMessage" class="checkout-price-message hidden" role="status" aria-live="polite"></p><div id="connectedOrderMethodGroup" class="form-group hidden"><label for="connectedOrderPaymentMethod">Medio de pago</label><select id="connectedOrderPaymentMethod"><option value="CASH">Efectivo</option><option value="CARD">Tarjeta</option><option value="TRANSFER">Transferencia</option><option value="CREDIT">Crédito</option></select></div><div id="connectedCashGroup" class="form-group"><label for="connectedCashReceived">Efectivo recibido (C$)</label><input id="connectedCashReceived" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Ej. 500" aria-describedby="connectedCashReceivedHelp"><small id="connectedCashReceivedHelp" class="checkout-field-help">Ingresa el monto recibido; el cambio se calcula automáticamente.</small></div><div id="connectedCashChangePreview" class="checkout-change hidden" role="status" aria-live="polite"><span>Cambio</span><strong id="connectedCashChangeAmount">C$0.00</strong></div><div class="modal-actions"><button class="btn btn-secondary close-modal-btn" type="button">Cancelar</button><button id="confirmConnectedSaleBtn" class="btn btn-primary" type="button">Cobrar</button></div></div></div>
+    <div id="connectedCheckoutModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="connectedCheckoutTitle">
+        <div class="modal-overlay"></div>
+        <div class="modal-card checkout-modal-card connected-checkout-card">
+            <h2 id="connectedCheckoutTitle">Confirmar cobro</h2>
+            <p class="checkout-intro">Precios y total verificados en línea.</p>
+            <div class="checkout-summary">
+                <div class="checkout-summary-heading"><span>Detalle de la venta</span><span id="connectedCheckoutPaymentMethod" class="checkout-payment-method" aria-live="polite">Efectivo</span></div>
+                <p id="connectedCheckoutDetail" class="checkout-detail checkout-detail-callout"></p>
+                <div id="connectedCheckoutItems" class="checkout-items" role="list" aria-label="Productos incluidos"></div>
+                <div class="checkout-total-row"><span>Total a pagar</span><strong id="connectedCheckoutTotal"></strong></div>
+            </div>
+            <p id="connectedPriceChangeMessage" class="checkout-price-message hidden" role="status" aria-live="polite"></p>
+            <div id="connectedOrderMethodGroup" class="form-group hidden"><label for="connectedOrderPaymentMethod">Medio de pago</label><select id="connectedOrderPaymentMethod"><option value="CASH">Efectivo</option><option value="CARD">Tarjeta</option><option value="TRANSFER">Transferencia</option><option value="CREDIT">Crédito</option></select></div>
+            <div id="connectedCashGroup" class="form-group"><label for="connectedCashReceived">Efectivo recibido (C$)</label><input id="connectedCashReceived" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Ej. 500" aria-describedby="connectedCashReceivedHelp"><small id="connectedCashReceivedHelp" class="checkout-field-help">Ingresa el monto recibido; el cambio se calcula automáticamente.</small></div>
+            <div id="connectedCashChangePreview" class="checkout-change hidden" role="status" aria-live="polite"><span>Cambio</span><strong id="connectedCashChangeAmount">C$0.00</strong></div>
+            <div class="modal-actions"><button class="btn btn-secondary close-modal-btn" type="button">Cancelar</button><button id="confirmConnectedSaleBtn" class="btn btn-primary" type="button">Cobrar</button></div>
+        </div>
+    </div>
     <div id="cashModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Cobro en Efectivo</h2><div class="checkout-total-row local-cash-total"><span>Total a pagar</span><strong id="cashTotalDisplay">C$0.00</strong></div><div class="form-group"><label for="cashReceivedInput">Efectivo recibido (C$)</label><input type="number" id="cashReceivedInput" placeholder="Ej. 500" min="0" step="0.01" inputmode="decimal" aria-describedby="cashReceivedHelp"><small id="cashReceivedHelp" class="checkout-field-help">Ingresa el monto recibido.</small></div><div id="localCashChangePreview" class="checkout-change hidden" role="status" aria-live="polite"><span>Cambio</span><strong id="localCashChangeAmount">C$0.00</strong></div><div id="cashError" class="message error hidden">Monto insuficiente.</div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="button" id="confirmCashBtn" class="btn btn-primary">Cobrar</button></div></div></div>
 
     <div id="detalleCierreCajaModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2 tabindex="-1" data-initial-focus>Detalles del cierre de caja</h2><div id="cajaDetalleResumen"></div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cerrar</button></div></div></div>
@@ -863,11 +891,20 @@
     <script src="api-client.js"></script>
     <script src="validation.js"></script>
 <div id="localOrderCheckoutModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="localOrderTitle">
-<div class="modal-overlay"></div><div class="modal-card"><h2 id="localOrderTitle">Cobrar orden</h2>
-<p id="localOrderSummary"></p><p id="localOrderPriceNotice" role="status" aria-live="polite"></p><div id="localOrderItems"></div>
-<form id="localOrderForm" novalidate><div class="form-group"><label for="localOrderMethod">Método de pago</label><select id="localOrderMethod"><option value="cash">Efectivo</option><option value="card">Tarjeta</option><option value="transfer">Transferencia</option><option value="credit">Crédito del cliente de la orden</option></select></div>
-<div id="localOrderCashGroup" class="form-group"><label for="localOrderReceived">Efectivo recibido</label><input id="localOrderReceived" type="number" min="0" step="0.01" inputmode="decimal"></div>
-<div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button id="localOrderConfirmBtn" type="submit" class="btn btn-primary">Confirmar y cobrar</button></div></form></div></div>
+<div class="modal-overlay"></div><div class="modal-card checkout-modal-card local-order-checkout-card">
+<h2 id="localOrderTitle">Cobrar orden</h2>
+<p class="checkout-intro">Precios y total verificados antes de cobrar.</p>
+<div class="checkout-summary">
+  <div class="checkout-summary-heading"><span>Detalle de la venta</span><span id="localOrderPaymentMethod" class="checkout-payment-method" aria-live="polite">Efectivo</span></div>
+  <p id="localOrderSummary" class="checkout-detail checkout-detail-callout"></p>
+  <div id="localOrderItems" class="checkout-items" role="list" aria-label="Productos incluidos"></div>
+  <div class="checkout-total-row"><span>Total a pagar</span><strong id="localOrderTotal"></strong></div>
+</div>
+<p id="localOrderPriceNotice" class="checkout-price-message" role="status" aria-live="polite"></p>
+<form id="localOrderForm" novalidate><div class="form-group"><label for="localOrderMethod">Medio de pago</label><select id="localOrderMethod"><option value="cash">Efectivo</option><option value="card">Tarjeta</option><option value="transfer">Transferencia</option><option value="credit">Crédito del cliente de la orden</option></select></div>
+<div id="localOrderCashGroup" class="form-group"><label for="localOrderReceived">Efectivo recibido (C$)</label><input id="localOrderReceived" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Ej. 500" aria-describedby="localOrderReceivedHelp"><small id="localOrderReceivedHelp" class="checkout-field-help">Ingresa el monto recibido; el cambio se calcula automáticamente.</small></div>
+<div id="localOrderCashChangePreview" class="checkout-change hidden" role="status" aria-live="polite"><span>Cambio</span><strong id="localOrderCashChangeAmount">C$0.00</strong></div>
+<div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button id="localOrderConfirmBtn" type="submit" class="btn btn-primary">Cobrar orden</button></div></form></div></div>
     <script src="data-tables.js"></script>
     <script src="period-filters.js"></script>
     <script src="app.js"></script>

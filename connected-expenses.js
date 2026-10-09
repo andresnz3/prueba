@@ -5,7 +5,7 @@
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const money = value => 'C$' + Number(value || 0).toFixed(2);
-  const paymentLabel = value => ({ CASH: '💵 Efectivo', BANK: '💳 Banco', PENDING: '⏳ Por pagar' })[value] || value || '—';
+  const paymentLabel = value => ({ CASH: 'Efectivo', BANK: 'Banco', PENDING: 'Por pagar' })[value] || value || '—';
   const dateTime = value => { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('es-NI'); };
   let offset = 0, count = 0, rows = [], summary = { today: '0.00', total: '0.00', count: 0 }, requestId = 0, busy = false;
   const filteredRows = () => {
@@ -25,7 +25,7 @@
     const body = el('gastosTableBody');
     if (body) {
       const visibleRows = filteredRows();
-      const pageRows = visibleRows.slice(offset, offset + 100);
+      const pageRows = visibleRows;
       body.innerHTML = pageRows.length ? pageRows.map(item => {
         const voided = item.status === 'VOID';
         const stamp = new Date(item.createdAt);
@@ -50,10 +50,9 @@
 
   async function load(view = 'gastosView') {
     if (view !== 'gastosView') return true;
-    el('connectedExpenseControls')?.classList.remove('hidden');
     const current = ++requestId;
     try {
-      status('Cargando gastos conectados desde MySQL…');
+      status('Cargando gastos…');
       const result = await window.PosConnected.inventoryOperation(async client => {
         const first = await client.expenses(0);
         const expenses = [...first.expenses];
@@ -68,7 +67,8 @@
       summary = result.summary;
       offset = 0;
       render();
-      status('Gastos conectados guardados en MySQL. Los gastos en efectivo aparecen como salida en Caja.');
+      status('Gastos actualizados. Los pagos en efectivo aparecen en Caja.');
+      el('connectedExpenseStatus')?.classList.add('hidden');
       return true;
     } catch (failure) {
       if (current !== requestId) return false;
@@ -94,7 +94,7 @@
     try {
       await window.PosConnected.inventoryOperation(client => client.createExpense({ operationKey: window.crypto.randomUUID(), category, description, receiptReference, amount, paymentMethod }));
       el('formRegistrarGasto').reset();
-      status('Gasto registrado en MySQL.');
+      status('Gasto registrado.');
       await load('gastosView');
       document.dispatchEvent(new Event('connected:report-data-changed'));
     } catch (failure) {
@@ -109,7 +109,7 @@
     window.showAnularRegistro('Anular Gasto', `${expense.category} — ${expense.description} — Monto: ${money(expense.amount)}.`, async reason => {
       try {
         await window.PosConnected.inventoryOperation(client => client.cancelExpense(expense.id, { operationKey: window.crypto.randomUUID(), reason }));
-        status('Gasto anulado y auditado en MySQL.');
+        status('Gasto anulado.');
         await load('gastosView');
         document.dispatchEvent(new Event('connected:report-data-changed'));
       } catch (failure) {

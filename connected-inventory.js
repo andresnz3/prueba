@@ -141,7 +141,7 @@
       });
       if (purchaseContext) await window.PosPurchases?.productCreated(product);
       else publish(product);
-      window.detenerProdCamara(); closePanels(); showAlert('Producto guardado en MySQL.');
+      window.detenerProdCamara(); closePanels(); showAlert('Producto guardado.');
     });
   }
   async function toggle(id) {
@@ -149,7 +149,7 @@
       checkWrite(); const product = await detail(id);
       showConfirm('Deseas ' + (product.active ? 'inactivar' : 'activar') + ' ' + product.name + '? El historial se conserva.', () => run(async () => {
         checkWrite(); const updated = await window.PosConnected.inventoryOperation(async (api, business) => ensureBusiness(await api.updateProduct(id, { revision: product.revision, active: !product.active }), business));
-        publish(updated); showAlert('Estado actualizado en MySQL.');
+        publish(updated); showAlert('Estado actualizado.');
       }));
     });
   }
@@ -167,7 +167,7 @@
       checkWrite(); const id = el('ajusteProductoId').value;
       const data = { type: el('ajusteTipo').value === 'MERMA' ? 'WASTE' : 'ADJUSTMENT', quantity: el('ajusteCantidad').value, reason: el('ajusteMotivo').value.trim() };
       const product = await window.PosConnected.inventoryOperation(async (api, business) => ensureBusiness(await api.adjustProduct(id, data), business));
-      publish(product); closePanels(); showAlert('Movimiento guardado en MySQL.');
+      publish(product); closePanels(); showAlert('Movimiento guardado.');
     });
   }
   async function kardex(id) {

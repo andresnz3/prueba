@@ -12,7 +12,7 @@
   el('businessLoginGroup').classList.remove('hidden');
   el('loginBusinessId').disabled = false; el('loginBusinessId').required = true;
   el('adminUsernameGroup').classList.remove('hidden'); el('grantAdminUsername').disabled = false; el('grantAdminUsername').required = true;
-  el('modeDescription').textContent = 'Acceso verificado. Inventario, ventas, caja, gastos, proveedores, compras y cuentas por pagar usan MySQL.';
+  el('modeDescription').textContent = 'Acceso verificado. Este modo necesita conexión a internet.';
   const api = new window.PosApiClient(window.POS_API_BASE_URL);
   const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'reports', configView: 'settings' };
   let identity = null, boundBusiness = null, activeView = null, grant = null, pendingView = null;
@@ -55,12 +55,10 @@
     await initApp(); assertGeneration(version);
     if (Date.parse(value.expiresAt) <= Date.now()) throw new window.PosApiError('INVALID_SESSION', 401);
     el('sellerName').textContent = identity.fullName;
-    document.querySelector('.seller-info span').textContent = 'Sesión verificada · inventario MySQL';
+    document.querySelector('.seller-info span').textContent = 'Sesión conectada';
     el('roleBadge').textContent = identity.role === 'ADMIN' ? 'Administrador' : 'Usuario';
     el('businessContext').textContent = 'Conectado · Negocio ' + identity.businessId;
     el('businessContext').classList.remove('hidden');
-    el('connectedNotice').textContent = 'Ventas, inventario, caja, gastos, clientes, proveedores, compras y cuentas por cobrar y pagar usan MySQL. Requiere conexión; no hay sincronización offline.';
-    el('connectedNotice').classList.remove('hidden');
     el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN'); el('renewSessionBtn').classList.remove('hidden');
     el('loginBusinessId').value = identity.businessId; el('loginBusinessId').disabled = true;
     el('loginError').classList.add('hidden');

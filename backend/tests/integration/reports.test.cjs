@@ -82,7 +82,7 @@ test('Integración MySQL reportes conectados de solo lectura', async t => {
     assert.equal(report.sales.total, '35.00'); assert.equal(report.sales.cost, '10.00'); assert.equal(report.sales.grossProfit, '25.00'); assert.equal(report.sales.netProfit, '20.00'); assert.equal(report.expenses.total, '5.00'); assert.equal(report.expenses.count, 1); assert.deepEqual(report.expenses.byCategory.map(row => [row.category, row.count, row.total]), [['Servicios Básicos', 1, '5.00']]); assert.equal(report.expenses.history[0].description, 'Internet del local'); assert.equal(report.sales.count, 2); assert.equal(report.sales.historyCount, 3);
     assert.deepEqual(report.sales.paymentMethods.map(row => [row.method, row.count, row.total]), [['CARD', 1, '15.00'], ['CREDIT', 1, '20.00']]);
     assert.equal(report.sales.sellers[0].seller, 'Reportes Admin'); assert.equal(report.sales.sellers[0].total, '35.00');
-    assert.deepEqual(report.sales.topProducts.map(row => [row.name, row.quantity, row.total]), [['Producto de reportes', 5, '35.00']]);
+    assert.deepEqual(report.sales.topProducts.map(row => [row.name, row.quantity, row.total]), [['Producto de reportes', 5, '35.00']]); assert.equal(report.sales.unitsSold, 5);
     assert.deepEqual(report.sales.history.map(row => row.invoiceNumber).sort(), ['900001', '900002', '900003']);
     assert.equal(report.cash.closures.length, 1); assert.equal(report.cash.closures[0].difference, '-1.00');
     assert.equal(report.cash.movements.length, 6); assert.ok(report.cash.movements.some(row => row.paymentMethod === 'CARD' && row.status === 'PENDING'));

@@ -3,6 +3,7 @@
 (() => {
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
+  document.querySelectorAll('#reportesView .local-report-only').forEach(node => node.classList.remove('hidden'));
   const money = value => 'C$' + Number(value || 0).toFixed(2);
   const purchaseReference = row => (row.purchaseNumber || row.invoiceNumber || '—') + (row.supplierInvoiceNumber ? ' · Factura proveedor ' + row.supplierInvoiceNumber : '');
   const normalizeDate = value => {
@@ -86,10 +87,10 @@
   function render(data) {
     if (!data) { renderPending(); return; }
     report = data;
-    el('connectedReportScope')?.classList.remove('hidden');
+    el('connectedReportScope')?.classList.add('hidden');
     el('repGastosPending')?.classList.add('hidden');
-    for (const node of document.querySelectorAll('#reportesView .connected-report-only')) node.classList.remove('hidden');
-    const labels = { repCompras: 'Compras del período', repCxP: 'Cuentas por Pagar · saldo actual' };
+    for (const node of document.querySelectorAll('#reportesView .connected-report-only')) node.classList.add('hidden');
+    const labels = { repCompras: 'Compras' };
     for (const [id, label] of Object.entries(labels)) {
       const card = el(id)?.closest('.summary-card');
       if (!card) continue;
@@ -98,7 +99,7 @@
       else setText(id, money(data.payables.balance));
     }
     const debtCard = el('repCxC')?.closest('.summary-card')?.querySelector('span');
-    if (debtCard) debtCard.textContent = 'Cuentas por Cobrar · saldo actual';
+    if (debtCard) debtCard.textContent = 'Cuentas por Cobrar';
     setText('connectedInventorySummary', `${data.inventory.activeProducts} productos activos · ${Number(data.inventory.stockUnits).toFixed(3)} unidades · ${data.inventory.lowStock} con stock bajo · ${data.inventory.outOfStock} agotados · valor al costo ${money(data.inventory.stockCostValue)}.`);
     setText('connectedReceivablesSummary', `${data.receivables.indebtedClients} clientes con saldo · vencido ${money(data.receivables.overdue)}.`);
     setText('repVentas', money(data.sales.total));
@@ -106,8 +107,14 @@
     setText('repGananciaBruta', money(data.sales.grossProfit));
     setText('repCxC', money(data.receivables.balance));
     setText('repCompras', money(data.purchases.total)); setText('repGastos', money(data.expenses.total)); setText('repUtilidad', money(data.sales.netProfit)); setText('repCxP', money(data.payables.balance));
-    const netLabel = el('repUtilidad')?.closest('.summary-card')?.querySelector('span');
-    if (netLabel) netLabel.textContent = 'Utilidad neta';
+    const supplierBalances = new Map();
+    for (const invoice of data.payables.invoices) {
+      const key = String(invoice.supplierId);
+      const supplier = supplierBalances.get(key) || { name: invoice.supplierName, balance: 0 };
+      supplier.balance += Number(invoice.balance || 0);
+      supplierBalances.set(key, supplier);
+    }
+    setRows('repCxPBody', 2, [...supplierBalances.values()].filter(row => row.balance > 0), row => `<tr><td><strong>${esc(row.name)}</strong></td><td>${money(row.balance)}</td></tr>`, 'No hay cuentas por pagar.');
     setRows('repVentasMetodoBody', 3, data.sales.paymentMethods, row => `<tr><td>${esc(paymentLabel(row.method))}</td><td>${row.count}</td><td>${money(row.total)}</td></tr>`, 'Sin ventas para el período seleccionado.');
     setRows('repTopProductosBody', 3, data.sales.topProducts, row => `<tr><td>${esc(row.name)}</td><td>${Number(row.quantity).toFixed(3)}</td><td>${money(row.total)}</td></tr>`, 'Sin productos vendidos en el período seleccionado.');
     setRows('repVendedoresBody', 7, data.sales.sellers, row => `<tr><td><strong>${esc(row.seller)}</strong></td><td>${row.count}</td><td>${money(row.cash)}</td><td>${money(row.card)}</td><td>${money(row.transfer)}</td><td>${money(row.credit)}</td><td>${money(row.total)}</td></tr>`, 'Sin ventas para el período seleccionado.');
@@ -125,7 +132,7 @@
     setRows('repKardexBody', 8, data.inventory.movements, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.type)}</td><td>${esc(row.productName)}</td><td>${Number(row.quantity).toFixed(3)}</td><td>${row.stockAfter === null ? '—' : Number(row.stockAfter).toFixed(3)}</td><td>${row.unitCost === null ? '—' : money(row.unitCost)}</td><td>${esc(row.userName)}</td><td>${esc(row.reason)}</td></tr>`, 'Sin movimientos de inventario para el período seleccionado.');
     setRows('repGastosCategoriaBody', 3, data.expenses.byCategory, row => `<tr><td>${esc(row.category)}</td><td>${row.count}</td><td>${money(row.total)}</td></tr>`, 'Sin gastos para el período seleccionado.');
     setRows('repGastosHistoryBody', 8, data.expenses.history, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.category)}</td><td>${esc(row.description)}</td><td>${esc(row.receiptReference || '—')}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td><td>${esc(row.userName)}</td></tr>`, 'Sin gastos para el período seleccionado.');
-    setText('connectedReportPayablesSummary', `${data.payables.invoices.length} facturas · saldo actual ${money(data.payables.balance)} · pagos por confirmar ${money(data.payables.pendingPayments)}.`);
+    setText('connectedReportPayablesSummary', `${data.payables.invoices.length} facturas · deuda actual por pagar: ${money(data.payables.balance)} · pagos pendientes de confirmar: ${money(data.payables.pendingPayments)}.`);
     setRows('repConnectedCxPBody', 8, data.payables.invoices, row => `<tr><td>${esc(purchaseReference(row))}</td><td>${esc(row.supplierName)}</td><td data-table-date="${rowDate(row.createdAt)}">${esc(dateTime(row.createdAt))}</td><td>${esc(row.dueAt ? new Date(row.dueAt).toLocaleDateString('es-NI') : '—')}</td><td>${money(row.total)}</td><td>${money(row.paid)}</td><td>${money(row.balance)}</td><td>${esc(statusLabel(row.status))}</td></tr>`, 'No hay cuentas por pagar pendientes.');
     const details = [];
     if (data.sales.historyLimited) details.push('El detalle de ventas muestra las 1,000 filas más recientes; el total del período considera todos los registros.');
@@ -152,7 +159,7 @@
       const selected = range();
       const rangeLabel = el('reporteRangoLabel');
       if (rangeLabel) rangeLabel.textContent = labelRange(selected.fromValue, selected.untilValue);
-      if (status) { status.textContent = 'Cargando reportes conectados…'; status.classList.remove('hidden'); }
+      if (status) { status.textContent = 'Cargando reportes…'; status.classList.remove('hidden'); }
       const data = await window.PosConnected.inventoryOperation(client => client.connectedReport(selected.from, selected.until));
       if (current !== requestId) return false;
       render(data);
@@ -164,9 +171,16 @@
       return false;
     }
   }
-  function exportExcel() {
+  function exportExcel(scope = 'all') {
     if (!report) { window.showAlert?.('Espera a que termine de cargar el reporte conectado para exportar.'); return false; }
     const rows = report;
+    const scopedSheets = scope === 'sales' ? [
+      { name: 'Ventas por método', rows: [['Método', '# Ventas', 'Total'], ...rows.sales.paymentMethods.map(row => [paymentLabel(row.method), Number(row.count), Number(row.total)])] },
+      { name: 'Productos más vendidos', rows: [['Producto', 'Cantidad vendida', 'Total generado'], ...rows.sales.topProducts.map(row => [row.name, Number(row.quantity), Number(row.total)])] }
+    ] : scope === 'sellers' ? [
+      { name: 'Vendedores', rows: [['Vendedor', '# Ventas', 'Efectivo', 'Tarjeta', 'Transferencia', 'Crédito', 'Total'], ...rows.sales.sellers.map(row => [row.seller, Number(row.count), Number(row.cash), Number(row.card), Number(row.transfer), Number(row.credit), Number(row.total)])] }
+    ] : null;
+    if (scopedSheets) return Boolean(window.PosTables?.exportWorkbookToXlsx(scopedSheets, { fileName: scope === 'sales' ? 'ventas_conectadas' : 'vendedores_conectados' }));
     const sheets = [
       { name: 'Resumen', rows: [['Indicador', 'Valor'], ['Ventas', Number(rows.sales.total)], ['Costo vendido', Number(rows.sales.cost)], ['Utilidad bruta', Number(rows.sales.grossProfit)], ['Gastos', Number(rows.expenses.total)], ['Utilidad neta', Number(rows.sales.netProfit)], ['Compras del período', Number(rows.purchases.total)], ['Cuentas por pagar actuales', Number(rows.payables.balance)], ['Cuentas por cobrar', Number(rows.receivables.balance)], ['Entradas de caja', Number(rows.cash.periodIn)], ['Salidas de caja', Number(rows.cash.periodOut)], ['Inventario a costo', Number(rows.inventory.stockCostValue)]] },
       { name: 'Ventas', rows: [['Fecha', 'Factura', 'Vendedor', 'Medio', 'Total', 'Estado'], ...rows.sales.history.map(row => [dateTime(row.createdAt), row.invoiceNumber, row.seller, paymentLabel(row.paymentMethod), Number(row.total), statusLabel(row.status)])] },
@@ -188,5 +202,9 @@
     report = null;
     if (!el('reportesView')?.classList.contains('hidden')) load();
   });
+  const exportSalesButton = el('exportReportsSalesBtn');
+  if (exportSalesButton) exportSalesButton.onclick = event => { event.preventDefault(); exportExcel('sales'); };
+  const exportSellersButton = el('exportReportsSellersBtn');
+  if (exportSellersButton) exportSellersButton.onclick = event => { event.preventDefault(); exportExcel('sellers'); };
   window.PosReports = Object.freeze({ load, render: () => render(report), exportExcel });
 })();

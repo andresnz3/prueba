@@ -3,7 +3,7 @@
 (() => {
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
-  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map();
+  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0;
   const state = () => window.PosRuntime.salesInput();
   const scope = () => { const s = state(); return 'posOperation_' + encodeURIComponent(window.POS_API_BASE_URL) + '_' + s.businessId + '_' + s.userId; };
   function pending() {
@@ -29,6 +29,79 @@
   function mappedSale(sale) {
     const credit = sale.paymentMethod === 'CREDIT';
     return { id: sale.id, businessId: sale.businessId, numero: sale.invoiceNumber, vendedor: sale.seller, fecha: new Date(sale.createdAt).toLocaleString(), fechaTS: Date.parse(sale.createdAt), detalle: sale.detail || '-', metodo: credit ? 'Crédito' : 'Contado', medioPago: sale.paymentMethod.toLowerCase(), cliente: credit ? sale.clientName : '-', clienteId: sale.clientId, vencimiento: sale.dueAt ? new Date(sale.dueAt).toLocaleDateString() : null, vencimientoTS: sale.dueAt ? Date.parse(sale.dueAt) : null, saldoPendiente: credit && sale.status === 'COMPLETED' ? Number(sale.total) : 0, tarifa: sale.priceType === 'RETAIL' ? 'Menudeo' : 'Mayoreo', subtotal: Number(sale.subtotal), descuentoPct: Number(sale.discountPercent), descuentoMonto: Number(sale.discount), total: Number(sale.total), anulada: sale.status === 'CANCELLED', motivoAnulacion: sale.cancelReason, conectado: true, estadoCaja: sale.cashStatus === 'PENDING' ? 'pendiente' : sale.cashStatus === 'CONFIRMED' ? 'confirmado' : 'no_aplica', cajaSessionId: sale.cashSessionId, items: sale.items.map(item => ({ id: item.productId, name: item.name, barcode: item.barcode, cantidad: Number(item.quantity), connectedSubtotal: Number(item.subtotal), retailPrice: Number(item.unitPrice), wholesalePrice: Number(item.unitPrice) })) };
+  }
+  const historyMoney = value => 'C$' + Number(value || 0).toFixed(2);
+  function historyBound(day, exclusive = false) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ''));
+    if (!match) return null;
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    if (exclusive) date.setDate(date.getDate() + 1);
+    return date.toISOString();
+  }
+  function setHistoryStatus(message = '') {
+    const status = el('connectedHistoryStatus');
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle('hidden', !message);
+  }
+  function renderHistoryList(id, entries, emptyText, renderEntry) {
+    const list = el(id);
+    if (!list) return;
+    list.replaceChildren();
+    const values = entries.length ? entries.map(renderEntry) : [emptyText];
+    for (const value of values) {
+      const item = document.createElement('li');
+      item.textContent = value;
+      list.append(item);
+    }
+  }
+  function markHistorySummaryLoading() {
+    for (const id of ['summaryTodaySales', 'summaryTotalSales', 'summaryCashSales', 'summaryCardSales', 'summaryTransferSales', 'summaryCreditSales', 'summaryTotalExpenses']) {
+      const node = el(id); if (node) node.textContent = 'Cargando…';
+    }
+  }
+  async function refreshHistorySummary(sales = historySales) {
+    const request = ++historySummaryRequest;
+    const range = window.PosPeriodFilters?.range('history') || { from: '', until: '' };
+    if (range.error) { setHistoryStatus(range.error); return; }
+    setHistoryStatus('Actualizando indicadores conectados…');
+    try {
+      const report = await api(client => client.connectedReport(historyBound(range.from), historyBound(range.until, true)));
+      if (request !== historySummaryRequest) return;
+      const now = new Date();
+      const todayTotal = sales.reduce((sum, sale) => {
+        const date = new Date(sale.fechaTS);
+        return !sale.anulada && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate() ? sum + Number(sale.total || 0) : sum;
+      }, 0);
+      const methods = new Map(report.sales.paymentMethods.map(row => [row.method, Number(row.total)]));
+      const totals = {
+        summaryTodaySales: todayTotal,
+        summaryTotalSales: report.sales.total,
+        summaryCashSales: methods.get('CASH') || 0,
+        summaryCardSales: methods.get('CARD') || 0,
+        summaryTransferSales: methods.get('TRANSFER') || 0,
+        summaryCreditSales: methods.get('CREDIT') || 0,
+        summaryTotalExpenses: Number(report.expenses.total) + Number(report.purchases.total)
+      };
+      for (const [id, value] of Object.entries(totals)) { const node = el(id); if (node) node.textContent = historyMoney(value); }
+      const lowStock = report.inventory.products.filter(product => product.status === 'Bajo stock' || product.status === 'Agotado');
+      renderHistoryList('lowStockList', lowStock, 'Sin alertas.', product => `${product.name}: ${product.stock} uds.`);
+      renderHistoryList('topSellingList', report.sales.topProducts.slice(0, 5), 'Sin datos.', product => `${product.name}: ${Number(product.quantity)} uds.`);
+      setHistoryStatus('');
+    } catch (error) {
+      if (request !== historySummaryRequest) return;
+      for (const id of ['summaryTodaySales', 'summaryTotalSales', 'summaryCashSales', 'summaryCardSales', 'summaryTransferSales', 'summaryCreditSales', 'summaryTotalExpenses']) { const node = el(id); if (node) node.textContent = '—'; }
+      renderHistoryList('lowStockList', [], 'No disponible sin autorización de Reportes.', value => value);
+      renderHistoryList('topSellingList', [], 'No disponible sin autorización de Reportes.', value => value);
+      setHistoryStatus(error.code === 'MODULE_FORBIDDEN' ? 'Los indicadores requieren autorización para Reportes. El historial de ventas sigue disponible.' : error.message || 'No se pudieron cargar los indicadores conectados.');
+      if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
+    }
+  }
+  async function loadHistory() {
+    const rows = (await pages('sales')).map(mappedSale).reverse();
+    historySales = rows;
+    window.PosRuntime.setSales(rows);
+    await refreshHistorySummary(rows);
   }
   async function refreshNextInvoiceNumber() {
     nextInvoiceNumber = await api(client => client.nextInvoiceNumber());
@@ -66,9 +139,9 @@
       } else {
         el('anularVentaModal').classList.add('hidden');
         const notice = result.sale.paymentMethod === 'CASH'
-          ? result.refundCashSessionId ? `Venta anulada en MySQL. La devolución se registró en la caja #${result.refundCashSessionId}; la caja original #${result.sale.cashSessionId} conserva su cierre.` : 'Venta anulada en MySQL. No había importe en efectivo que devolver.'
-          : result.sale.paymentMethod === 'CREDIT' ? 'Venta a crédito anulada en MySQL. El saldo y el inventario fueron revertidos.'
-          : 'Venta anulada en MySQL. Stock repuesto. La devolución por tarjeta o transferencia debe realizarse por el mismo medio fuera del POS.';
+          ? result.refundCashSessionId ? `Venta anulada. La devolución se registró en la caja #${result.refundCashSessionId}; la caja original #${result.sale.cashSessionId} conserva su cierre.` : 'Venta anulada. No había efectivo que devolver.'
+          : result.sale.paymentMethod === 'CREDIT' ? 'Venta a crédito anulada. El saldo y el inventario fueron revertidos.'
+          : 'Venta anulada. Stock repuesto. La devolución por tarjeta o transferencia debe realizarse fuera del POS por el mismo medio.';
         showAlert(notice);
       }
       try { await window.PosInventory.load('salesView'); } catch (error) { if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else showAlert('La operación está confirmada. No se pudo actualizar el catálogo; vuelve a Ventas para consultarlo.'); }
@@ -82,7 +155,7 @@
     }
     if (result.cash) el('cierreCajaModal').classList.add('hidden');
     if (window.PosConnected.canManageModule('cajaView')) await load('cajaView');
-    if (result.cash) showAlert(result.kind === 'OPEN_CASH' ? 'Caja abierta en MySQL.' : 'Caja cerrada en MySQL.');
+    if (result.cash) showAlert(result.kind === 'OPEN_CASH' ? 'Caja abierta.' : 'Caja cerrada.');
     if (result.sale || result.payment || result.cash || result.order) document.dispatchEvent(new Event('connected:report-data-changed'));
   }
   const uncertain = error => error.status >= 500 || ['NETWORK_ERROR', 'INVALID_RESPONSE', 'STALE_REQUEST', 'INVALID_SESSION'].includes(error.code);
@@ -129,11 +202,16 @@
   function renderCheckoutItems(items) {
     const container = el('connectedCheckoutItems'); container.replaceChildren();
     for (const item of items) {
-      const row = document.createElement('p'), description = document.createElement('span'), amount = document.createElement('strong');
+      const row = document.createElement('div'), description = document.createElement('span'), subtotal = document.createElement('span'), label = document.createElement('small'), amount = document.createElement('strong');
       row.className = 'checkout-item'; row.setAttribute('role', 'listitem');
-      description.textContent = item.name + ' × ' + Number(item.quantity); amount.textContent = 'C$' + item.total;
-      row.append(description, amount); container.append(row);
+      description.className = 'checkout-item-description'; description.textContent = item.name + ' × ' + Number(item.quantity);
+      subtotal.className = 'checkout-item-subtotal'; label.textContent = 'Subtotal'; amount.textContent = 'C$' + item.total;
+      subtotal.append(label, amount); row.append(description, subtotal); container.append(row);
     }
+  }
+  async function viewInvoice(id) {
+    const sale = await api(client => client.sale(id));
+    generarVisualizacionTicket(mappedSale(sale), Number(sale.cashReceived || sale.total), Number(sale.changeAmount || 0), false);
   }
   function updateCashChangePreview() {
     const preview = el('connectedCashChangePreview'), input = el('connectedCashReceived');
@@ -160,7 +238,7 @@
       el('connectedCheckoutTotal').textContent = 'C$' + quote.total;
       const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : quote.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Crédito';
       el('connectedCheckoutPaymentMethod').textContent = method;
-      el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · No genera movimiento de efectivo.' : method + ' · Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
+       el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · No genera movimiento de efectivo.' : 'Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
       renderCheckoutItems(quote.items);
 
       el('connectedOrderMethodGroup').classList.add('hidden'); el('connectedPriceChangeMessage').classList.add('hidden');
@@ -216,18 +294,18 @@
     let refreshed = false;
     try {
       quote = await api(client => client.quoteOrder(activeOrderId, el('connectedOrderPaymentMethod').value));
-      el('connectedCheckoutTitle').textContent = 'Cobrar orden #' + activeOrderId;
+      el('connectedCheckoutTitle').textContent = 'Cobrar orden';
       renderCheckoutItems(quote.items);
 
       el('connectedCheckoutTotal').textContent = 'C$' + quote.total;
       const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : quote.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Crédito';
       el('connectedCheckoutPaymentMethod').textContent = method;
-      el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · Sin ingreso de efectivo.' : method + ' · Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
+       el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · Sin ingreso de efectivo.' : 'Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
       const difference = Number(quote.priceDelta), priceMessage = el('connectedPriceChangeMessage');
       priceMessage.textContent = quote.priceChanged ? 'El precio cambió desde que se preparó la orden: estimado C$' + quote.estimatedTotal + '; precio vigente C$' + quote.total + ' (' + (difference > 0 ? '+' : '') + 'C$' + quote.priceDelta + '). Confirma este precio vigente para continuar.' : 'Precio vigente comprobado. Total estimado al preparar: C$' + quote.estimatedTotal + '.';
       priceMessage.classList.remove('hidden'); el('connectedOrderMethodGroup').classList.remove('hidden');
       el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; updateCashChangePreview(); window.PosValidation.clear(el('connectedCheckoutModal'));
-      el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : quote.paymentMethod === 'CASH' ? quote.priceChanged ? 'Confirmar precio y cobrar' : 'Cobrar orden' : quote.priceChanged ? 'Confirmar precio y continuar' : 'Confirmar orden';
+       el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : quote.priceChanged ? 'Confirmar precio y cobrar' : 'Cobrar orden';
       el('connectedCheckoutModal').classList.remove('hidden'); refreshed = true;
     } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { busy = false; el('confirmConnectedSaleBtn').disabled = false; if (refreshed) (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus(); }
@@ -278,20 +356,23 @@
     const collectionRows = payments => (payments || []).map(payment => ({ kind: 'collection', id: payment.id, date: payment.createdAt, reference: 'Abono factura #' + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta' : payment.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Efectivo', amount: payment.amount }));
     const renderOperationRows = (body, payments, orders, historical = false, additionalRows = []) => {
       if (!body) return;
-      const rows = [...additionalRows, ...paymentRows(payments), ...orderRows(orders)].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+       const pendingRows = [...paymentRows(payments), ...orderRows(orders)].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+       const historyRows = [...additionalRows].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+       const rows = [...pendingRows, ...historyRows];
       if (!rows.length) { fillEmpty(body, 7, historical ? 'Sin pendientes de sesiones anteriores.' : 'No hay pagos pendientes ni órdenes por cobrar.'); return; }
       body.replaceChildren();
       for (const item of rows) {
-        const row = document.createElement('tr');
+         const row = document.createElement('tr'); row.dataset.priority = item.kind === 'payment' || item.kind === 'order' ? '0' : '1';
         row.dataset.tableDate = window.PosTables.dateKey(item.date);
         for (const value of [new Date(item.date).toLocaleString(), item.reference, item.user, item.method, money(item.amount), item.kind === 'payment' ? 'Pendiente de confirmación' : (historical ? 'Pendiente histórico · sin factura' : 'Orden pendiente · sin factura ni descuento de inventario')]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
         if (item.kind === 'sale') row.cells[5].textContent = 'Venta registrada';
         if (item.kind === 'collection') row.cells[5].textContent = 'Cobro registrado';
-        const actions = document.createElement('td');
-        const addAction = (label, action, danger = false) => { const button = document.createElement('button'); button.type = 'button'; button.className = danger ? 'btn btn-sm btn-danger' : 'btn btn-sm btn-success'; button.textContent = label; button.dataset.action = action; button.dataset.id = item.id; actions.append(button); };
-        if (item.kind === 'payment') addAction('Confirmar recibido', 'confirm-payment');
-        else if (item.kind === 'order') { addAction('Detalle', 'order-detail'); addAction('Cobrar', 'charge-order'); addAction('Cancelar', 'cancel-order', true); }
-        row.append(actions); body.append(row);
+         const actions = document.createElement('td');
+         const actionGroup = document.createElement('div'); actionGroup.className = 'cash-operation-actions';
+         const addAction = (label, action, variant = 'success') => { const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-sm btn-' + variant; button.textContent = label; button.dataset.action = action; button.dataset.id = item.id; actionGroup.append(button); };
+         if (item.kind === 'payment') addAction('Confirmar recibido', 'confirm-payment');
+         else if (item.kind === 'order') { addAction('Detalle', 'order-detail', 'info'); addAction('Cobrar', 'charge-order', 'success'); addAction('Cancelar', 'cancel-order', 'danger'); }
+         actions.append(actionGroup); row.append(actions); body.append(row);
       }
     };
     const hasOpenSession = Boolean(overview.currentCashSessionId);
@@ -310,9 +391,10 @@
         const row = document.createElement('tr');
         row.dataset.tableDate = window.PosTables.dateKey(movement.createdAt);
         for (const value of [new Date(movement.createdAt).toLocaleString(), method || (movement.type === 'REVERSAL' ? 'Reversión' : movement.type), movement.description || '', money(movement.amount), movement.userName, status]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
-        const actionCell = document.createElement('td');
-        if (movement.status === 'PENDING' && ['CARD', 'TRANSFER'].includes(movement.paymentMethod)) { const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-sm btn-success'; button.textContent = 'Confirmar recibido'; button.dataset.action = 'confirm-payment'; button.dataset.id = movement.id; actionCell.append(button); }
-        row.append(actionCell); movementsBody.append(row);
+         const actionCell = document.createElement('td');
+         const actionGroup = document.createElement('div'); actionGroup.className = 'cash-operation-actions';
+         if (movement.status === 'PENDING' && ['CARD', 'TRANSFER'].includes(movement.paymentMethod)) { const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-sm btn-success'; button.textContent = 'Confirmar recibido'; button.dataset.action = 'confirm-payment'; button.dataset.id = movement.id; actionGroup.append(button); }
+         actionCell.append(actionGroup); row.append(actionCell); movementsBody.append(row);
       }
     }
   }
@@ -329,7 +411,7 @@
     }
     if (view === 'salesView') await window.PosClients.loadCreditClients();
     if (view === 'clientsView') await window.PosClients.load(view);
-    if (view === 'historyView') window.PosRuntime.setSales((await pages('sales')).map(mappedSale).reverse());
+    if (view === 'historyView') { markHistorySummaryLoading(); await loadHistory(); }
     if (view === 'cajaView') {
       const sessions = await pages('cashSessions');
       currentCash = sessions.find(value => value.status === 'OPEN') || null;
@@ -354,9 +436,15 @@
   for (const id of ['registrarEntradaBtn', 'registrarSalidaBtn']) { el(id).disabled = true; el(id).title = 'Movimientos manuales pendientes de integración'; }
   el('descuentoPct').step = '0.0001';
   el('confCurrency').disabled = true; el('confCurrency').title = 'Moneda conectada C$. Configuración monetaria por negocio pendiente.';
-  for (const id of ['summaryCreditSales', 'summaryTotalExpenses']) el(id).closest('.summary-card').classList.add('hidden');
-  el('historyView').querySelector('h1').textContent = 'Historial de ventas MySQL';
+  document.addEventListener('pos:period-changed', event => {
+    if (event.detail?.id === 'history' && !el('historyView').classList.contains('hidden')) refreshHistorySummary();
+  });
+  document.addEventListener('connected:report-data-changed', () => {
+    if (!el('historyView').classList.contains('hidden')) loadHistory().catch(error => setHistoryStatus(error.message || 'No se pudo actualizar el historial conectado.'));
+  });
   const auditTable = el('auditTableBody').closest('.history-table-container'); auditTable.previousElementSibling.classList.add('hidden'); auditTable.classList.add('hidden');
+  const hideAuditTableTools = () => { const toolbar = auditTable.previousElementSibling; if (toolbar?.classList.contains('data-table-toolbar')) toolbar.classList.add('hidden'); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hideAuditTableTools, { once: true }); else hideAuditTableTools();
   el('currentSaleNumber').textContent = '—';
   el('confirmConnectedSaleBtn').addEventListener('click', confirm); el('recoverSaleBtn').addEventListener('click', recover);
   el('connectedOrderPaymentMethod').addEventListener('change', refreshOrderQuote);
@@ -386,5 +474,5 @@
     finally { button.disabled = false; }
   });
   window.addEventListener('storage', event => { if (event.key === activeScope) showPending(); });
-  window.PosSales = Object.freeze({ checkout, confirm, cancel, openCash, closeCash, closeDialog, load, renderCash, payReceivable: (id, data) => perform('CUSTOMER_PAYMENT', data, (client, input) => client.payReceivable(id, input)) });
+  window.PosSales = Object.freeze({ checkout, confirm, cancel, openCash, closeCash, closeDialog, load, renderCash, viewInvoice, payReceivable: (id, data) => perform('CUSTOMER_PAYMENT', data, (client, input) => client.payReceivable(id, input)) });
 })();

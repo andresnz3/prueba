@@ -281,7 +281,7 @@ let ultimoEscaneo = 0, camaraVentasBusy = false, reporteHastaManual = false;
 
 function blockPendingConnected() {
     if (!connectedMode) return false;
-    showAlert('Operacion pendiente de integrar con MySQL. En modo conectado no se guardan ventas, compras, caja, cobros ni gastos en Dexie.');
+    showAlert('Esta operación requiere conexión a internet. Vuelve a intentarlo cuando estés conectado.');
     return true;
 }
 function stockReal(item) {
@@ -684,8 +684,8 @@ function dashboardRows(bodyId, headings, rows) {
 let dashboardLocalExportSheets = null;
 function renderDashboard() {
     const localContent = document.getElementById("dashboardLocalContent"), connectedContent = document.getElementById("dashboardConnectedContent");
-    localContent?.classList.toggle("hidden", connectedMode);
-    connectedContent?.classList.toggle("hidden", !connectedMode);
+    localContent?.classList.remove("hidden");
+    connectedContent?.classList.add("hidden");
     if (connectedMode) return;
     const range = window.PosDashboardPeriod?.range() || { from: "", until: "" };
     if (range.error) return;
@@ -1198,7 +1198,9 @@ function actualizarTablaHistorial() {
         });
     }
     const setTotal = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = `${sysConfig.currency}${r2(value).toFixed(2)}`; };
-    setTotal("summaryTodaySales", tV); setTotal("summaryTotalSales", periodV); setTotal("summaryCashSales", cV); setTotal("summaryCardSales", cardV); setTotal("summaryTransferSales", transferV); setTotal("summaryCreditSales", crV); setTotal("summaryTotalExpenses", tG);
+    if (!connectedMode) {
+        setTotal("summaryTodaySales", tV); setTotal("summaryTotalSales", periodV); setTotal("summaryCashSales", cV); setTotal("summaryCardSales", cardV); setTotal("summaryTransferSales", transferV); setTotal("summaryCreditSales", crV); setTotal("summaryTotalExpenses", tG);
+    }
 
     const minGlobal = sysConfig.minStock || 5;
     const bajos = products.filter(p => !p.deleted && p.active !== false && (p.stock || 0) <= (p.minStock ?? minGlobal));
@@ -1444,6 +1446,7 @@ document.getElementById("clientForm")?.addEventListener("submit", async (e) => {
 });
 
 function actualizarTablaClientes() { 
+    if (connectedMode) return;
     const tb = document.getElementById("clientsTableBody"); if(!tb) return; const hoyTS = Date.now(); 
     tb.innerHTML = clients.map(c => {
         const disponible = (c.creditLimit||0) - (c.debt||0); const facturasCliente = salesHistory.filter(s => s.cliente === c.name && s.metodo === "Crédito" && !s.anulada); const tieneVencido = facturasCliente.some(s => s.vencimientoTS && s.vencimientoTS < hoyTS && (c.debt||0) > 0); 
@@ -2322,13 +2325,13 @@ function renderCajaCentral() {
                 : suppliers.find(supplier => String(supplier.id) === String(abono.referenciaId));
             return { type: isClientPayment ? "Cobro" : "Pago a proveedor", reference: invoice ? `Factura ${isClientPayment ? `#${invoice.numero}` : invoice.factura}` : account?.name || "Sin referencia", date: new Date(abono.fechaTS || abono.id).toLocaleString(), ts: abono.fechaTS || abono.id, user: abono.usuario, method: abono.metodoPago || "No indicado", amount: abono.monto, status: abono.estado || "registrado", id: abono.id, kind: "abono" };
         })
-    ].sort((a, b) => Number(b.ts) - Number(a.ts));
+    ].sort((a, b) => Number(b.status === "pendiente") - Number(a.status === "pendiente") || Number(b.ts) - Number(a.ts));
     const operationBody = document.getElementById("cajaOperacionesBody");
     if (operationBody) operationBody.innerHTML = operations.length ? operations.map(operation => {
         const pending = operation.status === "pendiente";
-        const action = pending && isAdmin('cajaView') ? `<button class="btn btn-sm btn-success" onclick="window.${operation.kind === "sale" ? "confirmarVentaCaja" : "confirmarAbonoCaja"}('${escapeHtml(operation.id)}')">Confirmar</button>` : "-";
+        const action = pending && isAdmin('cajaView') ? `<div class="cash-operation-actions"><button class="btn btn-sm btn-success" onclick="window.${operation.kind === "sale" ? "confirmarVentaCaja" : "confirmarAbonoCaja"}('${escapeHtml(operation.id)}')">Confirmar</button></div>` : "";
         const status = pending ? "Pendiente" : operation.status === "confirmado" ? "Confirmado" : "Registrado";
-        return `<tr data-table-date="${tableDate(operation.ts || operation.date)}"><td>${escapeHtml(operation.date)}</td><td>${operation.type}<br><small>${escapeHtml(operation.reference)}</small></td><td>${escapeHtml(operation.user)}</td><td>${escapeHtml(operation.method)}</td><td>${money(operation.amount)}</td><td>${status}</td><td>${action}</td></tr>`;
+        return `<tr data-priority="${pending ? '0' : '1'}" data-table-date="${tableDate(operation.ts || operation.date)}"><td>${escapeHtml(operation.date)}</td><td>${operation.type}<br><small>${escapeHtml(operation.reference)}</small></td><td>${escapeHtml(operation.user)}</td><td>${escapeHtml(operation.method)}</td><td>${money(operation.amount)}</td><td>${status}</td><td>${action}</td></tr>`;
     }).join("") : `<tr><td colspan="7" class="text-center">Sin operaciones por revisar.</td></tr>`;
 
     const movementBody = document.getElementById("cajaMovimientosBody");
@@ -2344,7 +2347,7 @@ function renderCajaCentral() {
         const confirmButton = !movement.anulado && movement.estado === "pendiente" && isAdmin('cajaView') ? `<button class="btn btn-sm btn-success" onclick="window.confirmarMovimientoCaja('${session.id}', ${index})">Confirmar</button>` : "";
         const correctButton = !movement.saleId && !movement.anulado && movement.tipo === "entrada" && isAdmin('cajaView') ? `<button class="btn btn-sm btn-warning" onclick="window.abrirCorreccionCaja('${session.id}', ${index})">Corregir</button>` : "";
         const cancelButton = !movement.saleId && !movement.anulado && isAdmin('cajaView') ? `<button class="btn btn-sm btn-danger" onclick="window.anularMovimientoCaja(${index}, '${session.id}')">Anular</button>` : "";
-        return `<tr style="${movement.anulado ? "background-color:#fdf5f5;color:#888;" : ""}"><td>${escapeHtml(movement.fecha)}</td><td>${movement.tipo === "venta" ? mediosPagoVenta[movement.medioPago] || "Venta" : movement.tipo === "entrada" ? "Entrada" : "Salida"}</td><td>${escapeHtml(movement.concepto)}${correctionDetails ? `<br>${correctionDetails}` : ""}</td><td style="font-weight:bold;">${value}${movement.montoOriginal !== undefined ? `<br><small>Original: ${money(movement.montoOriginal)}</small>` : ""}</td><td>${escapeHtml(movement.usuario)}</td><td>${status}${movement.estadoCorreccion ? `<br>Corrección ${escapeHtml(movement.estadoCorreccion)}` : ""}</td><td>${confirmButton} ${correctButton} ${cancelButton}</td></tr>`;
+        return `<tr style="${movement.anulado ? "background-color:#fdf5f5;color:#888;" : ""}"><td>${escapeHtml(movement.fecha)}</td><td>${movement.tipo === "venta" ? mediosPagoVenta[movement.medioPago] || "Venta" : movement.tipo === "entrada" ? "Entrada" : "Salida"}</td><td>${escapeHtml(movement.concepto)}${correctionDetails ? `<br>${correctionDetails}` : ""}</td><td style="font-weight:bold;">${value}${movement.montoOriginal !== undefined ? `<br><small>Original: ${money(movement.montoOriginal)}</small>` : ""}</td><td>${escapeHtml(movement.usuario)}</td><td>${status}${movement.estadoCorreccion ? `<br>Corrección ${escapeHtml(movement.estadoCorreccion)}` : ""}</td><td><div class="cash-operation-actions">${confirmButton} ${correctButton} ${cancelButton}</div></td></tr>`;
     }).join("") : `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`;
 }
 

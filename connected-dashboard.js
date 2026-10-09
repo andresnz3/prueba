@@ -41,30 +41,54 @@
   function render(data) {
     currentData = data;
     const status = el('connectedDashboardStatus');
-    if (status) status.textContent = 'Datos actuales de MySQL. Ventas, compras, gastos, pagos a proveedores y caja usan el período elegido; inventario y saldos muestran el estado actual.';
+    if (status) status.textContent = 'El período filtra ventas, compras, gastos, abonos y movimientos de caja. El inventario y los saldos de CxC/CxP son actuales.';
     const saleCount = Number(data.sales.count || 0);
     setText('connectedDashSalesTotal', money(data.sales.total));
     setText('connectedDashSalesCount', String(saleCount));
     setText('connectedDashTicketAverage', money(saleCount ? Number(data.sales.total) / saleCount : 0));
+    setText('connectedDashProfitSales', money(data.sales.total));
     setText('connectedDashSalesCost', money(data.sales.cost));
     setText('connectedDashGrossProfit', money(data.sales.grossProfit));
     setText('connectedDashExpenseTotal', money(data.expenses.total));
+    setText('connectedDashExpenseCard', money(data.expenses.total));
     setText('connectedDashNetProfit', money(data.sales.netProfit));
     setText('connectedDashCashIn', money(data.cash.periodIn));
     setText('connectedDashCashOut', money(data.cash.periodOut));
     setText('connectedDashCashExpected', data.cash.currentExpected === null ? 'Sin caja abierta' : money(data.cash.currentExpected));
+    setText('connectedDashUnitsSold', `${Number(data.sales.unitsSold || 0).toLocaleString('es-NI', { maximumFractionDigits: 3 })} uds.`);
+    setText('connectedDashLowStock', String(data.inventory.lowStock || 0));
     setText('connectedDashActiveProducts', String(data.inventory.activeProducts));
     setText('connectedDashStockValue', money(data.inventory.stockCostValue));
     setText('connectedDashReceivableBalance', money(data.receivables.balance));
     setText('connectedDashReceivableOverdue', money(data.receivables.overdue));
     const postedPayments = data.receivables.payments.filter(payment => payment.status === 'POSTED');
+    setText('dashGananciaVentas', money(data.sales.total));
+    setText('dashGananciaCosto', money(data.sales.cost));
+    setText('dashGananciaBruta', money(data.sales.grossProfit));
+    setText('dashGananciaGastos', money(data.expenses.total));
+    setText('dashGananciaEstimada', money(data.sales.netProfit));
+    setText('dashVentasPeriodo', money(data.sales.total));
+    setText('dashCantidadVentas', String(saleCount));
+    setText('dashTicketPromedio', money(saleCount ? Number(data.sales.total) / saleCount : 0));
+    setText('dashComprasPeriodo', money(data.purchases.total));
+    setText('dashProdsVendidos', `${Number(data.sales.unitsSold || 0).toLocaleString('es-NI', { maximumFractionDigits: 3 })} uds.`);
+    setText('dashBajoStock', String(data.inventory.lowStock || 0));
+    setText('dashProductosActivos', String(data.inventory.activeProducts));
+    setText('dashValorInventario', money(data.inventory.stockCostValue));
+    setText('dashCxC', money(data.receivables.balance));
+    setText('dashCxP', money(data.payables.balance));
+    setText('dashGastos', money(data.expenses.total));
+    setText('dashAbonosPeriodo', money(postedPayments.reduce((total, payment) => total + Number(payment.amount || 0), 0)));
+    setText('dashEntradasEfectivo', money(data.cash.periodIn));
+    setText('dashSalidasEfectivo', money(data.cash.periodOut));
+    setText('dashEfectivoEsperado', data.cash.currentExpected === null ? 'Sin caja abierta' : money(data.cash.currentExpected));
     setText('connectedDashPaymentsTotal', money(postedPayments.reduce((total, payment) => total + Number(payment.amount || 0), 0)));
     setText('connectedDashPurchasesTotal', money(data.purchases.total));
     setText('connectedDashPayablesBalance', money(data.payables.balance));
     setText('connectedDashSupplierPaymentsPending', money(data.suppliers.payments.filter(payment => payment.status === 'PENDING').reduce((total, payment) => total + Number(payment.amount || 0), 0)));
     setRows('connectedDashMethodsBody', 3, data.sales.paymentMethods.map(row => `<td>${esc(paymentLabel(row.method))}</td><td>${Number(row.count)}</td><td>${money(row.total)}</td>`), 'Sin ventas en este período.');
-    setRows('connectedDashSellersBody', 7, data.sales.sellers.map(row => `<td><strong>${esc(row.seller)}</strong></td><td>${Number(row.count)}</td><td>${money(row.cash)}</td><td>${money(row.card)}</td><td>${money(row.transfer)}</td><td>${money(row.credit)}</td><td>${money(row.total)}</td>`), 'Sin ventas en este período.');
-    setRows('connectedDashProductsBody', 3, data.sales.topProducts.map(row => `<td>${esc(row.name)}</td><td>${Number(row.quantity).toFixed(3)}</td><td>${money(row.total)}</td>`), 'Sin productos vendidos en este período.');
+    setRows('connectedDashSellersBody', 3, data.sales.sellers.map(row => `<td><strong>${esc(row.seller)}</strong></td><td>${Number(row.count)}</td><td>${money(row.total)}</td>`), 'Sin ventas en este período.');
+    setRows('connectedDashProductsBody', 3, data.sales.topProducts.map(row => `<td>${esc(row.name)}</td><td>${Number(row.quantity).toLocaleString('es-NI', { maximumFractionDigits: 3 })}</td><td>${money(row.total)}</td>`), 'Sin productos vendidos en este período.');
     setRows('connectedDashHistoryBody', 6, data.sales.history.map(row => `<td data-sort-value="${esc(dayKey(row.createdAt))}" data-table-date="${esc(dayKey(row.createdAt))}">${esc(dateTime(row.createdAt))}</td><td>${esc(row.invoiceNumber)}</td><td>${esc(row.seller)}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${money(row.total)}</td><td>${esc(statusLabel(row.status))}</td>`), 'Sin ventas en este período.');
     setRows('connectedDashDebtorsBody', 3, data.receivables.clients.map(row => `<td><strong>${esc(row.clientName)}</strong></td><td>${money(row.balance)}</td><td>${esc(row.status)}</td>`), 'No hay clientes con deuda actual.');
     setRows('connectedDashPaymentsBody', 6, data.receivables.payments.map(row => `<td data-table-date="${esc(dayKey(row.createdAt))}">${esc(dateTime(row.createdAt))}</td><td>${esc(row.clientName)}</td><td>${esc(row.invoiceNumber || '—')}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td>`), 'Sin abonos en este período.');
@@ -73,18 +97,22 @@
     setRows('connectedDashPayablesBody', 7, data.payables.invoices.map(row => `<td>${esc(purchaseReference(row))}</td><td>${esc(row.supplierName)}</td><td>${esc(row.dueAt ? new Date(row.dueAt).toLocaleDateString('es-NI') : '—')}</td><td>${money(row.total)}</td><td>${money(row.paid)}</td><td>${money(row.balance)}</td><td>${esc(statusLabel(row.status))}</td>`), 'No hay facturas pendientes por pagar.');
     setRows('connectedDashSupplierPaymentsBody', 6, data.suppliers.payments.map(row => `<td data-table-date="${esc(dayKey(row.createdAt))}">${esc(dateTime(row.createdAt))}</td><td>${esc(row.supplierName)}</td><td>${esc(purchaseReference(row))}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td>`), 'Sin pagos a proveedores en este período.');
     setRows('connectedDashCashBody', 6, data.cash.movements.map(row => `<td data-table-date="${esc(dayKey(row.createdAt))}">${esc(dateTime(row.createdAt))}</td><td>${esc(movementLabel(row.type))}${row.supplierName ? `<br><small>${esc(row.supplierName)}${row.purchaseNumber || row.invoiceNumber ? ' · ' + esc(row.purchaseNumber || row.invoiceNumber) : ''}${row.supplierInvoiceNumber ? ' · Factura proveedor ' + esc(row.supplierInvoiceNumber) : ''}</small>` : ''}</td><td>${row.direction === 'IN' ? 'Entrada' : 'Salida'}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td>`), 'Sin movimientos en este período.');
+    setRows('dashMetodosBody', 3, data.sales.paymentMethods.map(row => `<td>${esc(paymentLabel(row.method))}</td><td>${Number(row.count)}</td><td>${money(row.total)}</td>`), 'Sin ventas en este período.');
+    setRows('dashVendedoresBody', 3, data.sales.sellers.map(row => `<td><strong>${esc(row.seller)}</strong></td><td>${Number(row.count)}</td><td>${money(row.total)}</td>`), 'Sin ventas en este período.');
+    setRows('dashProductosBody', 3, data.sales.topProducts.map(row => `<td>${esc(row.name)}</td><td>${Number(row.quantity).toLocaleString('es-NI', { maximumFractionDigits: 3 })}</td><td>${money(row.total)}</td>`), 'Sin productos vendidos en este período.');
     const note = el('connectedDashboardStatus');
     if (note && data.sales.historyLimited) note.textContent += ` Se muestran las ${data.sales.history.length} ventas más recientes; los indicadores incluyen el período completo.`;
   }
   async function load() {
-    const current = ++requestId, status = el('connectedDashboardStatus');
+    const current = ++requestId, status = el('dashboardStatus');
     try {
       currentData = null;
-      if (status) { status.textContent = 'Cargando Dashboard conectado desde MySQL…'; status.classList.remove('hidden'); }
+      if (status) { status.textContent = 'Cargando dashboard…'; status.classList.remove('hidden'); }
       const range = apiRange();
       const data = await window.PosConnected.inventoryOperation(client => client.connectedReport(range.from, range.until));
       if (current !== requestId) return false;
       render(data);
+      if (status) status.classList.add('hidden');
       return true;
     } catch (failure) {
       if (current !== requestId) return false;
@@ -106,6 +134,8 @@
       ['Gastos del período', money(currentData.expenses.total)],
       ['Ganancia neta del período', money(currentData.sales.netProfit)],
       ['Compras del período', money(currentData.purchases.total)],
+      ['Productos vendidos en el período', Number(currentData.sales.unitsSold || 0)],
+      ['Productos con bajo stock', Number(currentData.inventory.lowStock || 0)],
       ['Deuda actual por pagar', money(currentData.payables.balance)],
       ['Pagos a proveedores pendientes de confirmar', money(currentData.payables.pendingPayments)],
       ['Entradas de efectivo confirmadas', money(currentData.cash.periodIn)],
@@ -134,12 +164,19 @@
       { name: 'Kardex', rows: [['Fecha', 'Movimiento', 'Producto', 'Cantidad', 'Stock después', 'Costo unitario', 'Usuario', 'Motivo'], ...currentData.inventory.movements.map(row => [dateTime(row.createdAt), row.type, row.productName, Number(row.quantity), row.stockAfter === null ? '' : Number(row.stockAfter), row.unitCost === null ? '' : Number(row.unitCost), row.userName, row.reason])] }
     ];
   }
+  function exportExcel() {
+    const sheets = exportSheets();
+    if (!sheets) return false;
+    return Boolean(window.PosTables?.exportWorkbookToXlsx(sheets, { fileName: 'dashboard' }));
+  }
+  const exportButton = document.querySelector('.dashboard-heading button');
+  if (exportButton) exportButton.onclick = event => { event.preventDefault(); exportExcel(); };
   document.addEventListener('dashboard:period-changed', () => {
-    if (!el('dashboardView')?.classList.contains('hidden') && !el('dashboardConnectedContent')?.classList.contains('hidden')) load();
+    if (!el('dashboardView')?.classList.contains('hidden')) load();
   });
   document.addEventListener('connected:report-data-changed', () => {
     currentData = null;
-    if (!el('dashboardView')?.classList.contains('hidden') && !el('dashboardConnectedContent')?.classList.contains('hidden')) load();
+    if (!el('dashboardView')?.classList.contains('hidden')) load();
   });
-  window.PosDashboard = Object.freeze({ load, exportSheets });
+  window.PosDashboard = Object.freeze({ load, exportSheets, exportExcel });
 })();

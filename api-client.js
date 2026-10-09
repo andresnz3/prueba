@@ -196,6 +196,7 @@
     async operation(key) { return this.#salesResult(await this.#request('/operations/'+encodeURIComponent(key))); }
     async resolveOperation(key) { return this.#salesResult(await this.#write('/operations/'+encodeURIComponent(key)+'/resolve','POST',{})); }
     async sales(offset=0,maxId=null) { const value=await this.#request('/sales?limit=100&offset='+offset+(maxId ? '&maxId='+encodeURIComponent(maxId) : '')); if(!Array.isArray(value?.sales)) throw new ApiError('INVALID_RESPONSE'); return value.sales.map(sale=>this.#salesResult({sale}).sale); }
+    async sale(id) { const value = this.#salesResult(await this.#request('/sales/' + encodeURIComponent(id))); return value.sale; }
     async currentCash(full=false) { const value=await this.#request('/cash/current'+(full?'?full=true':'')); if(value?.cash===null) return null; return this.#salesResult(value).cash; }
     async cashSessions(offset=0) { const value=await this.#request('/cash/sessions?limit=100&offset='+offset); if(!Array.isArray(value?.sessions)) throw new ApiError('INVALID_RESPONSE'); return value.sessions.map(cash=>this.#salesResult({cash}).cash); }
     async openCash(data) { return this.#salesResult(await this.#write('/cash/sessions','POST',data)); }

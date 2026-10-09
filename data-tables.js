@@ -102,6 +102,17 @@
     }
     search.classList.add('data-table-input');
     if (!search.getAttribute('aria-label')) search.setAttribute('aria-label', `Buscar en ${options.label || 'la tabla'}`);
+    if (options.embedSearch && container) {
+      const searchLabel = search.closest('label');
+      if (searchLabel && container.contains(searchLabel)) { searchLabel.classList.add('data-table-search'); tools.prepend(searchLabel); }
+      else {
+        const explicitLabel = [...container.querySelectorAll('label[for]')].find(label => label.htmlFor === search.id);
+        if (explicitLabel) {
+          const wrapper = document.createElement('div'); wrapper.className = 'data-table-search connected-search-field';
+          wrapper.append(explicitLabel, search); tools.prepend(wrapper);
+        }
+      }
+    }
     state.search = search;
 
     const actions = document.createElement('div');
@@ -131,7 +142,7 @@
       });
       actions.append(today); state.todayButton = today;
     }
-    if (typeof window.XLSX !== 'undefined') {
+    if (typeof window.XLSX !== 'undefined' && options.hideExport !== true) {
       const exportButton = document.createElement('button');
       const exportLabel = options.exportLabel || (table.closest('.rep-subview') && options.label);
       exportButton.type = 'button'; exportButton.className = 'btn btn-secondary data-table-export btn-export-excel'; exportButton.textContent = exportLabel ? `Exportar Excel de ${exportLabel}` : 'Exportar Excel';
@@ -233,6 +244,8 @@
     if (state.sortColumn !== null) {
       const index = state.sortColumn, direction = state.sortDirection;
       matching.sort((left, right) => {
+        const priority = Number(left.dataset.priority ?? 1) - Number(right.dataset.priority ?? 1);
+        if (priority) return priority;
         const a = sortableValue(left, index, state), b = sortableValue(right, index, state);
         const result = typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
         return result * direction;
@@ -419,11 +432,15 @@
     ['repCxCPagosBody', { label: 'Abonos a cuentas por cobrar', fileName: 'abonos_cuentas_por_cobrar', dateColumn: 0 }],
     ['repCajaMetodosBody', { label: 'Ventas de caja por medio de pago', fileName: 'caja_ventas_por_metodo' }],
     ['repCajaMovimientosBody', { label: 'Movimientos de caja', fileName: 'reporte_movimientos_caja', dateColumn: 0, sumColumns: false }],
+    ['repSupplierPaymentsBody', { label: 'Pagos a proveedores', fileName: 'pagos_a_proveedores', dateColumn: 0 }],
+    ['repKardexBody', { label: 'Kardex', fileName: 'reporte_kardex', dateColumn: 0 }],
+    ['repGastosHistoryBody', { label: 'Historial de gastos', fileName: 'historial_de_gastos', dateColumn: 0, sumColumns: false }],
+    ['repConnectedCxPBody', { label: 'Cuentas por pagar conectadas', fileName: 'cuentas_por_pagar_conectadas', dateColumn: 2 }],
     ['inventoryTableBody', { label: 'Inventario', fileName: 'inventario', searchInputId: 'inventorySearchInput', ignoreColumns: [0, 7] }],
     ['purchasesTableBody', { label: 'Compras locales', fileName: 'compras', dateColumn: 0, ignoreColumns: [6] }],
     ['payablesTableBody', { label: 'Cuentas por pagar locales', fileName: 'cuentas_por_pagar', ignoreColumns: [4] }],
-    ['clientsTableBody', { label: 'Clientes', fileName: 'clientes', searchInputId: 'clientSearchInput', toolsContainerId: 'connectedClientsControls', ignoreColumns: [6] }],
-    ['receivablesTableBody', { label: 'Cuentas por cobrar', fileName: 'cuentas_por_cobrar', dateColumn: 2, ignoreColumns: [8] }],
+    ['clientsTableBody', { label: 'Clientes', fileName: 'clientes', searchInputId: 'clientSearchInput', toolsContainerId: 'connectedClientsControls', embedSearch: true, ignoreColumns: [6] }],
+    ['receivablesTableBody', { label: 'Cuentas por cobrar', fileName: 'cuentas_por_cobrar', searchInputId: 'clientSearchInput', dateColumn: 2, ignoreColumns: [8] }],
     ['suppliersTableBody', { label: 'Proveedores', fileName: 'proveedores', ignoreColumns: [5] }],
     ['historyTableBody', { label: 'Historial de ventas', fileName: 'historial_ventas', dateColumn: 1, ignoreColumns: [6] }],
     ['auditTableBody', { label: 'Auditoría', fileName: 'auditoria', dateColumn: 0 }],
@@ -448,8 +465,8 @@
     for (const [bodyId, options] of tableConfigs) {
       const body = document.getElementById(bodyId);
       if (!body) continue;
-      if (!connected && body.closest('.connected-report-only, .connected-dashboard-only')) continue;
-      if (connected && body.closest('.local-dashboard-only')) continue;
+      if (!connected && body.closest('.connected-procurement-content, .connected-report-only, .connected-dashboard-only')) continue;
+      if (connected && body.closest('.local-report-only, .local-dashboard-only')) continue;
       if (bodyId === 'clientsTableBody') document.getElementById('connectedClientsControls')?.classList.remove('hidden');
       setupDataTable(body, options);
     }

@@ -102,6 +102,25 @@
     finally { loading = false; renderCajaView(); }
   }
   async function loadOrders() { orders = await localDB.saleOrders.where('business_id').equals(DEFAULT_BUSINESS_ID).toArray(); }
+  async function nextOrderDisplayNumber() {
+    const existing = await localDB.saleOrders.where('business_id').equals(DEFAULT_BUSINESS_ID).toArray();
+    const highest = existing.reduce((value, order) => Math.max(value, Number(order.displayNumber) || 0), existing.length);
+    return highest + 1;
+  }
+  async function orderDisplayNumber(order) {
+    if (Number.isInteger(Number(order.displayNumber)) && Number(order.displayNumber) > 0) return Number(order.displayNumber);
+    const all = await localDB.saleOrders.where('business_id').equals(DEFAULT_BUSINESS_ID).toArray();
+    const used = new Set(all.map(item => Number(item.displayNumber)).filter(value => Number.isInteger(value) && value > 0));
+    const legacy = all.filter(item => !used.has(Number(item.displayNumber))).sort((a, b) => Number(a.createdAt) - Number(b.createdAt) || String(a.id).localeCompare(String(b.id)));
+    let candidate = 1;
+    for (const item of legacy) {
+      while (used.has(candidate)) candidate += 1;
+      if (String(item.id) === String(order.id)) return candidate;
+      used.add(candidate);
+      candidate += 1;
+    }
+    return '';
+  }
   async function prepare() {
     if (busy) return;
     busy = true;
@@ -114,7 +133,7 @@
         const sessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: 'abierta' }).toArray();
         if (sessions.length !== 1) fail(MSG_SIN_CAJA);
         const calc = await quote(input);
-        const order = { id: crypto.randomUUID(), business_id: DEFAULT_BUSINESS_ID, cajaSessionId: sessions[0].id, status: 'PENDING', createdAt: Date.now(), input, estimatedTotal: calc.total };
+        const order = { id: crypto.randomUUID(), displayNumber: await nextOrderDisplayNumber(), business_id: DEFAULT_BUSINESS_ID, cajaSessionId: sessions[0].id, status: 'PENDING', createdAt: Date.now(), input, estimatedTotal: calc.total };
         await localDB.saleOrders.add(order); await audit('PREPARAR_ORDEN', 'Orden ' + order.id + '; sin factura ni movimiento de dinero.');
       });
       cart.splice(0); resetearDescuentoVenta(); actualizarCarrito(); await loadOrders(); render();
@@ -146,11 +165,21 @@
       selected = await localDB.saleOrders.get(id);
       if (!selected || selected.business_id !== DEFAULT_BUSINESS_ID || selected.status !== 'PENDING') fail('La orden ya fue cobrada o cancelada.');
       preview = await quote(selected.input);
-      el('localOrderTitle').textContent = 'Cobrar orden · ' + selected.input.seller;
-      el('localOrderSummary').textContent = 'Total vigente: ' + sysConfig.currency + preview.total.toFixed(2);
-      el('localOrderPriceNotice').textContent = preview.total !== selected.estimatedTotal ? 'El precio cambió. Estimado: ' + sysConfig.currency + selected.estimatedTotal.toFixed(2) + '. Confirma el total vigente para cobrar.' : 'Al confirmar se generará la factura, se descontará stock y se registrará el pago.';
+      el('localOrderTitle').textContent = 'Cobrar orden #' + await orderDisplayNumber(selected);
+      el('localOrderSummary').textContent = 'Subtotal ' + sysConfig.currency + preview.subtotal.toFixed(2) + ' · Descuento ' + sysConfig.currency + preview.discount.toFixed(2);
+      el('localOrderTotal').textContent = sysConfig.currency + preview.total.toFixed(2);
+      el('localOrderPriceNotice').textContent = preview.total !== selected.estimatedTotal
+        ? 'El precio cambió. Estimado: ' + sysConfig.currency + Number(selected.estimatedTotal).toFixed(2) + '. Confirma el total vigente para cobrar.'
+        : 'Precio vigente comprobado. Total estimado al preparar: ' + sysConfig.currency + Number(selected.estimatedTotal).toFixed(2) + '. Al cobrar se generará la factura, se descontará el stock y se registrará el pago.';
       el('localOrderItems').replaceChildren();
-      for (const item of preview.items) { const p = document.createElement('p'); p.textContent = item.name + ' × ' + item.cantidad; el('localOrderItems').append(p); }
+      for (const item of preview.items) {
+        const row = document.createElement('div'), description = document.createElement('span'), subtotal = document.createElement('span'), label = document.createElement('small'), amount = document.createElement('strong');
+        const unitPrice = Number(selected.input.buyerType === 'retail' ? item.retailPrice || item.retail || 0 : item.wholesalePrice || item.wholesale || 0);
+        row.className = 'checkout-item'; row.setAttribute('role', 'listitem');
+        description.className = 'checkout-item-description'; description.textContent = item.name + ' × ' + Number(item.cantidad);
+        subtotal.className = 'checkout-item-subtotal'; label.textContent = 'Subtotal'; amount.textContent = sysConfig.currency + r2(unitPrice * Number(item.cantidad)).toFixed(2);
+        subtotal.append(label, amount); row.append(description, subtotal); el('localOrderItems').append(row);
+      }
       el('localOrderMethod').value = selected.input.suggestedMethod || 'cash';
       el('localOrderMethod').querySelector('option[value="credit"]').disabled = !selected.input.clientId;
       el('localOrderReceived').value = ''; window.PosValidation.clear(el('localOrderForm')); paymentFields();
@@ -158,7 +187,19 @@
       (el('localOrderMethod').value === 'cash' ? el('localOrderReceived') : el('localOrderConfirmBtn')).focus();
     } catch (error) { showAlert(error.message); }
   }
-  function paymentFields() { el('localOrderCashGroup').classList.toggle('hidden', el('localOrderMethod').value !== 'cash'); }
+  function updateCashChangePreview() {
+    const previewBox = el('localOrderCashChangePreview'), input = el('localOrderReceived');
+    if (!previewBox || !input || el('localOrderMethod').value !== 'cash' || !input.value || !Number.isFinite(Number(input.value)) || Number(input.value) < Number(preview?.total)) { previewBox?.classList.add('hidden'); return; }
+    el('localOrderCashChangeAmount').textContent = sysConfig.currency + r2(Math.max(0, Number(input.value) - Number(preview.total))).toFixed(2);
+    previewBox.classList.remove('hidden');
+  }
+  function paymentFields() {
+    const method = el('localOrderMethod').value;
+    const labels = { cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia', credit: 'Crédito' };
+    el('localOrderCashGroup').classList.toggle('hidden', method !== 'cash');
+    el('localOrderPaymentMethod').textContent = labels[method] || 'Efectivo';
+    updateCashChangePreview();
+  }
   async function charge(event) {
     event.preventDefault(); if (busy || !selected || !preview) return;
     const method = el('localOrderMethod').value, raw = el('localOrderReceived').value;
@@ -209,14 +250,14 @@
     if (historicalBody) historicalBody.innerHTML = historicalOrders.length ? '' : '<tr><td colspan="7" class="text-center">Sin pendientes de sesiones anteriores.</td></tr>';
     historicalSection?.classList.toggle('hidden', historicalOrders.length === 0);
     for (const order of currentOrders) {
-      const row = document.createElement('tr'); row.dataset.localOrder = order.id;
+      const row = document.createElement('tr'); row.dataset.localOrder = order.id; row.dataset.priority = '0';
       for (const value of [new Date(order.createdAt).toLocaleString(), 'Orden pendiente · sin factura', order.input.seller, mediosPagoVenta[order.input.suggestedMethod], sysConfig.currency + order.estimatedTotal.toFixed(2), 'Pendiente de cobro']) { const td = document.createElement('td'); td.textContent = value; row.append(td); }
       const td = document.createElement('td');
       for (const [label,action] of [['Cobrar',startCharge],['Cancelar',cancelOrder]]) { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-sm ' + (label === 'Cobrar' ? 'btn-success' : 'btn-secondary'); b.textContent = label; b.disabled = !isAdmin('cajaView'); b.dataset.orderId = order.id; b.addEventListener('click',() => action(order.id)); td.append(b); }
       row.append(td); body.prepend(row);
     }
     for (const order of historicalOrders) {
-      const row = document.createElement('tr'); row.dataset.localOrder = order.id;
+      const row = document.createElement('tr'); row.dataset.localOrder = order.id; row.dataset.priority = '0';
       for (const value of [new Date(order.createdAt).toLocaleString(), 'Orden de sesi�n anterior � sin factura', order.input.seller, mediosPagoVenta[order.input.suggestedMethod], sysConfig.currency + order.estimatedTotal.toFixed(2), 'Pendiente de resoluci�n']) { const td = document.createElement('td'); td.textContent = value; row.append(td); }
       const td = document.createElement('td'); const detail = document.createElement('button'); detail.type = 'button'; detail.className = 'btn btn-sm btn-secondary'; detail.textContent = 'Detalle'; detail.addEventListener('click', () => showAlert('Orden #' + order.id + ' de una sesi�n anterior. El cobro se registrar� en la sesi�n actual de Caja.')); td.append(detail); const charge = document.createElement('button'); charge.type = 'button'; charge.className = 'btn btn-sm btn-success'; charge.textContent = 'Cobrar'; charge.disabled = !isAdmin('cajaView'); charge.addEventListener('click', () => startCharge(order.id)); td.append(charge); const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-sm btn-secondary'; cancel.textContent = 'Cancelar'; cancel.disabled = !isAdmin('cajaView'); cancel.addEventListener('click', () => cancelOrder(order.id)); td.append(cancel); row.append(td); historicalBody?.append(row);
     }
@@ -237,7 +278,7 @@
     } catch (error) { showAlert(error.message); }
     finally { busy = false; render(); }
   });
-  el('localOrderForm').addEventListener('submit',charge); el('localOrderMethod').addEventListener('change',paymentFields);
+  el('localOrderForm').addEventListener('submit',charge); el('localOrderMethod').addEventListener('change',paymentFields); el('localOrderReceived').addEventListener('input',updateCashChangePreview);
   window.addEventListener('storage', event => { if (event.key === configStorageKey) renderCajaView(); });
   window.PosLocalFlow = Object.freeze({ load: refresh, salesFlow: flow, cartInput, record, prepare, confirmSale, render, isCentralized: () => flow() === 'CENTRALIZED' });
   document.addEventListener('DOMContentLoaded', async () => { await localDB.open(); await loadOrders(); renderCajaView(); });

@@ -28,8 +28,8 @@
     });
   }
   function appendCell(row, value) { const cell = document.createElement('td'); cell.textContent = value ?? '-'; row.append(cell); return cell; }
-  function actionButton(label, action, id) {
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-sm btn-secondary';
+  function actionButton(label, action, id, variant = 'secondary') {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-sm btn-' + variant;
     button.textContent = label; button.dataset.clientAction = action; button.dataset.id = id; return button;
   }
   function renderClients() {
@@ -39,17 +39,23 @@
     for (const client of clients) {
       if (client.businessId !== window.PosRuntime.salesInput().businessId) throw new window.PosApiError('INVALID_RESPONSE');
       const row = document.createElement('tr'); row.dataset.clientId = client.id;
-      appendCell(row, client.name);
-      appendCell(row, [client.phone, client.ruc].filter(Boolean).join(' · ') || '-');
+      const nameCell = appendCell(row, client.name), clientName = document.createElement('strong');
+      clientName.textContent = client.name; nameCell.replaceChildren(clientName);
+      const contactCell = appendCell(row, client.phone || '-');
+      if (client.ruc) { const identifier = document.createElement('small'); identifier.textContent = 'RUC: ' + client.ruc; contactCell.append(document.createElement('br'), identifier); }
       appendCell(row, money(client.creditLimit));
-      appendCell(row, money(client.availableCredit));
-      appendCell(row, money(client.debt));
+      const availableCell = appendCell(row, money(client.availableCredit));
+      availableCell.style.color = Number(client.availableCredit) < 0 ? 'red' : 'green'; availableCell.style.fontWeight = 'bold';
+      const debtCell = appendCell(row, money(client.debt));
+      debtCell.style.cssText = 'color:red;font-weight:bold;font-size:1.1em;';
       appendCell(row, client.active ? (Number(client.debt) > 0 ? 'Activo' : 'Al día') : 'Inactivo');
-      const actions = document.createElement('td');
-      actions.append(actionButton('Estado de cuenta', 'statement', client.id), document.createTextNode(' '));
-      actions.append(actionButton('Editar', 'edit', client.id), document.createTextNode(' '));
-      actions.append(actionButton(client.active ? 'Inactivar' : 'Activar', 'toggle', client.id));
-      row.append(actions); body.append(row);
+      if (!client.active) { row.style.backgroundColor = '#f9f9f9'; row.style.opacity = '0.8'; }
+      const actions = document.createElement('td'), actionGroup = document.createElement('div');
+      actionGroup.className = 'connected-client-actions';
+      actionGroup.append(actionButton('Historial', 'statement', client.id, 'info'));
+      actionGroup.append(actionButton('Editar', 'edit', client.id, 'primary'));
+      actionGroup.append(actionButton(client.active ? 'Inactivar' : 'Activar', 'toggle', client.id, client.active ? 'warning' : 'success'));
+      actions.append(actionGroup); row.append(actions); body.append(row);
     }
   }
   function renderReceivables() {
@@ -64,7 +70,7 @@
       appendCell(row, item.clientName); appendCell(row, '#' + item.invoiceNumber); appendCell(row, formatDate(item.date));
       appendCell(row, money(item.total)); appendCell(row, money(item.paid)); appendCell(row, money(item.balance));
       appendCell(row, formatDate(item.dueAt)); appendCell(row, statusText(item.status));
-      const actions = document.createElement('td'), button = actionButton('Abonar', 'pay', item.id);
+      const actions = document.createElement('td'), button = actionButton('Abonar', 'pay', item.id, 'success');
       button.disabled = item.status === 'CANCELLED' || (item.remaining === '0.00') || !window.PosConnected.canManageModule('cajaView');
       actions.append(button); row.append(actions); body.append(row);
     }
@@ -72,7 +78,7 @@
   async function load(view = 'clientsView', q = el('clientSearchInput')?.value.trim() || '') {
     if (!connectedMode || view !== 'clientsView') return;
     const request = ++pageRequest; message('Cargando clientes y cuentas por cobrar...', 'info');
-    el('connectedClientsControls')?.classList.remove('hidden'); el('connectedReceivablesPanel')?.classList.remove('hidden');
+    el('connectedClientsControls')?.classList.remove('hidden');
     try {
       const [nextClients, nextReceivables] = await Promise.all([allPages('clients', q), allPages('receivables', q)]);
       if (request !== pageRequest || q !== (el('clientSearchInput')?.value.trim() || '')) return;
@@ -139,16 +145,61 @@
   }
   async function statement(id) {
     try {
-      const value = await api(client => client.clientStatement(id)); const subtitle = el('statementModalSubtitle');
-      subtitle.textContent = value.client.name + ' · Deuda actual ' + money(value.client.debt) + ' · Límite ' + money(value.client.creditLimit);
-      el('statementModalTitle').textContent = 'Estado de cuenta';
+      const value = await api(client => client.clientStatement(id));
+      el('statementModalTitle').textContent = 'Historial: ' + value.client.name;
+      el('statementModalSubtitle').textContent = 'Límite: ' + money(value.client.creditLimit) + ' | Deuda Actual: ' + money(value.client.debt);
       const invoiceMap = new Map(value.invoices.map(invoice => [invoice.id, invoice]));
       const entries = [
-        ...value.invoices.map(invoice => ({ date: invoice.date, ref: 'Factura #' + invoice.invoiceNumber, detail: statusText(invoice.status), charge: money(invoice.total), paid: '-', balance: money(invoice.balance) })),
-        ...value.payments.map(payment => { const invoice = invoiceMap.get(payment.saleId); return { date: payment.createdAt, ref: 'Abono factura #' + payment.invoiceNumber, detail: payment.paymentMethod + ' · ' + statusText(payment.status), charge: '-', paid: money(payment.amount), balance: invoice ? money(invoice.balance) : '-' }; })
-      ].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+        ...value.invoices.map(invoice => ({
+          type: 'charge', date: invoice.date, ref: '#' + String(invoice.invoiceNumber).padStart(6, '0'),
+          detail: invoice.status === 'CANCELLED' ? 'Factura Anulada' : 'Factura de crédito · Total ' + money(invoice.total) + ' · Abonado ' + money(invoice.paid) + ' · Pendiente ' + money(invoice.balance),
+          amount: Number(invoice.total), dueAt: invoice.dueAt, saleId: invoice.id, cancelled: invoice.status === 'CANCELLED'
+        })),
+        ...value.payments.map(payment => {
+          const invoice = invoiceMap.get(payment.saleId);
+          const method = ({ CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia' })[payment.paymentMethod] || payment.paymentMethod;
+          const status = payment.status === 'PENDING' ? ' · Abono pendiente de confirmar' : '';
+          return { type: 'payment', date: payment.createdAt, ref: 'Abono #' + String(payment.invoiceNumber).padStart(6, '0'),
+            detail: 'Pago recibido por ' + method + (payment.userName ? ' (' + payment.userName + ')' : '') + status,
+            amount: Number(payment.amount), paymentStatus: payment.status, saleId: payment.saleId, invoice };
+        })
+      ].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
       const body = el('statementTableBody'); body.replaceChildren();
-      for (const entry of entries) { const row = document.createElement('tr'); row.dataset.periodDate = window.PosPeriodFilters?.dateKey(entry.date) || ''; appendCell(row, new Date(entry.date).toLocaleString()); appendCell(row, entry.ref); appendCell(row, entry.detail); appendCell(row, entry.charge); appendCell(row, entry.paid); appendCell(row, entry.balance); appendCell(row, '-'); body.append(row); }
+      if (!entries.length) {
+        const row = document.createElement('tr'), cell = document.createElement('td');
+        cell.colSpan = 7; cell.className = 'text-center'; cell.textContent = 'No hay movimientos registrados.'; row.append(cell); body.append(row);
+      }
+      let runningBalance = 0;
+      for (const entry of entries) {
+        if (entry.type === 'charge' && !entry.cancelled) runningBalance += entry.amount;
+        if (entry.type === 'payment' && entry.paymentStatus === 'POSTED') runningBalance = Math.max(0, runningBalance - entry.amount);
+        const row = document.createElement('tr');
+        row.dataset.periodDate = window.PosPeriodFilters?.dateKey(entry.date) || '';
+        if (entry.saleId) row.dataset.saleId = entry.saleId;
+        const dateCell = document.createElement('td');
+        dateCell.append(document.createTextNode(new Date(entry.date).toLocaleString()));
+        if (entry.type === 'charge') {
+          const due = document.createElement('small'); due.textContent = 'Vence: ' + (entry.dueAt ? formatDate(entry.dueAt) : '-');
+          if (entry.dueAt && new Date(entry.dueAt).getTime() < Date.now() && !entry.cancelled) due.style.cssText = 'display:block;color:#d32f2f;font-weight:bold;';
+          else due.style.display = 'block';
+          dateCell.append(document.createElement('br'), due);
+        }
+        row.append(dateCell);
+        const ref = appendCell(row, entry.ref); ref.style.fontWeight = 'bold';
+        appendCell(row, entry.detail);
+        const charge = appendCell(row, entry.type === 'charge' ? money(entry.amount) : '');
+        if (entry.type === 'charge') charge.style.cssText = 'color:#d32f2f;font-weight:bold;';
+        const paid = appendCell(row, entry.type === 'payment' ? money(entry.amount) : '');
+        if (entry.type === 'payment') paid.style.cssText = 'color:#28a745;font-weight:bold;';
+        const balance = appendCell(row, money(runningBalance)); balance.style.cssText = 'font-weight:bold;font-size:1.1em;';
+        const actions = appendCell(row, '');
+        const invoice = entry.type === 'charge' && receivables.find(item => String(item.id) === String(entry.saleId));
+        if (invoice) {
+          actions.append(actionButton('Ver Factura', 'invoice', invoice.id, 'info'));
+          if (Number(invoice.remaining) > 0 && invoice.status !== 'CANCELLED') actions.append(actionButton('Abonar', 'pay', invoice.id, 'success'));
+        }
+        body.append(row);
+      }
       window.PosPeriodFilters?.filterTable('statementTableBody', window.PosPeriodFilters.range('statement'));
       el('statementModal').classList.remove('hidden');
     } catch (error) { message(error.message, 'error'); }
@@ -173,11 +224,16 @@
   async function routeTable(event) {
     const button = event.target.closest('button[data-client-action]'); if (!button) return;
     const { clientAction: action, id } = button.dataset;
-    if (action === 'edit') edit(id); if (action === 'toggle') toggle(id); if (action === 'statement') statement(id); if (action === 'pay') openPayment(id);
+    if (action === 'edit') edit(id);
+    if (action === 'toggle') toggle(id);
+    if (action === 'statement') statement(id);
+    if (action === 'invoice') { el('statementModal').classList.add('hidden'); setTimeout(() => window.PosSales.viewInvoice(id), 100); }
+    if (action === 'pay') { el('statementModal').classList.add('hidden'); setTimeout(() => openPayment(id), 100); }
   }
   for (const id of ['addNewClientBtn', 'quickAddClientBtn']) el(id)?.addEventListener('click', () => { el('clientDebt').required = false; el('clientCreditDays').required = true; el('clientDebtField').classList.add('hidden'); el('clientCreditDaysField').classList.remove('hidden'); el('clientCreditDays').value = '30'; el('clientModalTitle').textContent = 'Nuevo cliente'; });
   el('clientsTableBody')?.addEventListener('click', routeTable);
   el('receivablesTableBody')?.addEventListener('click', routeTable);
+  el('statementTableBody')?.addEventListener('click', routeTable);
   clientAutocomplete = window.PosAutocomplete?.setup(el('clientSearchInput'), {
     getItems: query => clients.filter(client => clientMatches(client, query)),
     getLabel: client => client.name,

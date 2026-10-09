@@ -33,17 +33,9 @@
     window.PosTables?.setDataTableExportEnabled(body, rows.length > 0);
     window.PosTables?.refreshDataTable(body);
   }
-  function setConnectedView(view) {
-    const panel = el(view);
-    panel?.querySelectorAll('.local-procurement-content').forEach(node => node.classList.add('hidden'));
-    panel?.querySelectorAll('.connected-procurement-content').forEach(node => node.classList.remove('hidden'));
-    if (view === 'purchasesView') el('connectedPurchasesControls')?.classList.remove('hidden');
-    if (view === 'payablesView') el('connectedPayablesControls')?.classList.remove('hidden');
-    if (view === 'suppliersView') {
-      el('connectedSuppliersControls')?.classList.remove('hidden');
-      el('connectedSuppliersTableBody')?.closest('.history-table-container')?.classList.remove('hidden');
-      el('suppliersTableBody')?.closest('.history-table-container')?.classList.add('hidden');
-    }
+  function setConnectedView() {
+    for (const id of ['connectedPurchasesControls', 'connectedPayablesControls', 'connectedSuppliersControls']) el(id)?.classList.add('hidden');
+    el('connectedPayablesSummary')?.classList.add('hidden');
   }
   async function request(operation) {
     try { return await window.PosConnected.inventoryOperation(operation); }
@@ -73,12 +65,12 @@
     const result = await request((api, business) => allPages(pageOffset => api.purchases(pageOffset, query), business));
     const range = window.PosPeriodFilters?.range('purchases') || { from: '', until: '' };
     const filtered = result.filter(purchase => window.PosPeriodFilters?.matches(purchase.createdAt, range));
-    const page = filtered.slice(offset, offset + pageSize);
+    const page = filtered;
     state.purchaseHasNext = offset + pageSize < filtered.length;
     el('connectedPurchasesPrev').disabled = offset === 0;
     el('connectedPurchasesNext').disabled = !state.purchaseHasNext;
     el('connectedPurchasesPage').textContent = String(Math.floor(offset / pageSize) + 1);
-    setTable('connectedPurchasesTableBody', 7, page.map(purchase => {
+    setTable('purchasesTableBody', 7, page.map(purchase => {
       const status = purchase.status === 'CANCELLED' ? 'Anulada' : purchase.purchaseType === 'CREDIT' ? statusLabel(purchase.status) + (purchase.dueAt ? ' · vence ' + date(purchase.dueAt) : '') : 'Contado';
       const total = purchase.status === 'CANCELLED' ? '<del>' + money(purchase.total) + '</del>' : money(purchase.total);
       const actions = '<button type="button" class="btn btn-sm btn-info" data-purchase-action="view" data-purchase-id="' + esc(purchase.id) + '">Ver factura</button>' + (purchase.status === 'CANCELLED' ? '' : ' <button type="button" class="btn btn-sm btn-danger" data-purchase-action="cancel" data-purchase-id="' + esc(purchase.id) + '">Anular</button>');
@@ -86,34 +78,54 @@
     }), 'No hay facturas de compra registradas.');
     el('connectedPurchasesStatus').textContent = filtered.length + ' compra(s) dentro del período seleccionado.';
   }
-  async function renderPayables(query = '') {
-    const offset = state.payablesOffset;
+  async function renderPayables() {
     const results = await request(async (api, business) => {
-      const [rows, summary] = await Promise.all([allPages(pageOffset => api.payables(pageOffset, query), business), api.payablesSummary()]);
+      const [rows, summary] = await Promise.all([allPages(offset => api.payables(offset), business), api.payablesSummary()]);
       if (summary.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401);
       return { rows, summary };
     });
     const range = window.PosPeriodFilters?.range('payables') || { from: '', until: '' };
-    const filtered = results.rows.filter(purchase => window.PosPeriodFilters?.matches(purchase.dueAt, range));
-    const page = filtered.slice(offset, offset + pageSize);
-    state.payableHasNext = offset + pageSize < filtered.length;
-    el('connectedPayablesPrev').disabled = offset === 0;
-    el('connectedPayablesNext').disabled = !state.payableHasNext;
-    el('connectedPayablesPage').textContent = String(Math.floor(offset / pageSize) + 1);
-    el('connectedPayablesSummary').textContent = 'Saldo pendiente actual (fuera del período): ' + money(results.summary.balance) + ' · Pagos por confirmar actuales: ' + money(results.summary.pendingPayments) + '.';
-    el('connectedPayablesSummary').classList.remove('hidden');
-    el('connectedPayablesStatus').textContent = filtered.length + ' factura(s) con vencimiento dentro del período seleccionado.';
-    setTable('connectedPayablesTableBody', 9, page.map(purchase => '<tr data-table-date="' + esc(dayKey(purchase.dueAt)) + '"><td>' + purchaseReference(purchase) + '</td><td>' + esc(purchase.supplierName) + '</td><td>' + esc(dateTime(purchase.createdAt)) + '</td><td>' + esc(date(purchase.dueAt)) + '</td><td>' + money(purchase.total) + '</td><td>' + money(purchase.paid) + '</td><td><strong>' + money(purchase.balance) + '</strong></td><td>' + esc(statusLabel(purchase.status)) + (Number(purchase.pendingPayments) > 0 ? '<br>' + money(purchase.pendingPayments) + ' por confirmar' : '') + '</td><td><button type="button" class="btn btn-sm btn-info" data-purchase-action="view" data-purchase-id="' + esc(purchase.id) + '">Ver factura</button> <button type="button" class="btn btn-sm btn-success" data-purchase-action="pay" data-purchase-id="' + esc(purchase.id) + '" ' + (Number(purchase.balance) <= Number(purchase.pendingPayments) ? 'disabled' : '') + '>Abonar</button></td></tr>'), filtered.length ? 'No hay facturas pendientes por pagar.' : 'No hay facturas con vencimiento en este período.');
+    const allOpen = results.rows.filter(purchase => Number(purchase.balance) > 0);
+    const inPeriod = allOpen.filter(purchase => window.PosPeriodFilters?.matches(purchase.dueAt, range));
+    const groups = new Map();
+    for (const invoice of inPeriod) {
+      const id = String(invoice.supplierId);
+      const group = groups.get(id) || { id, name: invoice.supplierName, invoices: [], nextDueAt: invoice.dueAt };
+      group.invoices.push(invoice);
+      if (Date.parse(invoice.dueAt) < Date.parse(group.nextDueAt)) group.nextDueAt = invoice.dueAt;
+      groups.set(id, group);
+    }
+    const rows = [...groups.values()].sort((a, b) => Date.parse(a.nextDueAt) - Date.parse(b.nextDueAt)).map(group => {
+      const supplier = state.suppliers.find(item => String(item.id) === group.id);
+      const balance = allOpen.filter(invoice => String(invoice.supplierId) === group.id).reduce((total, invoice) => total + Number(invoice.balance || 0), 0);
+      const action = '<button type="button" class="btn btn-sm btn-info" data-supplier-action="statement" data-supplier-id="' + esc(group.id) + '">Ver Facturas</button>';
+      return '<tr><td><strong>' + esc(supplier?.name || group.name) + '</strong></td><td>' + esc(supplier?.phone || '—') + '</td><td style="color:#d32f2f;font-weight:bold;">' + esc(date(group.nextDueAt)) + '</td><td style="color:#d32f2f;font-weight:bold;font-size:1.1em;">' + money(balance) + '</td><td>' + action + '</td></tr>';
+    });
+    setTable('payablesTableBody', 5, rows, 'No hay facturas pendientes con vencimiento en este período.');
+    const status = el('connectedPayablesStatus');
+    if (status) status.textContent = inPeriod.length + ' factura(s) con vencimiento dentro del período seleccionado.';
   }
   function renderSuppliers(rows = state.suppliers) {
-    setTable('connectedSuppliersTableBody', 7, rows.map(supplier => '<tr><td><strong>' + esc(supplier.name) + '</strong>' + (supplier.ruc ? '<br><small>RUC: ' + esc(supplier.ruc) + '</small>' : '') + '</td><td>' + esc(supplier.contact || '—') + '<br><small>' + esc(supplier.phone || '') + '</small></td><td>' + esc(supplier.address || '—') + '</td><td>' + money(supplier.totalPurchased) + '<br><small>' + Number(supplier.purchaseCount || 0) + ' compras</small></td><td>' + money(supplier.debt) + '</td><td>' + (supplier.active ? 'Activo' : 'Inactivo') + '</td><td><button type="button" class="btn btn-sm btn-info" data-supplier-action="statement" data-supplier-id="' + esc(supplier.id) + '">Estado de cuenta</button> <button type="button" class="btn btn-sm btn-primary" data-supplier-action="edit" data-supplier-id="' + esc(supplier.id) + '">Editar</button> <button type="button" class="btn btn-sm ' + (supplier.active ? 'btn-warning' : 'btn-success') + '" data-supplier-action="toggle" data-supplier-id="' + esc(supplier.id) + '">' + (supplier.active ? 'Inactivar' : 'Activar') + '</button></td></tr>'), 'No hay proveedores registrados.');
+    setTable('suppliersTableBody', 6, rows.map(supplier => {
+      const active = supplier.active !== false;
+      const actions = '<div class="connected-supplier-actions">' +
+        '<button type="button" class="btn btn-sm btn-info" data-supplier-action="statement" data-supplier-id="' + esc(supplier.id) + '">Edo. Cuenta</button>' +
+        '<button type="button" class="btn btn-sm btn-primary" data-supplier-action="edit" data-supplier-id="' + esc(supplier.id) + '">Editar</button>' +
+        '<button type="button" class="btn btn-sm ' + (active ? 'btn-warning' : 'btn-success') + '" data-supplier-action="toggle" data-supplier-id="' + esc(supplier.id) + '">' + (active ? 'Inactivar' : 'Activar') + '</button></div>';
+      const inactiveStyle = active ? '' : ' style="background-color:#f9f9f9;opacity:0.8;"';
+      return '<tr' + inactiveStyle + '><td><strong>' + esc(supplier.name) + '</strong><br><small>RUC: ' + esc(supplier.ruc || 'N/A') + '</small></td>' +
+        '<td>' + esc(supplier.contact || '—') + '<br><small>' + esc(supplier.phone || '') + '</small></td>' +
+        '<td><small>' + esc(supplier.address || '—') + '</small></td>' +
+        '<td><strong class="connected-supplier-purchases">' + money(supplier.totalPurchased) + '</strong><br><small>' + Number(supplier.purchaseCount || 0) + ' compras</small></td>' +
+        '<td><strong class="connected-supplier-debt">' + money(supplier.debt) + '</strong></td><td>' + actions + '</td></tr>';
+    }), 'No hay proveedores registrados.');
     const list = el('supplierDataList');
     if (list) list.innerHTML = state.suppliers.filter(row => row.active).map(row => '<option value="' + esc(row.name) + '"></option>').join('');
   }
   async function load(view) {
     state.currentView = view;
     if (!['purchasesView', 'payablesView', 'suppliersView'].includes(view)) return false;
-    setConnectedView(view);
+    setConnectedView();
     try {
       if (view === 'purchasesView') {
         state.purchasesOffset = 0;
@@ -121,6 +133,7 @@
         await renderPurchases(el('connectedPurchasesSearch').value.trim());
       } else if (view === 'payablesView') {
         state.payablesOffset = 0;
+        await loadSuppliers(false);
         await renderPayables(el('connectedPayablesSearch').value.trim());
       } else {
         await loadSuppliers(false);
@@ -141,7 +154,7 @@
     el('purchPaymentMethodContainer').classList.remove('hidden');
     el('purchPaymentMethodContainer').classList.toggle('hidden', el('purchType').value !== 'contado');
     el('purchDaysContainer').style.display = 'none';
-    el('connectedPurchaseHint').textContent = 'La compra actualizará existencias y costo en MySQL. Efectivo y pagos en efectivo requieren una caja abierta.';
+    el('connectedPurchaseHint').textContent = 'La compra actualizará existencias y costo. Si compras o abonas en efectivo, debe haber una caja abierta.';
     el('connectedPurchaseHint').classList.remove('hidden');
     renderCart(); el('purchaseModal').classList.remove('hidden'); el('purchSupplier').focus();
   }
@@ -180,7 +193,7 @@
       const purchase = await request((api, business) => api.createPurchase(data).then(row => { if (row.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401); return row; }));
       state.operationKey = null; closePurchase(); await Promise.all([renderPurchases(el('connectedPurchasesSearch').value.trim()), loadProducts()]);
       const reference = purchaseNumber(purchase) + (purchase.supplierInvoiceNumber ? ' (factura del proveedor ' + purchase.supplierInvoiceNumber + ')' : '');
-      refreshDerived(); window.showAlert('Compra ' + reference + ' registrada. Existencias y costo actualizados en MySQL.');
+      refreshDerived(); window.showAlert('Compra ' + reference + ' registrada. Existencias y costo actualizados.');
     } catch (error) { showError(error, 'connectedPurchasesStatus'); }
     finally { button.disabled = false; }
   }
@@ -242,7 +255,7 @@
       await loadSuppliers(quick || state.currentView === 'purchasesView');
       if (state.currentView === 'suppliersView') renderSuppliers();
       if (quick) el('purchSupplier').value = data.name;
-      refreshDerived(); window.showAlert(id ? 'Proveedor actualizado en MySQL.' : 'Proveedor guardado en MySQL.');
+      refreshDerived(); window.showAlert(id ? 'Proveedor actualizado.' : 'Proveedor guardado.');
     } catch (error) { showError(error); }
     finally { button.disabled = false; }
   }
@@ -260,7 +273,7 @@
       el('statementModalSubtitle').textContent = 'Deuda actual: ' + money(data.supplier.debt) + ' · Compras registradas: ' + Number(data.supplier.purchaseCount || 0);
       setTable('statementTableBody', 7, data.entries.map(entry => {
         const charge = Number(entry.charge || 0), paid = Number(entry.paid || 0);
-        const buttons = entry.kind === 'PURCHASE' ? '<span>' + (entry.status === 'CANCELLED' ? 'Anulada' : statusLabel(entry.status)) + '</span>' : '';
+        const buttons = entry.kind === 'PURCHASE' ? '<button type="button" class="btn btn-sm btn-info" data-statement-action="view" data-purchase-id="' + esc(entry.purchaseId) + '">Ver factura</button>' + (entry.status === 'CANCELLED' || Number(entry.balance) <= Number(entry.pending || 0) ? '' : ' <button type="button" class="btn btn-sm btn-success" data-statement-action="pay" data-purchase-id="' + esc(entry.purchaseId) + '">Abonar</button>') : '';
         return '<tr data-period-date="' + esc(window.PosPeriodFilters?.dateKey(entry.date) || '') + '"><td>' + esc(dateTime(entry.date)) + '</td><td>' + esc(entry.reference || '—') + '</td><td>' + esc(entry.description || '—') + (entry.pending ? '<br><small>Por confirmar ' + money(entry.pending) + '</small>' : '') + '</td><td>' + (charge ? money(charge) : '—') + '</td><td>' + (paid ? money(paid) : '—') + '</td><td>' + money(entry.balance) + '</td><td>' + buttons + '</td></tr>';
       }), 'No hay movimientos registrados.');
       window.PosPeriodFilters?.filterTable('statementTableBody', window.PosPeriodFilters.range('statement'));
@@ -291,7 +304,7 @@
       const payment = await request(api => api.paySupplierInvoice(id, { operationKey: uuid(), amount: Number(amount).toFixed(2), paymentMethod }));
       el('paymentInvoiceModal').classList.add('hidden');
       if (state.currentView === 'payablesView') await renderPayables(el('connectedPayablesSearch').value.trim());
-      refreshDerived(); window.showAlert(payment.status === 'PENDING' ? 'Pago guardado y pendiente de confirmar en Caja.' : 'Pago registrado en MySQL.');
+      refreshDerived(); window.showAlert(payment.status === 'PENDING' ? 'Pago pendiente de confirmar en Caja.' : 'Pago registrado.');
     } catch (error) { showError(error); }
     finally { button.disabled = false; }
   }
@@ -306,15 +319,19 @@
       request(api => api.purchase(id)).then(purchase => askCancel(purchase)).catch(showError);
     }
   }
-  el('connectedPurchasesTableBody').addEventListener('click', viewPurchaseAction);
-  el('connectedPayablesTableBody').addEventListener('click', viewPurchaseAction);
+  el('purchasesTableBody').addEventListener('click', viewPurchaseAction);
+  el('payablesTableBody').addEventListener('click', viewPurchaseAction);
+  el('payablesTableBody').addEventListener('click', event => {
+    const button = event.target.closest('[data-supplier-action="statement"]');
+    if (button) supplierStatement(button.dataset.supplierId);
+  });
   el('statementTableBody').addEventListener('click', event => {
     const button = event.target.closest('[data-statement-action]'); if (!button) return;
     el('statementModal').classList.add('hidden');
     if (button.dataset.statementAction === 'view') viewPurchaseById(button.dataset.purchaseId);
     else openInvoicePayment(button.dataset.purchaseId);
   });
-  el('connectedSuppliersTableBody').addEventListener('click', event => {
+  el('suppliersTableBody').addEventListener('click', event => {
     const button = event.target.closest('[data-supplier-action]'); if (!button) return;
     const id = button.dataset.supplierId;
     if (button.dataset.supplierAction === 'statement') supplierStatement(id);
@@ -359,10 +376,6 @@
     const query = el('connectedSuppliersSearch').value.trim().toLocaleLowerCase('es');
     renderSuppliers(state.suppliers.filter(item => [item.name, item.contact, item.phone, item.ruc, item.address].some(value => String(value || '').toLocaleLowerCase('es').includes(query))));
   }, 100); });
-
-  window.PosTables?.setupDataTable(el('connectedPurchasesTableBody'), { label: 'Compras conectadas', fileName: 'compras_conectadas', searchInputId: 'connectedPurchasesSearch', toolsContainerId: 'connectedPurchasesControls', ignoreColumns: [6] });
-  window.PosTables?.setupDataTable(el('connectedPayablesTableBody'), { label: 'Cuentas por pagar conectadas', fileName: 'cuentas_por_pagar_conectadas', searchInputId: 'connectedPayablesSearch', toolsContainerId: 'connectedPayablesControls', ignoreColumns: [8] });
-  window.PosTables?.setupDataTable(el('connectedSuppliersTableBody'), { label: 'Proveedores conectados', fileName: 'proveedores_conectados', searchInputId: 'connectedSuppliersSearch', toolsContainerId: 'connectedSuppliersControls', ignoreColumns: [6] });
 
   window.PosPurchases = Object.freeze({ load, openPurchase, closePurchase, addItem: addPurchaseItem, addPurchaseItem, savePurchase, applyPeriod, supplierOptions: () => state.suppliers, quickEditProduct() { window.showAlert('Editar productos requiere entrar a Inventario.'); }, productCreated(product) { if (!state.products.some(row => row.id === product.id)) state.products.push(product); window.PosRuntime.setProducts(state.products); el('purchProductTemp').value = product.name; el('purchProductTemp').dataset.productId = product.id; el('purchCostTemp').value = Number(product.cost || 0).toFixed(2); }, newSupplier, editSupplier, saveSupplier, toggleSupplier, supplierStatement, viewPurchase: viewPurchaseById, openInvoicePayment, payInvoice, cancelPurchase: askCancel });
 })();
