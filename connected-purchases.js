@@ -34,6 +34,8 @@
     window.PosTables?.refreshDataTable(body);
   }
   function setConnectedView() {
+    document.querySelectorAll('.local-procurement-content').forEach(node => node.classList.add('hidden'));
+    document.querySelectorAll('.connected-procurement-content').forEach(node => node.classList.remove('hidden'));
     for (const id of ['connectedPurchasesControls', 'connectedPayablesControls', 'connectedSuppliersControls']) el(id)?.classList.add('hidden');
     el('connectedPayablesSummary')?.classList.add('hidden');
   }
@@ -106,7 +108,7 @@
     if (status) status.textContent = inPeriod.length + ' factura(s) con vencimiento dentro del período seleccionado.';
   }
   function renderSuppliers(rows = state.suppliers) {
-    setTable('suppliersTableBody', 6, rows.map(supplier => {
+    setTable('connectedSuppliersTableBody', 6, rows.map(supplier => {
       const active = supplier.active !== false;
       const actions = '<div class="connected-supplier-actions">' +
         '<button type="button" class="btn btn-sm btn-info" data-supplier-action="statement" data-supplier-id="' + esc(supplier.id) + '">Edo. Cuenta</button>' +
@@ -331,7 +333,7 @@
     if (button.dataset.statementAction === 'view') viewPurchaseById(button.dataset.purchaseId);
     else openInvoicePayment(button.dataset.purchaseId);
   });
-  el('suppliersTableBody').addEventListener('click', event => {
+  el('connectedSuppliersTableBody').addEventListener('click', event => {
     const button = event.target.closest('[data-supplier-action]'); if (!button) return;
     const id = button.dataset.supplierId;
     if (button.dataset.supplierAction === 'statement') supplierStatement(id);
