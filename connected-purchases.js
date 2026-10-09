@@ -274,10 +274,17 @@
       el('statementModalTitle').textContent = 'Estado de cuenta: ' + data.supplier.name;
       el('statementModalSubtitle').textContent = 'Deuda actual: ' + money(data.supplier.debt) + ' · Compras registradas: ' + Number(data.supplier.purchaseCount || 0);
       const paidByPurchase = new Map();
+      const pendingByPurchase = new Map();
       for (const row of data.entries || []) {
         if (row.kind !== 'PAYMENT' || !row.purchaseId || row.status === 'VOID' || row.status === 'CANCELLED') continue;
         const key = String(row.purchaseId);
-        paidByPurchase.set(key, (paidByPurchase.get(key) || 0) + Number(row.paid || row.amount || 0));
+        if (row.status === 'POSTED') {
+          const amount = Number(row.paid || 0) || Number(row.amount || 0);
+          paidByPurchase.set(key, (paidByPurchase.get(key) || 0) + amount);
+        } else if (row.status === 'PENDING') {
+          const amount = Number(row.pending || 0) || Number(row.amount || 0);
+          pendingByPurchase.set(key, (pendingByPurchase.get(key) || 0) + amount);
+        }
       }
       setTable('statementTableBody', 7, data.entries.map(entry => {
         const charge = Number(entry.charge || 0), paid = Number(entry.paid || 0);
@@ -290,8 +297,9 @@
         );
         const paidForPurchase = paidByPurchase.get(String(entry.purchaseId)) || 0;
         const realBalance = Math.max(0, charge - paidForPurchase);
-        const pendingAmount = Number(entry.pending || 0);
-        const canPay = isCreditPurchase && entry.status !== 'CANCELLED' && realBalance > pendingAmount && realBalance > 0.009;
+        const pendingForPurchase = Math.max(pendingByPurchase.get(String(entry.purchaseId)) || 0, Number(entry.pending || 0));
+        const availableBalance = Math.max(0, realBalance - pendingForPurchase);
+        const canPay = entry.kind === 'PURCHASE' && isCreditPurchase && entry.status !== 'CANCELLED' && realBalance > 0.009 && availableBalance > 0.009;
         const buttons = entry.kind === 'PURCHASE' ? '<button type="button" class="btn btn-sm btn-info" data-statement-action="view" data-purchase-id="' + esc(entry.purchaseId) + '">Ver factura</button>' + (canPay ? ' <button type="button" class="btn btn-sm btn-success" data-statement-action="pay" data-purchase-id="' + esc(entry.purchaseId) + '">Abonar</button>' : '') : '';
         return '<tr data-period-date="' + esc(window.PosPeriodFilters?.dateKey(entry.date) || '') + '"><td>' + esc(dateTime(entry.date)) + '</td><td>' + esc(entry.reference || '—') + '</td><td>' + esc(entry.description || '—') + (entry.pending ? '<br><small>Por confirmar ' + money(entry.pending) + '</small>' : '') + '</td><td>' + (charge ? money(charge) : '—') + '</td><td>' + (paid ? money(paid) : '—') + '</td><td>' + money(entry.balance) + '</td><td>' + buttons + '</td></tr>';
       }), 'No hay movimientos registrados.');
