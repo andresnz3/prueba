@@ -1826,21 +1826,24 @@ window.verEstadoCuentaProveedor = function(id) {
     const tbody = document.getElementById("statementTableBody"); if(!tbody) return; 
     if(ledger.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="text-center">No hay movimientos registrados.</td></tr>`; } else { 
         let saldo = 0;
-        tbody.innerHTML = ledger.map(mov => { 
+        const rows = ledger.map(mov => {
             if (!mov.anulado) { if (mov.type === 'cargo') saldo += mov.amount; else saldo -= mov.amount; }
             const cargoHtml = mov.type === 'cargo' ? (mov.anulado ? `<del>${sysConfig.currency}${mov.amount.toFixed(2)}</del>` : `${sysConfig.currency}${mov.amount.toFixed(2)}`) : ''; 
             const abonoHtml = mov.type === 'abono' ? (mov.anulado ? `<del>${sysConfig.currency}${mov.amount.toFixed(2)}</del>` : `${sysConfig.currency}${mov.amount.toFixed(2)}`) : '';
             
             let btnHtml = '';
+            const purchase = mov.type === 'cargo' ? purchasesHistory.find(p => String(p.id) === String(mov.id)) : null;
+            const canPay = mov.type === 'cargo' && !mov.anulado && obtenerSaldoFactura("proveedor", purchase) > 0;
             if (mov.type === 'cargo') { 
                 btnHtml = `<button class="btn btn-sm btn-info" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.verFacturaCompra('${mov.id}'), 100);">Ver Factura</button> ` +
-                          (mov.anulado || obtenerSaldoFactura("proveedor", purchasesHistory.find(p => String(p.id) === String(mov.id))) <= 0 ? '' : `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoFacturaProveedor('${mov.id}'), 100);">Abonar</button>`);
+                          (canPay ? `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoFacturaProveedor('${mov.id}'), 100);">Abonar</button>` : '');
             }
             else if (mov.type === 'abono') { btnHtml = mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoProveedor('${mov.id}'), 100);">Anular</button>`; }
             
             const trStyle = mov.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : '';
-            return `<tr data-period-date="${window.PosPeriodFilters?.dateKey(mov.ts) || ''}" ${trStyle}><td>${mov.date}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>`;
-        }).join(""); 
+            return { canPay, html: `<tr data-period-date="${window.PosPeriodFilters?.dateKey(mov.ts) || ''}" ${trStyle}><td>${mov.date}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>` };
+        });
+        tbody.innerHTML = [...rows.filter(row => row.canPay), ...rows.filter(row => !row.canPay)].map(row => row.html).join("");
     } 
     window.PosPeriodFilters?.filterTable("statementTableBody", window.PosPeriodFilters.range("statement"));
     document.getElementById("statementModal")?.classList.remove("hidden"); 
@@ -1953,12 +1956,12 @@ function resolverProductoDeItemCompra(item) {
 
 document.getElementById("purchaseForm")?.addEventListener("submit", async (e) => { 
     e.preventDefault(); if (connectedMode) return window.PosPurchases?.savePurchase(); if (blockPendingConnected()) return; if (!isAdmin(['purchasesView', 'historyView'])) { showAlert("No tiene permisos para registrar compras."); return; } if(currentPurchaseCart.length === 0) { showAlert("Agrega al menos un producto a la factura."); return; }
-    const pId = document.getElementById("purchId").value; const tipoCompra = document.getElementById("purchType").value; const proveedorNombre = document.getElementById("purchSupplier").value.trim(); const facturaNum = document.getElementById("purchInvoice").value.trim() || "S/F";
+    const pId = document.getElementById("purchId").value; const purchaseId = pId ? pId : Date.now(); const tipoCompra = document.getElementById("purchType").value; const proveedorNombre = document.getElementById("purchSupplier").value.trim(); const facturaNum = document.getElementById("purchInvoice").value.trim() || `COMP-${String(purchaseId).padStart(6, "0")}`;
     const purchaseItems = currentPurchaseCart.map(item => { const producto = resolverProductoDeItemCompra(item); return producto ? { ...item, productId: producto.id } : null; });
     if (purchaseItems.some(item => !item)) { showAlert("No se puede guardar la compra: cada producto debe estar vinculado a un producto del inventario."); return; }
     const totalFactura = r2(purchaseItems.reduce((sum, item) => sum + item.total, 0));
     let dueDateStr = null; if(tipoCompra === "credito") { const days = Math.max(1, parseInt(document.getElementById("purchDays")?.value) || 30); let d = new Date(); d.setDate(d.getDate() + days); dueDateStr = d.toLocaleDateString(); } 
-    const newPurch = { id: pId ? pId : Date.now(), business_id: DEFAULT_BUSINESS_ID, fecha: new Date().toLocaleDateString(), fechaTS: Date.now(), factura: facturaNum, tipo: tipoCompra, proveedor: proveedorNombre, items: purchaseItems, total: totalFactura, vencimiento: dueDateStr, anulada: false }; 
+    const newPurch = { id: purchaseId, business_id: DEFAULT_BUSINESS_ID, fecha: new Date().toLocaleDateString(), fechaTS: Date.now(), factura: facturaNum, tipo: tipoCompra, proveedor: proveedorNombre, items: purchaseItems, total: totalFactura, vencimiento: dueDateStr, anulada: false };
     
     if (pId) { const index = purchasesHistory.findIndex(p => String(p.id) === String(pId)); if(index > -1) purchasesHistory[index] = newPurch; } else {
         purchasesHistory.push(newPurch);

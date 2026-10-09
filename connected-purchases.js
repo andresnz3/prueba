@@ -286,7 +286,8 @@
           pendingByPurchase.set(key, (pendingByPurchase.get(key) || 0) + amount);
         }
       }
-      setTable('statementTableBody', 7, data.entries.map(entry => {
+      const payableRows = [];
+      const renderedRows = data.entries.map(entry => {
         const charge = Number(entry.charge || 0), paid = Number(entry.paid || 0);
         const purchaseTypeText = String(entry.purchaseType || entry.purchase_type || entry.description || '').toLocaleLowerCase('es');
         const isCreditPurchase = entry.kind === 'PURCHASE' && (
@@ -300,9 +301,12 @@
         const pendingForPurchase = Math.max(pendingByPurchase.get(String(entry.purchaseId)) || 0, Number(entry.pending || 0));
         const availableBalance = Math.max(0, realBalance - pendingForPurchase);
         const canPay = entry.kind === 'PURCHASE' && isCreditPurchase && entry.status !== 'CANCELLED' && realBalance > 0.009 && availableBalance > 0.009;
+        payableRows.push(canPay);
         const buttons = entry.kind === 'PURCHASE' ? '<button type="button" class="btn btn-sm btn-info" data-statement-action="view" data-purchase-id="' + esc(entry.purchaseId) + '">Ver factura</button>' + (canPay ? ' <button type="button" class="btn btn-sm btn-success" data-statement-action="pay" data-purchase-id="' + esc(entry.purchaseId) + '">Abonar</button>' : '') : '';
         return '<tr data-period-date="' + esc(window.PosPeriodFilters?.dateKey(entry.date) || '') + '"><td>' + esc(dateTime(entry.date)) + '</td><td>' + esc(entry.reference || '—') + '</td><td>' + esc(entry.description || '—') + (entry.pending ? '<br><small>Por confirmar ' + money(entry.pending) + '</small>' : '') + '</td><td>' + (charge ? money(charge) : '—') + '</td><td>' + (paid ? money(paid) : '—') + '</td><td>' + money(entry.balance) + '</td><td>' + buttons + '</td></tr>';
-      }), 'No hay movimientos registrados.');
+      });
+      const orderedRows = [...renderedRows.filter((_, index) => payableRows[index]), ...renderedRows.filter((_, index) => !payableRows[index])];
+      setTable('statementTableBody', 7, orderedRows, 'No hay movimientos registrados.');
       window.PosPeriodFilters?.filterTable('statementTableBody', window.PosPeriodFilters.range('statement'));
       el('statementModal').classList.remove('hidden');
     } catch (error) { showError(error); }

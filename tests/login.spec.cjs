@@ -2054,7 +2054,7 @@ test("valida proveedor y factura obligatorios y exige al menos un producto", asy
       .filter(field => !field.checkValidity())
       .map(field => field.id)
   );
-  expect(missingRequiredFields).toEqual(["purchSupplier", "purchInvoice"]);
+  expect(missingRequiredFields).toEqual(["purchSupplier"]);
   await expect(page.locator("#purchaseModal")).toBeVisible();
 
   await page.locator("#purchSupplier").fill("Proveedor sin productos");
