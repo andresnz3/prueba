@@ -72,7 +72,7 @@
     el('connectedPurchasesPrev').disabled = offset === 0;
     el('connectedPurchasesNext').disabled = !state.purchaseHasNext;
     el('connectedPurchasesPage').textContent = String(Math.floor(offset / pageSize) + 1);
-    setTable('purchasesTableBody', 7, page.map(purchase => {
+    setTable('connectedPurchasesTableBody', 7, page.map(purchase => {
       const status = purchase.status === 'CANCELLED' ? 'Anulada' : purchase.purchaseType === 'CREDIT' ? statusLabel(purchase.status) + (purchase.dueAt ? ' · vence ' + date(purchase.dueAt) : '') : 'Contado';
       const total = purchase.status === 'CANCELLED' ? '<del>' + money(purchase.total) + '</del>' : money(purchase.total);
       const actions = '<button type="button" class="btn btn-sm btn-info" data-purchase-action="view" data-purchase-id="' + esc(purchase.id) + '">Ver factura</button>' + (purchase.status === 'CANCELLED' ? '' : ' <button type="button" class="btn btn-sm btn-danger" data-purchase-action="cancel" data-purchase-id="' + esc(purchase.id) + '">Anular</button>');
@@ -103,7 +103,7 @@
       const action = '<button type="button" class="btn btn-sm btn-info" data-supplier-action="statement" data-supplier-id="' + esc(group.id) + '">Ver Facturas</button>';
       return '<tr><td><strong>' + esc(supplier?.name || group.name) + '</strong></td><td>' + esc(supplier?.phone || '—') + '</td><td style="color:#d32f2f;font-weight:bold;">' + esc(date(group.nextDueAt)) + '</td><td style="color:#d32f2f;font-weight:bold;font-size:1.1em;">' + money(balance) + '</td><td>' + action + '</td></tr>';
     });
-    setTable('payablesTableBody', 5, rows, 'No hay facturas pendientes con vencimiento en este período.');
+    setTable('connectedPayablesTableBody', 5, rows, 'No hay facturas pendientes con vencimiento en este período.');
     const status = el('connectedPayablesStatus');
     if (status) status.textContent = inPeriod.length + ' factura(s) con vencimiento dentro del período seleccionado.';
   }
@@ -273,9 +273,26 @@
       const data = await request(api => api.supplierStatement(id));
       el('statementModalTitle').textContent = 'Estado de cuenta: ' + data.supplier.name;
       el('statementModalSubtitle').textContent = 'Deuda actual: ' + money(data.supplier.debt) + ' · Compras registradas: ' + Number(data.supplier.purchaseCount || 0);
+      const paidByPurchase = new Map();
+      for (const row of data.entries || []) {
+        if (row.kind !== 'PAYMENT' || !row.purchaseId || row.status === 'VOID' || row.status === 'CANCELLED') continue;
+        const key = String(row.purchaseId);
+        paidByPurchase.set(key, (paidByPurchase.get(key) || 0) + Number(row.paid || row.amount || 0));
+      }
       setTable('statementTableBody', 7, data.entries.map(entry => {
         const charge = Number(entry.charge || 0), paid = Number(entry.paid || 0);
-        const buttons = entry.kind === 'PURCHASE' ? '<button type="button" class="btn btn-sm btn-info" data-statement-action="view" data-purchase-id="' + esc(entry.purchaseId) + '">Ver factura</button>' + (entry.status === 'CANCELLED' || Number(entry.balance) <= Number(entry.pending || 0) ? '' : ' <button type="button" class="btn btn-sm btn-success" data-statement-action="pay" data-purchase-id="' + esc(entry.purchaseId) + '">Abonar</button>') : '';
+        const purchaseTypeText = String(entry.purchaseType || entry.purchase_type || entry.description || '').toLocaleLowerCase('es');
+        const isCreditPurchase = entry.kind === 'PURCHASE' && (
+          entry.purchaseType === 'CREDIT' ||
+          entry.purchase_type === 'CREDIT' ||
+          purchaseTypeText.includes('crédito') ||
+          purchaseTypeText.includes('credito')
+        );
+        const paidForPurchase = paidByPurchase.get(String(entry.purchaseId)) || 0;
+        const realBalance = Math.max(0, charge - paidForPurchase);
+        const pendingAmount = Number(entry.pending || 0);
+        const canPay = isCreditPurchase && entry.status !== 'CANCELLED' && realBalance > pendingAmount && realBalance > 0.009;
+        const buttons = entry.kind === 'PURCHASE' ? '<button type="button" class="btn btn-sm btn-info" data-statement-action="view" data-purchase-id="' + esc(entry.purchaseId) + '">Ver factura</button>' + (canPay ? ' <button type="button" class="btn btn-sm btn-success" data-statement-action="pay" data-purchase-id="' + esc(entry.purchaseId) + '">Abonar</button>' : '') : '';
         return '<tr data-period-date="' + esc(window.PosPeriodFilters?.dateKey(entry.date) || '') + '"><td>' + esc(dateTime(entry.date)) + '</td><td>' + esc(entry.reference || '—') + '</td><td>' + esc(entry.description || '—') + (entry.pending ? '<br><small>Por confirmar ' + money(entry.pending) + '</small>' : '') + '</td><td>' + (charge ? money(charge) : '—') + '</td><td>' + (paid ? money(paid) : '—') + '</td><td>' + money(entry.balance) + '</td><td>' + buttons + '</td></tr>';
       }), 'No hay movimientos registrados.');
       window.PosPeriodFilters?.filterTable('statementTableBody', window.PosPeriodFilters.range('statement'));
@@ -321,9 +338,9 @@
       request(api => api.purchase(id)).then(purchase => askCancel(purchase)).catch(showError);
     }
   }
-  el('purchasesTableBody').addEventListener('click', viewPurchaseAction);
-  el('payablesTableBody').addEventListener('click', viewPurchaseAction);
-  el('payablesTableBody').addEventListener('click', event => {
+  el('connectedPurchasesTableBody').addEventListener('click', viewPurchaseAction);
+  el('connectedPayablesTableBody').addEventListener('click', viewPurchaseAction);
+  el('connectedPayablesTableBody').addEventListener('click', event => {
     const button = event.target.closest('[data-supplier-action="statement"]');
     if (button) supplierStatement(button.dataset.supplierId);
   });
