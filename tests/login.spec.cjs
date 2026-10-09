@@ -2988,6 +2988,52 @@ test.describe("CAJA:", () => {
       await expect(page.locator("#payablesTableBody")).not.toContainText("Proveedor payables contado");
     });
 
+    test("ordena primero facturas locales abonables y conserva el saldo historico de cada fila", async ({ page }) => {
+      await iniciarSesion(page);
+      await crearProductoParaPayables(page, "PAYABLES-ORDER-001", "Producto para ordenar estado de cuenta");
+      await registrarCompraPayables(page, {
+        supplier: "Proveedor orden estado",
+        invoice: "PAY-ORDER-OLD-001",
+        cost: "10",
+        product: "Producto para ordenar estado de cuenta"
+      });
+
+      await abrirEstadoCuentaDesdePayables(page, "Proveedor orden estado");
+      const paidInvoice = filaFacturaEstadoCuenta(page, "PAY-ORDER-OLD-001");
+      await paidInvoice.getByRole("button", { name: "Abonar" }).click();
+      await page.locator("#payInvoiceAmount").fill("10");
+      await page.locator("#payInvoiceMethod").selectOption("transferencia");
+      await page.locator("#paymentInvoiceForm button[type='submit']").click();
+      await expect(paidInvoice).toContainText("Pendiente C$0.00");
+      await expect(paidInvoice.getByRole("button", { name: "Abonar" })).toHaveCount(0);
+      await page.locator("#customAlertModal .close-modal-btn").click();
+      await page.locator("#statementModal .close-modal-btn").click();
+
+      await registrarCompraPayables(page, {
+        supplier: "Proveedor orden estado",
+        invoice: "PAY-ORDER-NEW-002",
+        cost: "15",
+        product: "Producto para ordenar estado de cuenta"
+      });
+      await abrirEstadoCuentaDesdePayables(page, "Proveedor orden estado");
+
+      const openInvoice = filaFacturaEstadoCuenta(page, "PAY-ORDER-NEW-002");
+      const paymentRow = filaPagoEstadoCuenta(page, "PAY-ORDER-OLD-001");
+      await expect(page.locator("#statementTableBody tr").first()).toContainText("PAY-ORDER-NEW-002");
+      await expect(openInvoice.getByRole("button", { name: "Abonar" })).toHaveCount(1);
+      await expect(paidInvoice.getByRole("button", { name: "Abonar" })).toHaveCount(0);
+      await expect(paymentRow.getByRole("button", { name: "Abonar" })).toHaveCount(0);
+
+      const rowIndex = async row => row.evaluate(element =>
+        [...element.parentElement.children].indexOf(element)
+      );
+      expect(await rowIndex(openInvoice)).toBeLessThan(await rowIndex(paidInvoice));
+      expect(await rowIndex(paidInvoice)).toBeLessThan(await rowIndex(paymentRow));
+      await expect(openInvoice.locator("td").nth(5)).toHaveText("C$15.00");
+      await expect(paidInvoice.locator("td").nth(5)).toHaveText("C$10.00");
+      await expect(paymentRow.locator("td").nth(5)).toHaveText("C$0.00");
+    });
+
     test("valida pagos, permite abonos parciales y exactos, muestra pagada y persiste", async ({ page }) => {
       await iniciarSesion(page);
       await crearProductoParaPayables(page, "PAYABLES-PAY-001", "Producto para pago de cuenta");
