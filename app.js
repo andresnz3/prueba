@@ -1986,7 +1986,15 @@ document.getElementById("purchaseForm")?.addEventListener("submit", async (e) =>
         if (tipoCompra === "credito") { let suppMatch = suppliers.find(s => (s.name||"").toLowerCase() === proveedorNombre.toLowerCase()); if(suppMatch) { suppMatch.debt = r2((suppMatch.debt || 0) + totalFactura); await localDB.suppliers.put(suppMatch); await encolarSincronizacion('UPDATE', 'suppliers', suppMatch); } else { const newSupp = { id: Date.now(), business_id: DEFAULT_BUSINESS_ID, name: proveedorNombre, contact: "-", phone: "-", debt: totalFactura, address: "", ruc: "", active: true }; suppliers.push(newSupp); await localDB.suppliers.put(newSupp); await encolarSincronizacion('INSERT', 'suppliers', newSupp); } }
         await registrarAuditoria('COMPRAS', 'NUEVA_COMPRA', `Registró factura de compra ${facturaNum} de "${proveedorNombre}"`);
     } 
-    await localDB.purchases.put(newPurch); await encolarSincronizacion(pId ? 'UPDATE' : 'INSERT', 'purchases', newPurch); document.getElementById("purchaseModal")?.classList.add("hidden"); actualizarTablaCompras(); actualizarTablaInventario(); actualizarCatalogo(); renderDashboard(); showAlert(`Factura guardada correctamente.`); 
+    await localDB.purchases.put(newPurch); await encolarSincronizacion(pId ? 'UPDATE' : 'INSERT', 'purchases', newPurch);
+    if (!pId && tipoCompra === "contado" && cajaActual) {
+        const fechaTS = Date.now();
+        cajaActual.movimientos.push({ id: fechaTS + Math.random(), cajaSessionId: cajaActual.id, tipo: "salida", monto: totalFactura, concepto: `Compra contado ${facturaNum}: ${proveedorNombre}`, fechaTS, fecha: new Date(fechaTS).toLocaleString(), usuario: currentUser?.displayName || "Sistema", medioPago: "CASH", referenciaCompraId: purchaseId, anulado: false });
+        await localDB.cajaSessions.put(cajaActual);
+        await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual);
+        renderCajaView();
+    }
+    document.getElementById("purchaseModal")?.classList.add("hidden"); actualizarTablaCompras(); actualizarTablaInventario(); actualizarCatalogo(); renderDashboard(); showAlert(`Factura guardada correctamente.`);
 });
 
 window.cancelarCompraForm = function() { if (connectedMode) return window.PosPurchases?.closePurchase(); showConfirm("¿Estás seguro de cancelar esta factura de compra?", () => { document.getElementById("purchaseModal").classList.add("hidden"); currentPurchaseCart = []; }); };

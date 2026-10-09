@@ -3681,7 +3681,7 @@ test.describe("CAJA:", () => {
     await expect(page.locator("#gastosTableBody")).not.toContainText("Gasto en efectivo posterior al cierre");
   });
 
-  test("compras no afectan Caja y pagos a proveedores en efectivo registran una salida", async ({ page }) => {
+  test("compra contado resta efectivo; compra a crédito no y los pagos en efectivo registran salidas", async ({ page }) => {
     await iniciarSesion(page);
     await crearProductoParaCaja(page, "CAJA-PURCHASE-001", "Producto comprado para Caja");
     await abrirCajaDesdeUI(page, "100.00");
@@ -3698,6 +3698,11 @@ test.describe("CAJA:", () => {
     await page.locator("#purchaseForm button[type='submit']").click();
     await page.locator("#customAlertModal .close-modal-btn").click();
 
+    await page.locator("#navCajaBtn").click();
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$100.00");
+    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$0.00");
+
+    await abrirCompras(page);
     await page.locator("#addNewPurchaseBtn").click();
     await page.locator("#purchSupplier").fill("Proveedor pago Caja");
     await page.locator("#purchInvoice").fill("FACT-CAJA-CASH-001");
@@ -3710,8 +3715,9 @@ test.describe("CAJA:", () => {
     await page.locator("#customAlertModal .close-modal-btn").click();
 
     await page.locator("#navCajaBtn").click();
-    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$100.00");
-    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$0.00");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$90.00");
+    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$10.00");
+    await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Compra contado FACT-CAJA-CASH-001: Proveedor pago Caja");
 
     await abrirProveedores(page);
     const supplierRow = page.locator("#suppliersTableBody tr").filter({
@@ -3733,9 +3739,22 @@ test.describe("CAJA:", () => {
     await page.locator("#statementModal .close-modal-btn").click();
 
     await page.locator("#navCajaBtn").click();
-    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$5.00");
-    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$95.00");
+    await expect(page.locator("#cajaResumenSalidas")).toHaveText("C$15.00");
+    await expect(page.locator("#cajaResumenEsperado")).toHaveText("C$85.00");
     await expect(page.locator("#cajaCentralBox #cajaMovimientosBody")).toContainText("Pago Factura FACT-CAJA-001: Proveedor pago Caja");
+
+    await page.locator("#cerrarCajaBtn").click();
+    await expect(page.locator("#cajaEsperadoDisplay")).toHaveText("C$ 85.00");
+    await page.locator("#cajaEfectivoRealInput").fill("85");
+    await page.locator("#confirmCierreCajaBtn").click();
+    await expect(page.locator("#cajaHistorialBody tr")).toHaveCount(1);
+    await expect(page.locator("#cajaHistorialBody tr").first()).toContainText("C$ 85.00");
+    await page.locator("#customAlertModal .close-modal-btn").click();
+    await page.locator("#cajaHistorialBody tr").first().getByRole("button", { name: "Detalles" }).click();
+    await expect(page.locator("#cajaDetalleResumen")).toContainText("Compras en efectivo");
+    await expect(page.locator("#cajaDetalleResumen")).toContainText("C$ 10.00");
+    await expect(page.locator("#cajaDetalleResumen")).toContainText("Salidas manuales / pagos en efectivo");
+    await expect(page.locator("#cajaDetalleResumen")).toContainText("C$ 5.00");
   });
 
   test("cierra con validación y diferencia, separa movimientos del historial y reporta cierres", async ({ page }) => {
