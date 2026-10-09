@@ -70,7 +70,7 @@ test('Reportes conectados muestra fuentes MySQL, filtra hoy y conserva el modo l
   await expect(page.locator('#repCxCBody')).toContainText(clientName);
   await expect(page.locator('#repVentasHistorialBody tr').filter({ hasText: sale.sale.invoiceNumber }).locator('td')).toHaveCount(6);
   await expect(page.locator('#connectedReportScope')).toContainText('estado actual del negocio');
-  await expect(page.locator('#repComprasPending')).toContainText('Reporte disponible cuando compras conectadas esté implementado.');
+  await expect(page.locator('#repComprasBody')).toContainText(/Sin compras para el período seleccionado\.|Proveedor compras/);
 
   await page.locator('#filtroHoyBtn').click();
   await expect(page.locator('#repVentasHistorialBody')).toContainText(sale.sale.invoiceNumber);
@@ -98,7 +98,7 @@ test('Reportes conectados muestra fuentes MySQL, filtra hoy y conserva el modo l
   const [paymentDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#repCxCBox .data-table-export').nth(1).click()]);
   expect(paymentDownload.suggestedFilename()).toMatch(/^abonos_cuentas_por_cobrar_\d{4}-\d{2}-\d{2}\.xlsx$/);
   await page.locator('.rep-subtab[data-target="repComprasBox"]').click();
-  await expect(page.locator('#repComprasPending')).toBeVisible();
+  await expect(page.locator('#repComprasBody')).toBeVisible();
 
   expect(await page.evaluate(async () => ({ sales: await localDB.sales.count(), queue: await localDB.sync_queue.count() }))).toEqual({ sales: 0, queue: 0 });
 
@@ -134,6 +134,7 @@ test('Reportes conectados muestra fuentes MySQL, filtra hoy y conserva el modo l
   await expect(page.locator('#connectedDashHistoryBody')).not.toContainText(sale.sale.invoiceNumber);
   await page.locator('[data-dashboard-preset="all"]').click();
   await expect(page.locator('#connectedDashSalesTotal')).toHaveText(dashboardTotal);
+  await page.waitForFunction(invoiceNumber => window.PosDashboard?.exportSheets?.().some(sheet => JSON.stringify(sheet.rows).includes(invoiceNumber)), sale.sale.invoiceNumber);
 
   const [dashboardDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#dashboardView button[onclick="window.generarExcelDashboard()"]').click()]);
   expect(dashboardDownload.suggestedFilename()).toMatch(/^dashboard_conectado_\d{4}-\d{2}-\d{2}\.xlsx$/);
@@ -165,6 +166,8 @@ test('venta nueva desde el POS se refleja en Reportes, Dashboard, Hoy, Todo y Ex
   await page.locator('#connectedCashReceived').fill('100.00'); await page.locator('#confirmConnectedSaleBtn').click(); await expect(page.locator('#ticketModal')).toBeVisible();
   const sale = (await call(page, 'sales')).find(value => value.items.some(item => item.productId === product.id));
   expect(sale).toBeTruthy(); expect(sale.status).toBe('COMPLETED');
+  const expenseDescription = 'Gasto para reporte ' + suffix;
+  await call(page, 'createExpense', { operationKey: randomUUID(), category: 'Otro', description: expenseDescription, receiptReference: 'RPT-EXP-' + suffix, amount: '3.00', paymentMethod: 'BANK' });
   const mysqlAfter = await mysqlSalesSnapshot(sale.invoiceNumber);
   expect(mysqlAfter.count).toBe(mysqlBefore.count + 1); expect(mysqlAfter.total).toBe(mysqlBefore.total + Number(sale.total));
   expect(mysqlAfter.sale.id).toBe(sale.id);
@@ -176,28 +179,45 @@ test('venta nueva desde el POS se refleja en Reportes, Dashboard, Hoy, Todo y Ex
   expect(Number(todayAfter.sales.total)).toBe(Number(todayBefore.sales.total) + Number(sale.total));
   expect(todayAfter.sales.history.some(row => row.invoiceNumber === sale.invoiceNumber)).toBe(true);
   expect(allAfter.sales.history.some(row => row.invoiceNumber === sale.invoiceNumber)).toBe(true);
+  expect(allAfter.expenses.history.some(row => row.description === expenseDescription)).toBe(true);
+  expect(Number(allAfter.sales.netProfit)).toBe(Number(allAfter.sales.grossProfit) - Number(allAfter.expenses.total));
 
   let reportFetches = 0;
   await page.route('**/api/reports/connected*', async route => { reportFetches++; await route.continue(); });
   await page.locator('#newSaleBtn').click(); await page.locator('#navReportesBtn').click();
   await expect(page.locator('#repVentasHistorialBody')).toContainText(sale.invoiceNumber);
   await expect(page.locator('#repVentas')).toHaveText('C$' + Number(monthAfter.sales.total).toFixed(2));
+  await expect(page.locator('#repCostoVendido')).toHaveText('C$' + Number(monthAfter.sales.cost).toFixed(2));
+  await expect(page.locator('#repGananciaBruta')).toHaveText('C$' + Number(monthAfter.sales.grossProfit).toFixed(2));
+  await expect(page.locator('#repGastos')).toHaveText('C$' + Number(monthAfter.expenses.total).toFixed(2));
+  await expect(page.locator('#repUtilidad')).toHaveText('C$' + Number(monthAfter.sales.netProfit).toFixed(2));
   const reportFetchesBeforeInvalidation = reportFetches;
   await page.evaluate(() => document.dispatchEvent(new Event('connected:report-data-changed')));
   await expect.poll(() => reportFetches).toBeGreaterThan(reportFetchesBeforeInvalidation);
   await page.locator('#filtroHoyBtn').click(); await expect(page.locator('#repVentasHistorialBody')).toContainText(sale.invoiceNumber);
   await page.locator('#filtroTodoBtn').click(); await expect(page.locator('#repVentasHistorialBody')).toContainText(sale.invoiceNumber);
+  await expect(page.locator('#repGastosHistoryBody')).toContainText(expenseDescription);
+  const [connectedReportDownload] = await Promise.all([page.waitForEvent('download'), page.locator('button[onclick*="PosReports"]:visible').click()]);
+  const connectedReportWorkbook = JSON.parse(require('node:fs').readFileSync(await connectedReportDownload.path(), 'utf8')).book;
+  expect(JSON.stringify(connectedReportWorkbook.Sheets)).toContain(expenseDescription);
+  expect(JSON.stringify(connectedReportWorkbook.Sheets)).toContain('Utilidad neta');
   const [reportDownload] = await Promise.all([page.waitForEvent('download'), page.locator('button[onclick*="ventas"]').click()]);
   const reportWorkbook = JSON.parse(require('node:fs').readFileSync(await reportDownload.path(), 'utf8')).book;
   expect(JSON.stringify(reportWorkbook.Sheets)).toContain(sale.invoiceNumber);
 
   await page.locator('#navDashboardBtn').click(); await expect(page.locator('#connectedDashHistoryBody')).toContainText(sale.invoiceNumber);
   await expect(page.locator('#connectedDashSalesTotal')).toHaveText('C$' + Number(monthAfter.sales.total).toFixed(2));
+  await expect(page.locator('#connectedDashSalesCost')).toHaveText('C$' + Number(monthAfter.sales.cost).toFixed(2));
+  await expect(page.locator('#connectedDashGrossProfit')).toHaveText('C$' + Number(monthAfter.sales.grossProfit).toFixed(2));
+  await expect(page.locator('#connectedDashExpenseTotal')).toHaveText('C$' + Number(monthAfter.expenses.total).toFixed(2));
+  await expect(page.locator('#connectedDashNetProfit')).toHaveText('C$' + Number(monthAfter.sales.netProfit).toFixed(2));
+  await expect(page.locator('#connectedDashExpensesBody')).toContainText(expenseDescription);
   const dashboardFetchesBeforeInvalidation = reportFetches;
   await page.evaluate(() => document.dispatchEvent(new Event('connected:report-data-changed')));
   await expect.poll(() => reportFetches).toBeGreaterThan(dashboardFetchesBeforeInvalidation);
   await page.locator('[data-dashboard-preset="today"]').click(); await expect(page.locator('#connectedDashHistoryBody')).toContainText(sale.invoiceNumber);
   await page.locator('[data-dashboard-preset="all"]').click(); await expect(page.locator('#connectedDashHistoryBody')).toContainText(sale.invoiceNumber);
+  await page.waitForFunction(invoiceNumber => { const sheets = window.PosDashboard?.exportSheets?.(); return Array.isArray(sheets) && sheets.some(sheet => JSON.stringify(sheet.rows).includes(invoiceNumber)); }, sale.invoiceNumber);
   const [dashboardDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#dashboardView button[onclick="window.generarExcelDashboard()"]').click()]);
   const dashboardWorkbook = JSON.parse(require('node:fs').readFileSync(await dashboardDownload.path(), 'utf8')).book;
   expect(JSON.stringify(dashboardWorkbook.Sheets)).toContain(sale.invoiceNumber);

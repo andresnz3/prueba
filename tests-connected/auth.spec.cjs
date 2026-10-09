@@ -100,6 +100,10 @@ test('Dexie separa modo local y dos negocios sin copiar datos', async ({ page })
 test('modo local no invoca API y cambio de modalidad recarga sin conservar identidad', async ({ page }) => {
   const requests = []; page.on('request', req => { if (req.url().startsWith(apiBase)) requests.push(req.url()); });
   await page.goto('/'); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible(); expect(requests).toEqual([]);
+  expect(await page.locator('#purchInvoice').evaluate(input => input.required)).toBe(true);
+  expect(await page.locator('#connectedPurchaseNumberField').evaluate(node => node.classList.contains('hidden'))).toBe(true);
+  const localDateStyle = await page.locator('#reporteDesdeInput').evaluate(input => ({ scheme: getComputedStyle(input).colorScheme, background: getComputedStyle(input).backgroundColor, calendar: getComputedStyle(input, '::-webkit-calendar-picker-indicator').display }));
+  expect(localDateStyle).toEqual({ scheme: 'light', background: 'rgb(255, 255, 255)', calendar: 'block' });
   await page.locator('#logoutBtn').click(); await page.locator('#authMode').selectOption('connected'); await expect(page).toHaveURL(/mode=connected/); await expect(page.locator('#loginScreen')).toBeVisible(); expect(await page.evaluate(() => currentUser)).toBeNull();
 });
 

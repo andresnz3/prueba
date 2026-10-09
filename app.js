@@ -921,8 +921,8 @@ function actualizarCarrito() {
     renderizandoCarrito = true;
     try {
     let subtotalSinImpuesto = 0; let total = 0; const cartItemsDiv = document.getElementById("cartItems"); 
-    if (cart.length === 0) { if(cartItemsDiv) cartItemsDiv.innerHTML = `<div class="text-center" style="padding:20px; color:#999;">Carrito vacío</div>`; } else { 
-        if(cartItemsDiv) cartItemsDiv.innerHTML = cart.map((item, index) => { const retail = item.retailPrice || item.retail || 0; const wholesale = item.wholesalePrice || item.wholesale || 0; const precio = buyerType === "retail" ? retail : wholesale; const itemTotal = r2(precio * item.cantidad); const currentStock = stockReal(item); subtotalSinImpuesto = r2(subtotalSinImpuesto + itemTotal); total = r2(total + itemTotal); return `<div class="cart-item-row" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding:12px 0;"><div style="flex:1;"><strong>${escapeHtml(item.name)}</strong><br><small>${sysConfig.currency}${precio.toFixed(2)} c/u · Stock: ${currentStock}</small></div><div class="qty-control" style="display:flex; align-items:center; gap:8px;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, -1)">-</button><input type="number" value="${item.cantidad}" onchange="window.cambiarCantidadManual(${index}, this.value)" style="width: 45px; text-align: center;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, 1)">+</button></div><div style="text-align:right; margin-left:15px;"><strong>${sysConfig.currency}${itemTotal.toFixed(2)}</strong><br><button onclick="window.eliminarDelCarrito(${index})" style="background:transparent; color:#d32f2f; border:none; cursor:pointer; font-size:12px;">Quitar</button></div></div>`; }).join(""); 
+    if (cart.length === 0) { if(cartItemsDiv) cartItemsDiv.innerHTML = `<div class="text-center" style="padding:20px; color:#999;">Carrito vacío</div>`; } else {
+        if(cartItemsDiv) cartItemsDiv.innerHTML = cart.map((item, index) => { const retail = item.retailPrice || item.retail || 0; const wholesale = item.wholesalePrice || item.wholesale || 0; const precio = buyerType === "retail" ? retail : wholesale; const itemTotal = r2(precio * item.cantidad); const currentStock = stockReal(item); subtotalSinImpuesto = r2(subtotalSinImpuesto + itemTotal); total = r2(total + itemTotal); return `<div class="cart-item-row" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding:12px 0;"><div style="flex:1;"><strong>${escapeHtml(item.name)}</strong><br><small>${sysConfig.currency}${precio.toFixed(2)} c/u · Stock: ${currentStock}</small></div><div class="qty-control" style="display:flex; align-items:center; gap:8px;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, -1)">-</button><input type="number" value="${item.cantidad}" onchange="window.cambiarCantidadManual(${index}, this.value)" style="width: 45px; text-align: center;"><button class="qty-btn" onclick="window.cambiarCantidad(${index}, 1)">+</button></div><div style="text-align:right; margin-left:15px;"><strong>${sysConfig.currency}${itemTotal.toFixed(2)}</strong><br><button class="btn btn-danger btn-sm" onclick="window.eliminarDelCarrito(${index})">Quitar</button></div></div>`; }).join("");
     } 
     const descuentoPctActual = obtenerDescuentoPctActual();
     descuentoMonto = r2(subtotalSinImpuesto * descuentoPctActual / 100);
@@ -1164,28 +1164,32 @@ window.confirmarAnularVenta = async function() {
 
 function actualizarTablaHistorial() {
     const tbody = document.getElementById("historyTableBody"); if (!tbody) return; tbody.innerHTML = "";
-    let tV = 0, cV = 0, cardV = 0, transferV = 0, crV = 0, tG = 0; const productSalesCounter = {};
-    purchasesHistory.forEach(p => { if (!p.anulada) tG += p.total; });
-    gastosHistory.forEach(g => { if (!g.anulado) tG += g.monto; });
+    const periodRange = window.PosPeriodFilters?.range("history") || { from: "", until: "" };
+    let tV = 0, periodV = 0, cV = 0, cardV = 0, transferV = 0, crV = 0, tG = 0; const productSalesCounter = {};
+    purchasesHistory.forEach(p => { if (!p.anulada && window.PosPeriodFilters?.matches(p.fechaTS || p.id || p.fecha, periodRange)) tG += Number(p.total) || 0; });
+    gastosHistory.forEach(g => { if (!g.anulado && window.PosPeriodFilters?.matches(g.fechaTS || g.id || g.fecha, periodRange)) tG += Number(g.monto) || 0; });
     if (salesHistory.length === 0) {
         tbody.innerHTML = `<tr><td colspan="7" class="text-center">No hay ventas registradas.</td></tr>`;
     } else {
         [...salesHistory].reverse().forEach(v => {
             if (!v.anulada) {
                 if (esHoyTS(v.fechaTS || v.id)) tV += v.total;
-                const medioVenta = obtenerMedioPagoVenta(v);
-                if (medioVenta === "cash") cV += v.total;
-                else if (medioVenta === "card") cardV += v.total;
-                else if (medioVenta === "transfer") transferV += v.total;
-                else if (v.metodo === "Crédito") crV += v.total;
-                if (v.items) v.items.forEach(i => { productSalesCounter[i.name] = (productSalesCounter[i.name] || 0) + i.cantidad; });
+                if (window.PosPeriodFilters?.matches(v.fechaTS || v.id || v.fecha, periodRange)) {
+                    periodV += Number(v.total) || 0;
+                    const medioVenta = obtenerMedioPagoVenta(v);
+                    if (medioVenta === "cash") cV += v.total;
+                    else if (medioVenta === "card") cardV += v.total;
+                    else if (medioVenta === "transfer") transferV += v.total;
+                    else if (v.metodo === "Crédito") crV += v.total;
+                    if (v.items) v.items.forEach(i => { productSalesCounter[i.name] = (productSalesCounter[i.name] || 0) + i.cantidad; });
+                }
             }
             const medioPago = mediosPagoVenta[obtenerMedioPagoVenta(v)] || "Efectivo";
             const estadoPago = v.anulada ? "ANULADA" : v.estadoCaja === "pendiente" ? "PENDIENTE DE CONFIRMACIÓN" : v.estadoCaja === "confirmado" ? "CONFIRMADO" : "";
             const pagoHtml = v.metodo === "Crédito" ? '<span style="color:#d32f2f; font-weight:bold;">CRÉDITO</span><br><small style="color:#666;">Vence: ' + escapeHtml(v.vencimiento) + " · " + (obtenerSaldoFactura("cliente", v) > 0 ? "Pendiente" : "Pagada") + '</small>' : v.conectado ? '<span style="color:' + (v.anulada ? "#777" : v.estadoCaja === "pendiente" ? "#b45309" : "#166534") + '; font-weight:bold;">' + escapeHtml(medioPago.toUpperCase()) + '</span><br><small>' + estadoPago + '</small>' : '<span style="color:#28a745; font-weight:bold;">' + escapeHtml(medioPago.toUpperCase()) + '</span>';
             const detalleFormat = v.anulada ? `<strong>${escapeHtml(v.detalle)}</strong><br><span style="color:#d32f2f; font-size:10px; font-weight:bold;">❌ ANULADA</span>` : `<strong>${escapeHtml(v.detalle)}</strong> (${escapeHtml(v.tarifa)})`;
             const totalFormat = v.anulada ? `<del>${sysConfig.currency}${r2(v.total).toFixed(2)}</del>` : `${sysConfig.currency}${r2(v.total).toFixed(2)}`;
-            const actionBtns = v.anulada ? `<button class="btn btn-sm btn-secondary" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-secondary" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.abrirAnularVenta('${v.id}')">Anular</button>`;
+            const actionBtns = v.anulada ? `<button class="btn btn-sm btn-info" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-info" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.abrirAnularVenta('${v.id}')">Anular</button>`;
             const tr = document.createElement("tr");
             tr.dataset.tableDate = tableDate(v.fechaTS || v.id || v.fecha);
             if (v.anulada) tr.style.cssText = "background-color:#fdf5f5;color:#888;";
@@ -1194,7 +1198,7 @@ function actualizarTablaHistorial() {
         });
     }
     const setTotal = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = `${sysConfig.currency}${r2(value).toFixed(2)}`; };
-    setTotal("summaryTodaySales", tV); setTotal("summaryTotalSales", salesHistory.filter(sale => !sale.anulada).reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)); setTotal("summaryCashSales", cV); setTotal("summaryCardSales", cardV); setTotal("summaryTransferSales", transferV); setTotal("summaryCreditSales", crV); setTotal("summaryTotalExpenses", tG);
+    setTotal("summaryTodaySales", tV); setTotal("summaryTotalSales", periodV); setTotal("summaryCashSales", cV); setTotal("summaryCardSales", cardV); setTotal("summaryTransferSales", transferV); setTotal("summaryCreditSales", crV); setTotal("summaryTotalExpenses", tG);
 
     const minGlobal = sysConfig.minStock || 5;
     const bajos = products.filter(p => !p.deleted && p.active !== false && (p.stock || 0) <= (p.minStock ?? minGlobal));
@@ -1205,13 +1209,14 @@ function actualizarTablaHistorial() {
         const top = Object.entries(productSalesCounter).sort((a, b) => b[1] - a[1]).slice(0, 5);
         topEl.innerHTML = top.length ? top.map(([name, count]) => `<li>${escapeHtml(name)}: <strong>${count}</strong> uds.</li>`).join("") : `<li>Sin datos.</li>`;
     }
+    window.PosPeriodFilters?.filterTable("historyTableBody", periodRange);
 }
 
 function actualizarTablaAuditoria() { const tbody = document.getElementById("auditTableBody"); if(!tbody) return; if (auditHistory.length === 0) { tbody.innerHTML = `<tr><td colspan="5" class="text-center">Sin registros de auditoría.</td></tr>`; } else { tbody.innerHTML = [...auditHistory].reverse().map(a => `<tr data-table-date="${tableDate(a.fechaTS || a.id || a.fecha)}"><td>${a.fecha}</td><td><strong>${escapeHtml(a.usuario)}</strong></td><td>${escapeHtml(a.modulo)}</td><td>${escapeHtml(a.accion)}</td><td style="white-space: pre-line; font-size: 0.9em;">${escapeHtml(a.detalle)}</td></tr>`).join(""); } }
 
 // CORRECCIÓN BUGS 2 Y 3: Discrepancia Margen vs Margin. Ahora mapea correctamente con tu HTML prodMargenRetail
 document.getElementById("addNewProductBtn")?.addEventListener("click", () => { document.getElementById("productForm")?.reset(); tempImageBase64 = null; const imgPrevNew = document.getElementById("prodImagePreview"); if (imgPrevNew) { imgPrevNew.src = ""; imgPrevNew.style.display = "none"; } const pi = document.getElementById("prodId"); if(pi) pi.value = ""; document.getElementById("prodMinStock").value = sysConfig.minStock || "5"; document.getElementById("prodMargenRetail").value = "10"; document.getElementById("prodMargenWholesale").value = "10"; actualizarSelectProveedoresProducto(); const pstat = document.getElementById("prodStatus"); if(pstat) pstat.value = "true"; document.getElementById("productModal")?.classList.remove("hidden"); window.calcularPreciosPorMargen(); });
-document.getElementById("quickAddProductFromPurchBtn")?.addEventListener("click", () => { document.getElementById("productForm")?.reset(); tempImageBase64 = null; const imgPrevNew = document.getElementById("prodImagePreview"); if (imgPrevNew) { imgPrevNew.src = ""; imgPrevNew.style.display = "none"; } const pi = document.getElementById("prodId"); if(pi) pi.value = ""; document.getElementById("prodMinStock").value = sysConfig.minStock || "5"; document.getElementById("prodMargenRetail").value = "10"; document.getElementById("prodMargenWholesale").value = "10"; actualizarSelectProveedoresProducto(); const pstat = document.getElementById("prodStatus"); if(pstat) pstat.value = "true"; document.getElementById("productModal")?.classList.remove("hidden"); window.calcularPreciosPorMargen(); });
+document.getElementById("quickAddProductFromPurchBtn")?.addEventListener("click", () => { if (connectedMode) return window.PosInventory?.openPurchaseProduct(); document.getElementById("productForm")?.reset(); tempImageBase64 = null; const imgPrevNew = document.getElementById("prodImagePreview"); if (imgPrevNew) { imgPrevNew.src = ""; imgPrevNew.style.display = "none"; } const pi = document.getElementById("prodId"); if(pi) pi.value = ""; document.getElementById("prodMinStock").value = sysConfig.minStock || "5"; document.getElementById("prodMargenRetail").value = "10"; document.getElementById("prodMargenWholesale").value = "10"; actualizarSelectProveedoresProducto(); const pstat = document.getElementById("prodStatus"); if(pstat) pstat.value = "true"; document.getElementById("productModal")?.classList.remove("hidden"); window.calcularPreciosPorMargen(); });
 
 function actualizarSelectProveedoresProducto() { const ps = document.getElementById("prodSupplier"); if(ps) { ps.innerHTML = `<option value="">-- Ninguno --</option>` + suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join(""); } }
 
@@ -1288,14 +1293,12 @@ function actualizarTablaInventario() {
         if (!isActive) { rowStyle = "background-color: #f4f4f4; color: #888;"; estadoHtml = '<span style="color:#666; font-weight:bold;">Inactivo</span>'; } else if ((p.stock||0) <= 0) { rowStyle = "background-color: #ffebee;"; stockHtml = `<span style="color:#d32f2f; font-weight:bold;">${p.stock||0} (Agotado)</span>`; estadoHtml = 'Agotado'; } else if ((p.stock||0) <= minStockLimit) { stockHtml = `<span style="color:#ff9800; font-weight:bold;">${p.stock} (Bajo)</span>`; estadoHtml = 'Activo'; } else { estadoHtml = 'Activo'; }
         const retail = p.retailPrice || p.retail || 0; const wholesale = p.wholesalePrice || p.wholesale || 0;
         
-        const btnKardex = `<button class="btn btn-sm" style="background:#0891b2; color:#fff; margin-right:4px;" onclick="window.verKardex('${p.id}')">Kardex</button>`;
-        const btnEditar = `<button class="btn btn-sm" style="background:#2563eb; color:#fff; margin-right:4px;" onclick="window.editarProducto('${p.id}')">Editar</button>`;
-        const btnEstado = `<button class="btn btn-sm" style="background:${isActive ? '#d97706' : '#16a34a'}; color:#fff; margin-right:4px;" onclick="window.toggleEstadoProducto('${p.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>`;
-        const btnEliminar = connectedMode ? "" : `<button class="btn btn-sm" style="background:#dc2626; color:#fff;" onclick="window.eliminarProductoLogico('${p.id}')">Eliminar</button>`;
-
-        const btnAjuste = `<button class="btn btn-sm" style="background:#d97706; color:#fff; margin-right:4px;" onclick="window.abrirAjuste('${p.id}')">${iconoAjuste()} Ajuste</button>`;
+        const btnKardex = `<button class="btn btn-sm btn-info" style="margin-right:4px;" onclick="window.verKardex('${p.id}')">Kardex</button>`;
+        const btnEditar = `<button class="btn btn-sm btn-primary" style="margin-right:4px;" onclick="window.editarProducto('${p.id}')">Editar</button>`;
+        const btnEstado = `<button class="btn btn-sm ${isActive ? 'btn-warning' : 'btn-success'}" style="margin-right:4px;" onclick="window.toggleEstadoProducto('${p.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>`;
+        const btnAjuste = `<button class="btn btn-sm btn-warning" style="margin-right:4px;" onclick="window.abrirAjuste('${p.id}')">${iconoAjuste()} Ajuste</button>`;
         const fotoHtml = p.image ? `<img src="${escapeHtml(p.image)}" style="width:40px; height:40px; object-fit:cover; border-radius:4px;">` : iconoProducto("width:40px;height:40px;");
-        return `<tr data-product-id="${escapeHtml(p.id)}" tabindex="-1" style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(codigosDeProducto(p)[0] || '')}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}${btnEliminar}</div></td></tr>`;
+        return `<tr data-product-id="${escapeHtml(p.id)}" tabindex="-1" style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(codigosDeProducto(p)[0] || '')}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}</div></td></tr>`;
     }).join("") : '<tr><td colspan="8" class="text-center">No hay productos que coincidan con la búsqueda.</td></tr>';
     
     if(document.getElementById("invTotalProducts")) document.getElementById("invTotalProducts").textContent = products.filter(p => !p.deleted && p.active !== false).length; 
@@ -1452,9 +1455,9 @@ function actualizarTablaClientes() {
         else { estadoHtml = `Al día`; }
         
         const tieneHist = true;
-        const btnBorrar = tieneHist ? `<button class="btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}" onclick="window.toggleEstadoCliente('${c.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>` : `<button class="btn btn-sm btn-danger" onclick="window.eliminarClienteFisico('${c.id}')">Borrar</button>`;
+        const btnBorrar = tieneHist ? `<button class="btn btn-sm ${isActive ? 'btn-warning' : 'btn-success'}" onclick="window.toggleEstadoCliente('${c.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>` : `<button class="btn btn-sm btn-danger" onclick="window.eliminarClienteFisico('${c.id}')">Borrar</button>`;
             
-        return `<tr style="${isActive ? '' : 'background-color:#f9f9f9; opacity:0.8;'}"><td><strong>${escapeHtml(c.name)}</strong></td><td>${escapeHtml(c.phone)}</td><td>${sysConfig.currency}${(c.creditLimit||0).toFixed(2)}</td><td style="color:${disponible<0?'red':'green'}; font-weight:bold;">${sysConfig.currency}${disponible.toFixed(2)}</td><td style="color:red; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(c.debt||0).toFixed(2)}</td><td>${estadoHtml}</td><td><button class="btn btn-sm btn-secondary" onclick="window.verEstadoCuentaCliente('${c.id}')">Historial</button> <button class="btn btn-sm btn-primary" onclick="window.editarCliente('${c.id}')">Editar</button> ${btnBorrar}</td></tr>`;
+        return `<tr style="${isActive ? '' : 'background-color:#f9f9f9; opacity:0.8;'}"><td><strong>${escapeHtml(c.name)}</strong></td><td>${escapeHtml(c.phone)}</td><td>${sysConfig.currency}${(c.creditLimit||0).toFixed(2)}</td><td style="color:${disponible<0?'red':'green'}; font-weight:bold;">${sysConfig.currency}${disponible.toFixed(2)}</td><td style="color:red; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(c.debt||0).toFixed(2)}</td><td>${estadoHtml}</td><td><button class="btn btn-sm btn-info" onclick="window.verEstadoCuentaCliente('${c.id}')">Historial</button> <button class="btn btn-sm btn-primary" onclick="window.editarCliente('${c.id}')">Editar</button> ${btnBorrar}</td></tr>`;
     }).join(""); 
 }
 
@@ -1690,15 +1693,16 @@ window.verEstadoCuentaCliente = function(id) {
             
             let btnHtml = '';
             if (mov.type === 'cargo') { 
-                btnHtml = `<button class="btn btn-sm btn-secondary" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.reimprimirTicket('${mov.saleId}'), 100);">Ver Factura</button> ` +
+                btnHtml = `<button class="btn btn-sm btn-info" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.reimprimirTicket('${mov.saleId}'), 100);">Ver Factura</button> ` +
                           (!mov.anulado && mov.saldoFactura > 0 ? `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoVenta('${mov.saleId}'), 100);">Abonar</button>` : '');
             } 
             else if (mov.type === 'abono') { btnHtml = mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoCliente('${mov.id}'), 100);">Anular</button>`; }
             
             const trStyle = mov.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : '';
-            return `<tr ${trStyle}><td>${dateHtml}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>`; 
+            return `<tr data-period-date="${window.PosPeriodFilters?.dateKey(mov.ts) || ''}" ${trStyle}><td>${dateHtml}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>`;
         }).join(""); 
     } 
+    window.PosPeriodFilters?.filterTable("statementTableBody", window.PosPeriodFilters.range("statement"));
     document.getElementById("statementModal")?.classList.remove("hidden"); 
 };
 
@@ -1726,9 +1730,9 @@ window.anularAbonoCliente = async function(abonoId) {
     });
 };
 
-document.getElementById("addNewSupplierBtn")?.addEventListener("click", () => { document.getElementById("supplierForm")?.reset(); const si = document.getElementById("supplierId"); if(si) si.value = ""; document.getElementById("supplierModal")?.classList.remove("hidden"); });
+document.getElementById("addNewSupplierBtn")?.addEventListener("click", () => { if (connectedMode) return window.PosPurchases?.newSupplier(); document.getElementById("supplierForm")?.reset(); const si = document.getElementById("supplierId"); if(si) si.value = ""; document.getElementById("supplierModal")?.classList.remove("hidden"); });
 
-document.getElementById("quickAddSupplierFromPurchBtn")?.addEventListener("click", () => { 
+document.getElementById("quickAddSupplierFromPurchBtn")?.addEventListener("click", () => { if (connectedMode) return window.PosPurchases?.newSupplier(true);
     document.getElementById("supplierForm")?.reset(); 
     const si = document.getElementById("supplierId"); if(si) si.value = ""; 
     const suppModal = document.getElementById("supplierModal");
@@ -1739,7 +1743,7 @@ document.getElementById("quickAddSupplierFromPurchBtn")?.addEventListener("click
 });
 
 document.getElementById("supplierForm")?.addEventListener("submit", async (e) => { 
-    e.preventDefault(); 
+    e.preventDefault(); if (connectedMode) return window.PosPurchases?.saveSupplier();
     const id = document.getElementById("supplierId").value; 
     const existingSupplier = id ? suppliers.find(s => String(s.id) === String(id)) : null;
     const suppData = { 
@@ -1788,13 +1792,14 @@ function actualizarTablaProveedores() {
     tb.innerHTML = suppliers.map(s => {
         const comprasProv = purchasesHistory.filter(p => p.proveedor === s.name && !p.anulada); const totalComprado = comprasProv.reduce((sum, p) => sum + p.total, 0); 
         const isActive = s.active !== false;
-        const btnBorrar = `<button class="btn btn-sm ${isActive ? 'btn-secondary' : 'btn-success'}" onclick="window.toggleEstadoProveedor('${s.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>`;
+        const btnBorrar = `<button class="btn btn-sm ${isActive ? 'btn-warning' : 'btn-success'}" onclick="window.toggleEstadoProveedor('${s.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>`;
         
-        return `<tr style="${isActive ? '' : 'background-color:#f9f9f9; opacity:0.8;'}"><td><strong>${escapeHtml(s.name)}</strong><br><small style="color:#666;">RUC: ${escapeHtml(s.ruc) || 'N/A'}</small></td><td>${escapeHtml(s.contact)}<br><small>${escapeHtml(s.phone)}</small></td><td><small>${escapeHtml(s.address) || '-'}</small></td><td><span style="color:#0066cc; font-weight:bold;">${sysConfig.currency}${totalComprado.toFixed(2)}</span><br><small>${comprasProv.length} compras</small></td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td><td><button class="btn btn-sm btn-secondary" onclick="window.verEstadoCuentaProveedor('${s.id}')">Edo. Cuenta</button> <button class="btn btn-sm btn-primary" onclick="window.editarProveedor('${s.id}')">Editar</button> ${btnBorrar}</td></tr>`; 
+        return `<tr style="${isActive ? '' : 'background-color:#f9f9f9; opacity:0.8;'}"><td><strong>${escapeHtml(s.name)}</strong><br><small style="color:#666;">RUC: ${escapeHtml(s.ruc) || 'N/A'}</small></td><td>${escapeHtml(s.contact)}<br><small>${escapeHtml(s.phone)}</small></td><td><small>${escapeHtml(s.address) || '-'}</small></td><td><span style="color:#0066cc; font-weight:bold;">${sysConfig.currency}${totalComprado.toFixed(2)}</span><br><small>${comprasProv.length} compras</small></td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td><td><button class="btn btn-sm btn-info" onclick="window.verEstadoCuentaProveedor('${s.id}')">Edo. Cuenta</button> <button class="btn btn-sm btn-primary" onclick="window.editarProveedor('${s.id}')">Editar</button> ${btnBorrar}</td></tr>`;
     }).join(""); 
 }
 
 window.toggleEstadoProveedor = async function(id) {
+    if (connectedMode) return window.PosPurchases?.toggleSupplier(id);
     if (!isAdmin(['suppliersView', 'payablesView'])) { showAlert("No tiene permisos."); return; }
     const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return;
     const nuevoEstado = s.active === false ? true : false;
@@ -1804,9 +1809,10 @@ window.toggleEstadoProveedor = async function(id) {
     });
 };
 
-window.editarProveedor = function(id) { const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("supplierId").value = s.id; document.getElementById("suppName").value = s.name; document.getElementById("suppContact").value = s.contact; document.getElementById("suppPhone").value = s.phone; document.getElementById("suppRuc").value = s.ruc || ""; document.getElementById("suppAddress").value = s.address || ""; document.getElementById("supplierModal")?.classList.remove("hidden"); };
+window.editarProveedor = function(id) { if (connectedMode) return window.PosPurchases?.editSupplier(id); const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("supplierId").value = s.id; document.getElementById("suppName").value = s.name; document.getElementById("suppContact").value = s.contact; document.getElementById("suppPhone").value = s.phone; document.getElementById("suppRuc").value = s.ruc || ""; document.getElementById("suppAddress").value = s.address || ""; document.getElementById("supplierModal")?.classList.remove("hidden"); };
 
-window.verEstadoCuentaProveedor = function(id) { 
+window.verEstadoCuentaProveedor = function(id) {
+    if (connectedMode) return window.PosPurchases?.supplierStatement(id);
     const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; 
     document.getElementById("statementModalTitle").textContent = `Cuentas por Pagar: ${s.name}`; document.getElementById("statementModalSubtitle").textContent = `Deuda Total: ${sysConfig.currency}${(s.debt||0).toFixed(2)}`; 
     
@@ -1824,15 +1830,16 @@ window.verEstadoCuentaProveedor = function(id) {
             
             let btnHtml = '';
             if (mov.type === 'cargo') { 
-                btnHtml = `<button class="btn btn-sm btn-secondary" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.verFacturaCompra('${mov.id}'), 100);">Ver Factura</button> ` +
+                btnHtml = `<button class="btn btn-sm btn-info" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.verFacturaCompra('${mov.id}'), 100);">Ver Factura</button> ` +
                           (mov.anulado || obtenerSaldoFactura("proveedor", purchasesHistory.find(p => String(p.id) === String(mov.id))) <= 0 ? '' : `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoFacturaProveedor('${mov.id}'), 100);">Abonar</button>`);
             }
             else if (mov.type === 'abono') { btnHtml = mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoProveedor('${mov.id}'), 100);">Anular</button>`; }
             
             const trStyle = mov.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : '';
-            return `<tr ${trStyle}><td>${mov.date}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>`; 
+            return `<tr data-period-date="${window.PosPeriodFilters?.dateKey(mov.ts) || ''}" ${trStyle}><td>${mov.date}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>`;
         }).join(""); 
     } 
+    window.PosPeriodFilters?.filterTable("statementTableBody", window.PosPeriodFilters.range("statement"));
     document.getElementById("statementModal")?.classList.remove("hidden"); 
 };
 
@@ -1868,6 +1875,7 @@ window.verFacturaCompra = function(id) { const p = purchasesHistory.find(x => St
 const mostrarFacturaCompraOriginal = window.verFacturaCompra;
 window.verFacturaCompra = function(id) {
     ticketEsVentaNueva = false;
+    if (connectedMode) return window.PosPurchases?.viewPurchase(id);
     return mostrarFacturaCompraOriginal(id);
 };
 
@@ -1899,7 +1907,7 @@ function resolverProductoEscritoCompra(value) {
 }
 purchProductInputEl?.addEventListener("input", () => { delete purchProductInputEl.dataset.productId; });
 document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { delete purchProductInputEl?.dataset.productId; });
-document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { document.getElementById("purchaseForm")?.reset(); const pi = document.getElementById("purchId"); if(pi) pi.value = ""; currentPurchaseCart = []; renderPurchaseCart(); document.getElementById("purchDaysContainer").style.display = "none"; const sdl = document.getElementById("supplierDataList"); if(sdl) sdl.innerHTML = suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">`).join(""); actualizarSugerenciasProductosCompra(); document.getElementById("purchaseModal")?.classList.remove("hidden"); });
+document.getElementById("addNewPurchaseBtn")?.addEventListener("click", () => { if (connectedMode) return window.PosPurchases?.openPurchase(); document.getElementById("purchaseForm")?.reset(); const pi = document.getElementById("purchId"); if(pi) pi.value = ""; currentPurchaseCart = []; renderPurchaseCart(); document.getElementById("purchDaysContainer").style.display = "none"; const sdl = document.getElementById("supplierDataList"); if(sdl) sdl.innerHTML = suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">`).join(""); actualizarSugerenciasProductosCompra(); document.getElementById("purchaseModal")?.classList.remove("hidden"); });
 function addPurchaseItemFromInput() {
     const prodName = purchProductInputEl.value.trim(); const qty = Number(document.getElementById("purchQtyTemp").value); const cost = parseFloat(document.getElementById("purchCostTemp").value);
     if(!prodName || !Number.isFinite(qty) || !Number.isFinite(cost) || qty <= 0) { showAlert("Ingrese producto, cantidad y costo unitario."); return false; }
@@ -1916,7 +1924,7 @@ function addPurchaseItemFromInput() {
     purchProductInputEl.value = ""; delete purchProductInputEl.dataset.productId; document.getElementById("purchQtyTemp").value = "1"; document.getElementById("purchCostTemp").value = ""; renderPurchaseCart();
     return true;
 }
-document.getElementById("btnAddItemToPurch")?.addEventListener("click", addPurchaseItemFromInput);
+document.getElementById("btnAddItemToPurch")?.addEventListener("click", () => { if (connectedMode) return window.PosPurchases?.addItem(); addPurchaseItemFromInput(); });
 function selectPurchaseProduct(product) {
     if (!purchProductInputEl || !product) return;
     purchProductInputEl.value = product.name;
@@ -1930,9 +1938,9 @@ purchProductInputEl?.addEventListener("keydown", event => {
     if (matches.length !== 1) return;
     event.preventDefault(); selectPurchaseProduct(matches[0]); addPurchaseItemFromInput();
 });
-document.getElementById("quickEditProductFromPurchBtn")?.addEventListener("click", () => { const value = document.getElementById("purchProductTemp").value.trim(); if (!value) { showAlert("Escribe el nombre o código del producto en el campo para poder editarlo."); return; } const resolved = resolverProductoEscritoCompra(value); if (resolved.ambiguous) { showAlert("Más de un producto coincide con ese código. Escribe el nombre para elegirlo sin ambigüedad."); return; } if (resolved.product) window.editarProducto(resolved.product.id); else showAlert("Producto no encontrado en la base de datos."); });
+document.getElementById("quickEditProductFromPurchBtn")?.addEventListener("click", () => { if (connectedMode) return window.PosPurchases?.quickEditProduct(); const value = document.getElementById("purchProductTemp").value.trim(); if (!value) { showAlert("Escribe el nombre o código del producto en el campo para poder editarlo."); return; } const resolved = resolverProductoEscritoCompra(value); if (resolved.ambiguous) { showAlert("Más de un producto coincide con ese código. Escribe el nombre para elegirlo sin ambigüedad."); return; } if (resolved.product) window.editarProducto(resolved.product.id); else showAlert("Producto no encontrado en la base de datos."); });
 
-function renderPurchaseCart() { const tbody = document.getElementById("purchCartBody"); if(!tbody) return; let totalFactura = 0; if(currentPurchaseCart.length === 0) { tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color:#999;">Aún no hay productos en la factura.</td></tr>`; } else { tbody.innerHTML = currentPurchaseCart.map((item, idx) => { totalFactura += item.total; return `<tr><td><strong>${escapeHtml(item.producto)}</strong>${!item.productId ? ' <small style="color:#ff9800;">(sin vincular)</small>' : ''}</td><td>${item.cantidad}</td><td>${sysConfig.currency}${item.costo.toFixed(2)}</td><td>${sysConfig.currency}${item.total.toFixed(2)}</td><td><button type="button" onclick="window.removePurchItem(${idx})" style="background:#d32f2f; color:white; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;">X</button></td></tr>`; }).join(""); } const pTot = document.getElementById("purchTotalDisplay"); if(pTot) pTot.textContent = `${sysConfig.currency}${totalFactura.toFixed(2)}`; }
+ function renderPurchaseCart() { const tbody = document.getElementById("purchCartBody"); if(!tbody) return; let totalFactura = 0; if(currentPurchaseCart.length === 0) { tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color:#999;">Aún no hay productos en la factura.</td></tr>`; } else { tbody.innerHTML = currentPurchaseCart.map((item, idx) => { totalFactura += item.total; return `<tr><td><strong>${escapeHtml(item.producto)}</strong>${!item.productId ? ' <small style="color:#ff9800;">(sin vincular)</small>' : ''}</td><td>${item.cantidad}</td><td>${sysConfig.currency}${item.costo.toFixed(2)}</td><td>${sysConfig.currency}${item.total.toFixed(2)}</td><td><button type="button" class="btn btn-danger btn-sm" aria-label="Quitar producto" onclick="window.removePurchItem(${idx})">Quitar</button></td></tr>`; }).join(""); } const pTot = document.getElementById("purchTotalDisplay"); if(pTot) pTot.textContent = `${sysConfig.currency}${totalFactura.toFixed(2)}`; }
 window.removePurchItem = function(idx) { currentPurchaseCart.splice(idx, 1); renderPurchaseCart(); };
 
 function resolverProductoDeItemCompra(item) {
@@ -1941,7 +1949,7 @@ function resolverProductoDeItemCompra(item) {
 }
 
 document.getElementById("purchaseForm")?.addEventListener("submit", async (e) => { 
-    e.preventDefault(); if (blockPendingConnected()) return; if (!isAdmin(['purchasesView', 'historyView'])) { showAlert("No tiene permisos para registrar compras."); return; } if(currentPurchaseCart.length === 0) { showAlert("Agrega al menos un producto a la factura."); return; }
+    e.preventDefault(); if (connectedMode) return window.PosPurchases?.savePurchase(); if (blockPendingConnected()) return; if (!isAdmin(['purchasesView', 'historyView'])) { showAlert("No tiene permisos para registrar compras."); return; } if(currentPurchaseCart.length === 0) { showAlert("Agrega al menos un producto a la factura."); return; }
     const pId = document.getElementById("purchId").value; const tipoCompra = document.getElementById("purchType").value; const proveedorNombre = document.getElementById("purchSupplier").value.trim(); const facturaNum = document.getElementById("purchInvoice").value.trim() || "S/F";
     const purchaseItems = currentPurchaseCart.map(item => { const producto = resolverProductoDeItemCompra(item); return producto ? { ...item, productId: producto.id } : null; });
     if (purchaseItems.some(item => !item)) { showAlert("No se puede guardar la compra: cada producto debe estar vinculado a un producto del inventario."); return; }
@@ -1975,16 +1983,18 @@ document.getElementById("purchaseForm")?.addEventListener("submit", async (e) =>
     await localDB.purchases.put(newPurch); await encolarSincronizacion(pId ? 'UPDATE' : 'INSERT', 'purchases', newPurch); document.getElementById("purchaseModal")?.classList.add("hidden"); actualizarTablaCompras(); actualizarTablaInventario(); actualizarCatalogo(); renderDashboard(); showAlert(`Factura guardada correctamente.`); 
 });
 
-window.cancelarCompraForm = function() { showConfirm("¿Estás seguro de cancelar esta factura de compra?", () => { document.getElementById("purchaseModal").classList.add("hidden"); currentPurchaseCart = []; }); };
+window.cancelarCompraForm = function() { if (connectedMode) return window.PosPurchases?.closePurchase(); showConfirm("¿Estás seguro de cancelar esta factura de compra?", () => { document.getElementById("purchaseModal").classList.add("hidden"); currentPurchaseCart = []; }); };
 
 function actualizarTablaCompras() {
     const tbody = document.getElementById("purchasesTableBody");
     if (!tbody) return;
-    if (purchasesHistory.length === 0) {
+    const range = window.PosPeriodFilters?.range("purchases") || { from: "", until: "" };
+    const filteredPurchases = purchasesHistory.filter(purchase => window.PosPeriodFilters?.matches(purchase.fechaTS || purchase.id || purchase.fecha, range));
+    if (filteredPurchases.length === 0) {
         tbody.innerHTML = `<tr><td colspan="7" class="text-center">Sin registros.</td></tr>`;
         return;
     }
-    tbody.innerHTML = [...purchasesHistory].reverse().map(purchase => {
+    tbody.innerHTML = [...filteredPurchases].reverse().map(purchase => {
         const itemCount = purchase.items ? purchase.items.length : 1;
         const pending = obtenerSaldoFactura("proveedor", purchase);
         const paymentStatus = purchase.tipo === "credito"
@@ -1995,14 +2005,15 @@ function actualizarTablaCompras() {
         if (purchase.anulada) statusHtml += `<br><span style="font-size:11px; font-weight:bold; color:#d32f2f;">ANULADA</span>`;
         const totalFormat = purchase.anulada ? `<del>${sysConfig.currency}${r2(purchase.total).toFixed(2)}</del>` : `${sysConfig.currency}${r2(purchase.total).toFixed(2)}`;
         const actionButtons = purchase.anulada
-            ? `<button class="btn btn-sm btn-primary" onclick="window.verFacturaCompra('${purchase.id}')">Ver Factura</button>`
-            : `<button class="btn btn-sm btn-primary" onclick="window.verFacturaCompra('${purchase.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.eliminarCompra('${purchase.id}')">Anular</button>`;
+            ? `<button class="btn btn-sm btn-info" onclick="window.verFacturaCompra('${purchase.id}')">Ver Factura</button>`
+            : `<button class="btn btn-sm btn-info" onclick="window.verFacturaCompra('${purchase.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.eliminarCompra('${purchase.id}')">Anular</button>`;
         const rowStyle = purchase.anulada ? `style="background-color:#fdf5f5; color:#888;"` : "";
         return `<tr data-table-date="${tableDate(purchase.fechaTS || purchase.id || purchase.fecha)}" ${rowStyle}><td>${escapeHtml(purchase.fecha)}</td><td><strong>${escapeHtml(purchase.factura)}</strong></td><td>${escapeHtml(purchase.proveedor)}</td><td>${itemCount} prod(s).</td><td style="color:#d32f2f; font-weight:bold;">${totalFormat}</td><td>${statusHtml}</td><td>${actionButtons}</td></tr>`;
     }).join("");
 }
 
 window.eliminarCompra = function(id) {
+    if (connectedMode) return window.PosPurchases?.cancelPurchase(id);
     if (blockPendingConnected()) return;
     if (!isAdmin(['purchasesView', 'historyView'])) { showAlert("No tiene permisos para anular compras."); return; }
     const compra = purchasesHistory.find(p => String(p.id) === String(id)); if (!compra || compra.anulada) return;
@@ -2026,9 +2037,10 @@ window.eliminarCompra = function(id) {
     });
 };
 
-function actualizarTablaCuentasPorPagar() { const tb = document.getElementById("payablesTableBody"); if(!tb) return; const deudores = suppliers.filter(s => (s.debt||0) > 0); if(deudores.length === 0) { tb.innerHTML = `<tr><td colspan="5" class="text-center">No hay cuentas por pagar pendientes.</td></tr>`; } else { tb.innerHTML = deudores.map(s => { const facturasCredito = purchasesHistory.filter(p => p.proveedor === s.name && p.tipo === "credito" && !p.anulada && obtenerSaldoFactura("proveedor", p) > 0).sort((a,b) => new Date(a.vencimiento) - new Date(b.vencimiento)); const proxVencimiento = facturasCredito.length > 0 ? facturasCredito[0].vencimiento : 'Ver facturas'; return `<tr><td><strong>${escapeHtml(s.name)}</strong></td><td>${escapeHtml(s.phone) || '-'}</td><td style="color:#d32f2f; font-weight:bold;">${proxVencimiento}</td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td><td><button class="btn btn-sm btn-secondary" onclick="window.verEstadoCuentaProveedor('${s.id}')">Ver Facturas</button></td></tr>`; }).join(""); } }
-window.abrirAbonoProveedor = function(id) { const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("payableSupplierId").value = s.id; document.getElementById("payableSupplierName").textContent = s.name; document.getElementById("payableDebt").textContent = `${sysConfig.currency}${(s.debt||0).toFixed(2)}`; const pa = document.getElementById("payableAmount"); if(pa) pa.value = ""; document.getElementById("payablePaymentModal")?.classList.remove("hidden"); };
+function actualizarTablaCuentasPorPagar() { const tb = document.getElementById("payablesTableBody"); if(!tb) return; const range = window.PosPeriodFilters?.range("payables") || { from: "", until: "" }; const deudores = suppliers.filter(s => (s.debt||0) > 0).map(s => ({ supplier: s, invoices: purchasesHistory.filter(p => p.proveedor === s.name && p.tipo === "credito" && !p.anulada && obtenerSaldoFactura("proveedor", p) > 0 && window.PosPeriodFilters?.matches(p.vencimientoTS || p.vencimiento, range)) })).filter(row => row.invoices.length); if(deudores.length === 0) { tb.innerHTML = `<tr><td colspan="5" class="text-center">No hay facturas pendientes con vencimiento en este período.</td></tr>`; } else { tb.innerHTML = deudores.map(({supplier:s,invoices:facturasCredito}) => { facturasCredito.sort((a,b) => new Date(a.vencimientoTS || a.vencimiento) - new Date(b.vencimientoTS || b.vencimiento)); const proxVencimiento = facturasCredito[0]?.vencimiento || 'Ver facturas'; return `<tr><td><strong>${escapeHtml(s.name)}</strong></td><td>${escapeHtml(s.phone) || '-'}</td><td style="color:#d32f2f; font-weight:bold;">${escapeHtml(proxVencimiento)}</td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(s.debt||0).toFixed(2)}</td><td><button class="btn btn-sm btn-info" onclick="window.verEstadoCuentaProveedor('${s.id}')">Ver Facturas</button></td></tr>`; }).join(""); } }
+window.abrirAbonoProveedor = function(id) { if (connectedMode) return window.PosPurchases?.supplierStatement(id); const s = suppliers.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("payableSupplierId").value = s.id; document.getElementById("payableSupplierName").textContent = s.name; document.getElementById("payableDebt").textContent = `${sysConfig.currency}${(s.debt||0).toFixed(2)}`; const pa = document.getElementById("payableAmount"); if(pa) pa.value = ""; document.getElementById("payablePaymentModal")?.classList.remove("hidden"); };
 window.abrirAbonoFacturaProveedor = function(id) {
+    if (connectedMode) return window.PosPurchases?.openInvoicePayment(id);
     const purchase = purchasesHistory.find(item => String(item.id) === String(id));
     if (!purchase || purchase.anulada || purchase.tipo !== "credito") return;
     const supplier = suppliers.find(item => (item.name || "").toLowerCase() === (purchase.proveedor || "").toLowerCase());
@@ -2048,7 +2060,7 @@ window.abrirAbonoFacturaProveedor = function(id) {
 };
 
 document.getElementById("paymentInvoiceForm")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
+    e.preventDefault(); if (connectedMode) return window.PosPurchases?.payInvoice(e);
     const purchaseId = document.getElementById("payInvoiceId").value;
     const purchase = purchasesHistory.find(item => String(item.id) === String(purchaseId));
     const supplier = purchase && suppliers.find(item => (item.name || "").toLowerCase() === (purchase.proveedor || "").toLowerCase());
@@ -2238,7 +2250,7 @@ document.getElementById("confirmCierreCajaBtn")?.addEventListener("click", () =>
 
     if (inputEl) inputEl.value = "";
 });
-function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map(m => { const icon = m.medioPago === "CASH" ? "Efectivo" : m.medioPago === "CARD" ? "Tarjeta" : m.medioPago === "TRANSFER" ? "Transferencia" : m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr data-table-date="${tableDate(m.fechaTS || m.fecha)}"><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado === "pendiente" ? "Pendiente de confirmación" : m.estado === "confirmado" ? "Confirmado" : m.estado === "void" ? "Anulado" : m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="8" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr data-table-date="${tableDate(s.fechaCierreTS || s.fechaCierre)}"><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${cashCloseMoney(s.efectivoInicial)}</td><td>${cashCloseMoney(s.efectivoEsperado)}</td><td>${cashCloseMoney(s.efectivoReal)}</td><td style="color:${difColor}; font-weight:bold;">${cashCloseMoney(s.diferencia)}</td><td><button type="button" class="btn btn-sm btn-secondary" data-cash-detail="${escapeHtml(String(s.id))}">Detalles</button></td></tr>`; }).join(""); } }
+function renderCajaViewBase() { const boxAbrir = document.getElementById("cajaAbrirBox"); const boxAbierta = document.getElementById("cajaAbiertaBox"); if (!boxAbrir || !boxAbierta) return; if (!cajaActual) { boxAbrir.classList.remove("hidden"); boxAbierta.classList.add("hidden"); const ultimaCaja = cajaHistorial.find(s => s.estado === "cerrada"); const hintEl = document.getElementById("cajaEfectivoInicialHint"); if (hintEl) hintEl.textContent = ultimaCaja ? `Referencia: el cierre anterior esperaba ${sysConfig.currency}${(ultimaCaja.efectivoEsperado || 0).toFixed(2)}. Escriba el monto real que recibe.` : "Escriba el monto real de efectivo que recibe para iniciar el turno."; } else { boxAbrir.classList.add("hidden"); boxAbierta.classList.remove("hidden"); const resumen = calcularResumenCaja(cajaActual); const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; }; set("cajaUsuarioApertura", cajaActual.usuarioApertura); set("cajaFechaApertura", cajaActual.fechaApertura); set("cajaResumenInicial", `${sysConfig.currency}${cajaActual.efectivoInicial.toFixed(2)}`); set("cajaResumenVentas", `${sysConfig.currency}${resumen.ventasContado.toFixed(2)}`); set("cajaResumenEntradas", `${sysConfig.currency}${resumen.entradas.toFixed(2)}`); set("cajaResumenSalidas", `${sysConfig.currency}${resumen.salidas.toFixed(2)}`); set("cajaResumenEsperado", `${sysConfig.currency}${resumen.esperado.toFixed(2)}`); const movBody = document.getElementById("cajaMovimientosBody"); if (movBody) { if (cajaActual.movimientos.length === 0) { movBody.innerHTML = `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`; } else { movBody.innerHTML = cajaActual.movimientos.map(m => { const icon = m.medioPago === "CASH" ? "Efectivo" : m.medioPago === "CARD" ? "Tarjeta" : m.medioPago === "TRANSFER" ? "Transferencia" : m.tipo === "entrada" ? "🟢 Entrada" : "🔴 Salida"; const valFmt = m.anulado ? `<del>${sysConfig.currency}${(m.monto||0).toFixed(2)}</del>` : `${sysConfig.currency}${(m.monto||0).toFixed(2)}`; return `<tr data-table-date="${tableDate(m.fechaTS || m.fecha)}"><td>${m.fecha}</td><td>${icon}</td><td>${escapeHtml(m.concepto)}</td><td>${valFmt}</td><td>${escapeHtml(m.usuario)}</td><td>${m.estado === "pendiente" ? "Pendiente de confirmación" : m.estado === "confirmado" ? "Confirmado" : m.estado === "void" ? "Anulado" : m.estado || "Registrado"}</td><td></td></tr>`; }).reverse().join(""); } } } const histBody = document.getElementById("cajaHistorialBody"); if (histBody) { const cerradas = cajaHistorial.filter(s => s.estado === "cerrada"); histBody.innerHTML = cerradas.length === 0 ? `<tr><td colspan="8" class="text-center">Sin cierres registrados.</td></tr>` : cerradas.map(s => { const difColor = s.diferencia === 0 ? "#28a745" : "#d32f2f"; return `<tr data-table-date="${tableDate(s.fechaCierreTS || s.fechaCierre)}"><td>${s.fechaApertura}</td><td>${s.fechaCierre}</td><td>${escapeHtml(s.usuarioCierre)}</td><td>${cashCloseMoney(s.efectivoInicial)}</td><td>${cashCloseMoney(s.efectivoEsperado)}</td><td>${cashCloseMoney(s.efectivoReal)}</td><td style="color:${difColor}; font-weight:bold;">${cashCloseMoney(s.diferencia)}</td><td><button type="button" class="btn btn-sm btn-info" data-cash-detail="${escapeHtml(String(s.id))}">Detalles</button></td></tr>`; }).join(""); } }
 
 window.confirmarAbonoCaja = async function(id) {
     if (blockPendingConnected()) return; if (!isAdmin('cajaView')) { showAlert("No tiene permisos para confirmar pagos."); return; } const abono = abonosHistory.find(item => String(item.id) === String(id)); if (!abono || abono.anulado || abono.estado !== "pendiente") return; abono.estado = "confirmado"; abono.usuarioConfirmacion = currentUser.displayName; abono.fechaConfirmacion = new Date().toLocaleString(); await localDB.abonos.put(abono); await encolarSincronizacion("UPDATE", "abonos", abono); for (const session of cajaHistorial) { let changed = false; (session.movimientos || []).forEach(mov => { if (String(mov.referenciaAbonoId) === String(abono.id) && mov.estado === "pendiente") { mov.estado = "confirmado"; mov.usuarioConfirmacion = currentUser.displayName; mov.fechaConfirmacion = abono.fechaConfirmacion; changed = true; } }); if (changed) { await localDB.cajaSessions.put(session); await encolarSincronizacion("UPDATE", "cajaSessions", session); } } await registrarAuditoria("CAJA", "CONFIRMAR_ABONO", `Confirmó ${abono.tipo === "cliente" ? "cobro" : "pago"} de ${sysConfig.currency}${r2(abono.monto).toFixed(2)} (${abono.metodoPago || "medio no registrado"})`); renderCajaView(); };
@@ -2316,7 +2328,7 @@ function renderCajaCentral() {
         const pending = operation.status === "pendiente";
         const action = pending && isAdmin('cajaView') ? `<button class="btn btn-sm btn-success" onclick="window.${operation.kind === "sale" ? "confirmarVentaCaja" : "confirmarAbonoCaja"}('${escapeHtml(operation.id)}')">Confirmar</button>` : "-";
         const status = pending ? "Pendiente" : operation.status === "confirmado" ? "Confirmado" : "Registrado";
-        return `<tr><td>${escapeHtml(operation.date)}</td><td>${operation.type}<br><small>${escapeHtml(operation.reference)}</small></td><td>${escapeHtml(operation.user)}</td><td>${escapeHtml(operation.method)}</td><td>${money(operation.amount)}</td><td>${status}</td><td>${action}</td></tr>`;
+        return `<tr data-table-date="${tableDate(operation.ts || operation.date)}"><td>${escapeHtml(operation.date)}</td><td>${operation.type}<br><small>${escapeHtml(operation.reference)}</small></td><td>${escapeHtml(operation.user)}</td><td>${escapeHtml(operation.method)}</td><td>${money(operation.amount)}</td><td>${status}</td><td>${action}</td></tr>`;
     }).join("") : `<tr><td colspan="7" class="text-center">Sin operaciones por revisar.</td></tr>`;
 
     const movementBody = document.getElementById("cajaMovimientosBody");
@@ -2330,16 +2342,17 @@ function renderCajaCentral() {
         const value = movement.anulado ? `<del>${money(movement.monto)}</del>` : money(movement.monto);
         const correctionDetails = (movement.correcciones || []).map(correction => `<small>Original: ${money(movement.montoOriginal)}; nuevo: ${money(correction.montoNuevo)}; diferencia: ${money(correction.diferencia)}; ${escapeHtml(correction.motivo)}; ${escapeHtml(correction.usuario)} · ${escapeHtml(correction.fecha)} · ${escapeHtml(correction.estado)}</small>`).join("<br>");
         const confirmButton = !movement.anulado && movement.estado === "pendiente" && isAdmin('cajaView') ? `<button class="btn btn-sm btn-success" onclick="window.confirmarMovimientoCaja('${session.id}', ${index})">Confirmar</button>` : "";
-        const correctButton = !movement.saleId && !movement.anulado && movement.tipo === "entrada" && isAdmin('cajaView') ? `<button class="btn btn-sm btn-secondary" onclick="window.abrirCorreccionCaja('${session.id}', ${index})">Corregir</button>` : "";
+        const correctButton = !movement.saleId && !movement.anulado && movement.tipo === "entrada" && isAdmin('cajaView') ? `<button class="btn btn-sm btn-warning" onclick="window.abrirCorreccionCaja('${session.id}', ${index})">Corregir</button>` : "";
         const cancelButton = !movement.saleId && !movement.anulado && isAdmin('cajaView') ? `<button class="btn btn-sm btn-danger" onclick="window.anularMovimientoCaja(${index}, '${session.id}')">Anular</button>` : "";
         return `<tr style="${movement.anulado ? "background-color:#fdf5f5;color:#888;" : ""}"><td>${escapeHtml(movement.fecha)}</td><td>${movement.tipo === "venta" ? mediosPagoVenta[movement.medioPago] || "Venta" : movement.tipo === "entrada" ? "Entrada" : "Salida"}</td><td>${escapeHtml(movement.concepto)}${correctionDetails ? `<br>${correctionDetails}` : ""}</td><td style="font-weight:bold;">${value}${movement.montoOriginal !== undefined ? `<br><small>Original: ${money(movement.montoOriginal)}</small>` : ""}</td><td>${escapeHtml(movement.usuario)}</td><td>${status}${movement.estadoCorreccion ? `<br>Corrección ${escapeHtml(movement.estadoCorreccion)}` : ""}</td><td>${confirmButton} ${correctButton} ${cancelButton}</td></tr>`;
     }).join("") : `<tr><td colspan="7" class="text-center">Sin movimientos registrados.</td></tr>`;
 }
 
-function renderCajaView() { if (connectedMode) { window.PosSales?.renderCash(); return; } renderCajaViewBase(); renderCajaCentral(); window.PosLocalFlow?.render(); }
+function renderCajaView() { if (connectedMode) { window.PosSales?.renderCash(); return; } renderCajaViewBase(); renderCajaCentral(); window.PosLocalFlow?.render(); const range = window.PosPeriodFilters?.range("cash"); for (const id of ["cajaMovimientosBody", "cajaHistorialBody", "cajaOperacionesBody", "cajaPendientesHistoricosBody"]) window.PosPeriodFilters?.filterTable(id, range); }
 
 function renderGastosSelect() { const sel = document.getElementById("gastoCategoria"); if (sel && sel.options.length === 0) sel.innerHTML = GASTOS_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join(""); }
 window.registrarGastoSubmit = async function() {
+    if (connectedMode) return window.PosExpenses?.create();
     if (blockPendingConnected()) return;
     const categoria = document.getElementById("gastoCategoria").value;
     const metodo = document.getElementById("gastoMetodo").value;
@@ -2366,6 +2379,7 @@ window.registrarGastoSubmit = async function() {
     showAlert("Gasto registrado.");
 };
 window.eliminarGasto = function(id) {
+    if (connectedMode) return window.PosExpenses?.cancel(id);
     if (blockPendingConnected()) return;
     if (!isAdmin('gastosView')) { showAlert("No tiene permisos."); return; }
     const gasto = gastosHistory.find(g => String(g.id) === String(id));
@@ -2397,7 +2411,38 @@ window.eliminarGasto = function(id) {
         showAlert("Gasto anulado.");
     });
 };
-function renderGastosView() { renderGastosSelect(); const tbody = document.getElementById("gastosTableBody"); if (tbody) { if (gastosHistory.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="text-center">Sin gastos registrados.</td></tr>`; } else { tbody.innerHTML = [...gastosHistory].reverse().map(g => { const metodoHtml = g.metodo === 'caja' ? '💵 Caja' : (g.metodo === 'banco' ? '💳 Banco' : '⏳ Pendiente'); const anuladoTag = g.anulado ? ' <span style="color:#d32f2f; font-weight:bold; font-size:11px;">❌ ANULADO</span>' : ''; const totalFormat = g.anulado ? `<del>${sysConfig.currency}${r2(g.monto).toFixed(2)}</del>` : `${sysConfig.currency}${r2(g.monto).toFixed(2)}`; const actionBtn = g.anulado ? '-' : `<button class="btn btn-sm btn-danger" onclick="window.eliminarGasto('${g.id}')">Anular</button>`; const trStyle = g.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : ''; return `<tr data-table-date="${tableDate(g.fechaTS || g.id || g.fecha)}" ${trStyle}><td>${escapeHtml(g.fecha)}</td><td><strong>${escapeHtml(g.categoria)}</strong></td><td>${escapeHtml(g.descripcion)}${anuladoTag}</td><td>${metodoHtml}<br><small style="color:#666;">Ref: ${escapeHtml(g.comprobante)}</small></td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${totalFormat}</td><td>${escapeHtml(g.usuario)}</td><td>${actionBtn}</td></tr>`; }).join(""); } } const totalHoy = gastosHistory.filter(g => !g.anulado && esHoyTS(g.fechaTS)).reduce((sum, g) => sum + g.monto, 0); const totalGeneral = gastosHistory.filter(g => !g.anulado).reduce((sum, g) => sum + g.monto, 0); if (document.getElementById("gastosResumenHoy")) document.getElementById("gastosResumenHoy").textContent = `${sysConfig.currency}${r2(totalHoy).toFixed(2)}`; if (document.getElementById("gastosResumenTotal")) document.getElementById("gastosResumenTotal").textContent = `${sysConfig.currency}${r2(totalGeneral).toFixed(2)}`; }
+function renderGastosView() {
+    renderGastosSelect();
+    if (connectedMode) { window.PosExpenses?.render(); return; }
+    const range = window.PosPeriodFilters?.range("expenses") || { from: "", until: "" };
+    const filtered = gastosHistory.filter(g => window.PosPeriodFilters?.matches(g.fechaTS || g.id || g.fecha, range));
+    const tbody = document.getElementById("gastosTableBody");
+    if (tbody) {
+        tbody.innerHTML = filtered.length ? [...filtered].reverse().map(g => {
+            const metodoHtml = g.metodo === 'caja' ? '💵 Caja' : (g.metodo === 'banco' ? '💳 Banco' : '⏳ Pendiente');
+            const anuladoTag = g.anulado ? ' <span style="color:#d32f2f; font-weight:bold; font-size:11px;">❌ ANULADO</span>' : '';
+            const totalFormat = g.anulado ? `<del>${sysConfig.currency}${r2(g.monto).toFixed(2)}</del>` : `${sysConfig.currency}${r2(g.monto).toFixed(2)}`;
+            const actionBtn = g.anulado ? '-' : `<button class="btn btn-sm btn-danger" onclick="window.eliminarGasto('${g.id}')">Anular</button>`;
+            const trStyle = g.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : '';
+            return `<tr data-table-date="${tableDate(g.fechaTS || g.id || g.fecha)}" ${trStyle}><td>${escapeHtml(g.fecha)}</td><td><strong>${escapeHtml(g.categoria)}</strong></td><td>${escapeHtml(g.descripcion)}${anuladoTag}</td><td>${metodoHtml}<br><small style="color:#666;">Ref: ${escapeHtml(g.comprobante)}</small></td><td style="color:#d32f2f; font-weight:bold; font-size:1.1em;">${totalFormat}</td><td>${escapeHtml(g.usuario)}</td><td>${actionBtn}</td></tr>`;
+        }).join('') : `<tr><td colspan="7" class="text-center">${gastosHistory.length ? 'No hay gastos en este período.' : 'Sin gastos registrados.'}</td></tr>`;
+    }
+    const totalHoy = gastosHistory.filter(g => !g.anulado && esHoyTS(g.fechaTS)).reduce((sum, g) => sum + g.monto, 0);
+    const totalGeneral = gastosHistory.filter(g => !g.anulado).reduce((sum, g) => sum + g.monto, 0);
+    const totalPeriodo = gastosHistory.filter(g => !g.anulado && window.PosPeriodFilters?.matches(g.fechaTS || g.id || g.fecha, range)).reduce((sum, g) => sum + g.monto, 0);
+    const setExpenseTotal = (id, value) => { const node = document.getElementById(id); if (node) node.textContent = `${sysConfig.currency}${r2(value).toFixed(2)}`; };
+    setExpenseTotal("gastosResumenPeriodo", totalPeriodo); setExpenseTotal("gastosResumenHoy", totalHoy); setExpenseTotal("gastosResumenTotal", totalGeneral);
+}
+
+document.addEventListener("pos:period-changed", event => {
+    const { id, range } = event.detail || {};
+    if (id === "history") actualizarTablaHistorial();
+    if (id === "purchases" && !connectedMode) actualizarTablaCompras();
+    if (id === "payables" && !connectedMode) actualizarTablaCuentasPorPagar();
+    if (id === "expenses" && !connectedMode) renderGastosView();
+    if (id === "cash") for (const bodyId of ["cajaMovimientosBody", "cajaHistorialBody", "cajaOperacionesBody", "cajaPendientesHistoricosBody"]) window.PosPeriodFilters?.filterTable(bodyId, range);
+    if (id === "statement") window.PosPeriodFilters?.filterTable("statementTableBody", range);
+});
 
 document.querySelectorAll(".rep-subtab").forEach(btn => { btn.addEventListener("click", (e) => { e.stopPropagation(); document.querySelectorAll(".rep-subtab").forEach(b => b.classList.remove("active")); document.querySelectorAll(".rep-subview").forEach(s => s.classList.add("hidden")); btn.classList.add("active"); document.getElementById(btn.dataset.target)?.classList.remove("hidden"); }); });
 function initReportesFiltros() {
@@ -2562,17 +2607,18 @@ function initializeLocalAutocompletes() {
         }
     });
 
+    window.PosAutocomplete.setup(purchProductInputEl, {
+        getItems: query => getProductAutocompleteItems(query), getLabel: product => product.name,
+        getMeta: product => [codigosDeProducto(product)[0] ? `Código: ${codigosDeProducto(product)[0]}` : '', product.category || product.categoria || ''].filter(Boolean).join(' · '),
+        onSelect: product => { selectPurchaseProduct(product); document.getElementById('purchQtyTemp')?.focus(); }
+    });
+    window.PosAutocomplete.setup(document.getElementById('purchSupplier'), {
+        getItems: query => (connectedMode ? window.PosPurchases?.supplierOptions() || [] : suppliers).filter(supplier => supplier.active !== false && autocompleteTextMatches(query, [supplier.name, supplier.phone, supplier.ruc])),
+        getLabel: supplier => supplier.name,
+        getMeta: supplier => [supplier.phone, supplier.ruc ? `RUC: ${supplier.ruc}` : ''].filter(Boolean).join(' · ')
+    });
+
     if (!connectedMode) {
-        window.PosAutocomplete.setup(purchProductInputEl, {
-            getItems: query => getProductAutocompleteItems(query), getLabel: product => product.name,
-            getMeta: product => [codigosDeProducto(product)[0] ? `Código: ${codigosDeProducto(product)[0]}` : '', product.category || product.categoria || ''].filter(Boolean).join(' · '),
-            onSelect: product => { selectPurchaseProduct(product); document.getElementById('purchQtyTemp')?.focus(); }
-        });
-        window.PosAutocomplete.setup(document.getElementById('purchSupplier'), {
-            getItems: query => suppliers.filter(supplier => supplier.active !== false && autocompleteTextMatches(query, [supplier.name, supplier.phone, supplier.ruc])),
-            getLabel: supplier => supplier.name,
-            getMeta: supplier => [supplier.phone, supplier.ruc ? `RUC: ${supplier.ruc}` : ''].filter(Boolean).join(' · ')
-        });
         const creditSearch = document.getElementById('creditClientSearch');
         const creditSelect = document.getElementById('creditClientSelect');
         const creditAutocomplete = window.PosAutocomplete.setup(creditSearch, {

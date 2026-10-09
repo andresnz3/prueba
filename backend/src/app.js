@@ -29,6 +29,10 @@ function createApp({ config, checkDatabase, authentication }) {
     const customers = require('./services/customer-accounts').createCustomerService(authentication);
     const sales = require('./services/sales').createSalesService({ ...authentication, creditSnapshot: customers.creditSnapshot });
     app.use('/api', require('./routes/sales').salesRoutes(authentication, sales, customers));
+    const procurement = require('./services/procurement').createProcurementService(authentication);
+    app.use('/api', require('./routes/procurement').procurementRoutes(authentication, procurement));
+    const expenses = require('./services/expenses').createExpenseService(authentication);
+    app.use('/api', require('./routes/expenses').expensesRoutes(authentication, expenses));
     const connectedReports = require('./services/connected-reports').createConnectedReportService(authentication);
     app.use('/api', require('./routes/reports').reportsRoutes(authentication, connectedReports));
     app.use('/api', require('./routes/auth').authRoutes(authentication));

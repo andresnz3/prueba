@@ -29,8 +29,8 @@
     window.PosRuntime.setProductImage(photoPreview);
     preview.src = photoPreview; preview.style.display = 'block';
   }
-  const blockedForms = new Set(['purchaseForm', 'paymentForm', 'paymentInvoiceForm', 'payablePaymentForm', 'supplierForm']);
-  const blockedButtons = new Set(['confirmCashBtn', 'addNewPurchaseBtn', 'quickAddProductFromPurchBtn', 'quickEditProductFromPurchBtn', 'confirmCashCorrectionBtn', 'registrarEntradaBtn', 'registrarSalidaBtn']);
+  const blockedForms = new Set(['paymentForm', 'payablePaymentForm']);
+  const blockedButtons = new Set(['confirmCashBtn', 'confirmCashCorrectionBtn', 'registrarEntradaBtn', 'registrarSalidaBtn']);
   // Capture impide ejecutar los handlers locales cuando el modulo aun no tiene API.
   document.addEventListener('submit', event => {
     if (!blockedForms.has(event.target.id)) return;
@@ -51,6 +51,8 @@
   for (const id of ['prodMargenRetail', 'prodMargenWholesale']) el(id).step = '0.0001';
   function closePanels() {
     resetPhoto(); window.PosRuntime.setProductImage(null);
+    const modal = el('productModal'); if (modal) delete modal.dataset.purchaseContext;
+    el('prodStock').disabled = false; imageInput.disabled = false;
     for (const id of ['productModal', 'ajusteInventarioModal', 'kardexModal']) el(id).classList.add('hidden');
     editing = null;
   }
@@ -121,14 +123,25 @@
       if (!id) data.image = null;
       data.taxRate = editing ? editing.taxRate.toFixed(4) : '0.0000';
       if (id) data.revision = editing.revision;
+      const purchaseContext = el('productModal').dataset.purchaseContext === 'true';
+      if (purchaseContext && id) throw new window.PosApiError('PRODUCT_CONFLICT');
+      if (purchaseContext && photoFile) throw new window.PosApiError('PURCHASE_PRODUCT_IMAGE_UNAVAILABLE');
+      if (purchaseContext) data.stock = '0.000';
       const product = await window.PosConnected.inventoryOperation(async (api, business) => {
+        if (purchaseContext) {
+          const created = await api.createPurchaseProduct(data);
+          if (created.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401);
+          return created;
+        }
         if (photoFile) {
           if (!uploadedPhoto) uploadedPhoto = await api.uploadImage(photoFile);
           data.image = uploadedPhoto;
         }
         return ensureBusiness(await (id ? api.updateProduct(id,data) : api.createProduct(data)),business);
       });
-      publish(product); window.detenerProdCamara(); closePanels(); showAlert('Producto guardado en MySQL.');
+      if (purchaseContext) await window.PosPurchases?.productCreated(product);
+      else publish(product);
+      window.detenerProdCamara(); closePanels(); showAlert('Producto guardado en MySQL.');
     });
   }
   async function toggle(id) {
@@ -177,5 +190,10 @@
       el('kardexModal').classList.remove('hidden');
     });
   }
-  window.PosInventory = Object.freeze({ selectImage, load, refresh, save, edit, toggle, openAdjustment, adjust, kardex, closePanels });
+  function openPurchaseProduct() {
+    el('productForm').reset(); resetPhoto(); editing = null; el('prodId').value = ''; el('prodStock').value = '0'; el('prodStock').disabled = true; imageInput.disabled = true;
+    el('prodMinStock').value = '5'; el('prodMargenRetail').value = '10'; el('prodMargenWholesale').value = '10'; el('prodStatus').value = 'true';
+    el('productModal').dataset.purchaseContext = 'true'; el('productModal').classList.remove('hidden'); el('prodBarcode').focus();
+  }
+  window.PosInventory = Object.freeze({ selectImage, load, refresh, save, edit, toggle, openAdjustment, adjust, kardex, closePanels, openPurchaseProduct });
 })();

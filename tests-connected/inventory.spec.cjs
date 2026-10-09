@@ -185,10 +185,10 @@ test('fallo de escritura no crea producto fantasma ni reintenta automaticamente'
   for (const [id, value] of Object.entries({ prodBarcode: 'NETWORK-' + randomBytes(4).toString('hex'), prodName: 'Fallo de red', prodCost: '2', prodStock: '0' })) await page.locator('#' + id).fill(value);
   await page.locator('#productForm button[type=submit]').click(); await expect(page.locator('#customAlertMessage')).toContainText('conectar'); expect(writes).toBe(1); await expect(page.locator('#inventoryTableBody tr').filter({ hasText: 'Fallo de red' })).toHaveCount(0);
 });
-test('ventas y caja MySQL, compras bloqueadas, sin documentos en Dexie', async ({ page }) => {
+test('ventas y caja MySQL, compra exige proveedor activo, sin documentos en Dexie', async ({ page }) => {
   await login(page); await inventory(page); const item = await create(page, '3'); await page.locator('#navSalesBtn').click(); await expect(page.locator('#salesView')).toBeVisible();
   await page.locator('#productGrid .product-card').filter({ hasText: item.name }).click(); await page.locator('#processSaleBtn').click(); await expect(page.locator('#customAlertMessage')).toHaveText('Debes abrir caja antes de facturar o cobrar'); await closeAlert(page);
-  await page.locator('#navPurchasesBtn').click(); await expect(page.locator('#purchasesView')).toBeVisible(); await page.locator('#addNewPurchaseBtn').click(); await expect(page.locator('#customAlertMessage')).toContainText('pendiente'); await closeAlert(page);
+  await page.locator('#navPurchasesBtn').click(); await expect(page.locator('#purchasesView')).toBeVisible(); await page.locator('#addNewPurchaseBtn').click(); await expect(page.locator('#customAlertMessage')).toContainText('proveedor'); await closeAlert(page);
   await page.evaluate(async () => { await window.confirmarAnularVenta(); }); await expect(page.locator('#customAlertMessage')).toContainText('Selecciona una venta'); await closeAlert(page);
   expect((await call(page, 'products')).value.find(p => p.barcode === item.barcode).stock).toBe(3);
   await page.locator('#navCajaBtn').click(); await expect(page.locator('#cajaView')).toBeVisible(); await page.locator('#cajaEfectivoInicialInput').fill('10'); await page.locator('#abrirCajaBtn').click(); await expect(page.locator('#customAlertMessage')).toContainText('Caja abierta en MySQL'); await closeAlert(page); await expect(page.locator('#cajaAbiertaBox')).toBeVisible();

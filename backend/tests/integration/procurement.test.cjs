@@ -1,0 +1,160 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { randomBytes, randomUUID } = require('node:crypto');
+const { readConfig } = require('../../src/config/environment');
+const { readAuthConfig } = require('../../src/config/auth');
+const { createDatabasePool } = require('../../src/config/database');
+const { createAuthRepository, rows } = require('../../src/repositories/auth');
+const { createAuthService } = require('../../src/services/auth');
+const { createUsersService } = require('../../src/services/users');
+const { hashPassword } = require('../../src/services/passwords');
+const { createApp } = require('../../src/app');
+
+const database = process.env.POS_INTEGRATION_DATABASE;
+if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === process.env.DB_NAME) throw new Error('Use isolated runner');
+const password = 'Procurement-fixture-password-123!';
+function client(base) {
+  const jar = new Map(); let csrf;
+  async function request(path, method = 'GET', body) {
+    const response = await fetch(base + '/api' + path, { method, headers: { Cookie: [...jar].map(([key, value]) => key + '=' + value).join('; '), ...(method === 'GET' ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf || '' }) }, body: method === 'GET' ? undefined : JSON.stringify(body) });
+    for (const cookie of response.headers.getSetCookie()) { const pair = cookie.split(';')[0], pos = pair.indexOf('='); jar.set(pair.slice(0, pos), pair.slice(pos + 1)); }
+    const data = response.status === 204 ? undefined : await response.json(); if (data?.csrfToken) csrf = data.csrfToken;
+    return { status: response.status, data };
+  }
+  async function login(businessId, username) { await request('/auth/csrf'); assert.equal((await request('/auth/login', 'POST', { businessId, username, password })).status, 200); }
+  return { request, login };
+}
+
+test('Integración MySQL fase 5.6: proveedores, compras conectadas y CxP', async t => {
+  const config = readConfig(), authConfig = readAuthConfig({ CSRF_SECRET: randomBytes(32).toString('hex'), AUTH_RATE_MAX: '100' });
+  const pool = createDatabasePool({ ...config.database, database, connectionLimit: 20 }); t.after(() => pool.end());
+  const business = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Procurement A'])).insertId);
+  const otherBusiness = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Procurement B'])).insertId);
+  const hash = await hashPassword(password);
+  await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [business, 'procurementadmin', 'Procurement Admin', hash, 'ADMIN']);
+  await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [business, 'procurementvendor', 'Procurement Vendor', hash, 'VENDEDOR']);
+  await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [otherBusiness, 'procurementother', 'Other Admin', hash, 'ADMIN']);
+  const repo = createAuthRepository(pool, authConfig), auth = createAuthService(repo, authConfig);
+  const server = createApp({ config, checkDatabase: async () => {}, authentication: { repo, auth, config: authConfig, users: createUsersService(repo) } }).listen(0, '127.0.0.1');
+  await new Promise(ok => server.once('listening', ok)); t.after(() => new Promise(ok => { server.close(ok); server.closeAllConnections(); }));
+  const base = 'http://127.0.0.1:' + server.address().port, admin = client(base), seller = client(base), other = client(base);
+  await admin.login(business, 'procurementadmin'); await seller.login(business, 'procurementvendor'); await other.login(otherBusiness, 'procurementother');
+  const sellerPurchases = await seller.request('/purchases?limit=100');
+  assert.equal(sellerPurchases.status, 403); assert.equal(sellerPurchases.data.error.code, 'MODULE_FORBIDDEN');
+  const sellerSupplierWrite = await seller.request('/suppliers', 'POST', { name: 'No autorizado', contact: 'Vendedor', phone: '5550000', ruc: null, address: 'Managua' });
+  assert.equal(sellerSupplierWrite.status, 403); assert.equal(sellerSupplierWrite.data.error.code, 'MODULE_FORBIDDEN');
+  const productResponse = await admin.request('/products', 'POST', { barcode: 'P-' + randomUUID(), name: 'Procurement product', category: 'General', cost: '5.00', marginRetail: '20.0000', marginWholesale: '10.0000', retailPrice: '7.00', wholesalePrice: '6.00', stock: '3.000', minStock: '1.000', taxRate: '0.0000', image: null, active: true });
+  assert.equal(productResponse.status, 201, JSON.stringify(productResponse.data));
+  const product = productResponse.data.product;
+  const supplierResponse = await admin.request('/purchases/suppliers', 'POST', { name: 'Proveedor ' + randomUUID().slice(0, 8), contact: 'Contacto', phone: '5551000', ruc: null, address: 'Managua' });
+  assert.equal(supplierResponse.status, 201, JSON.stringify(supplierResponse.data));
+  const supplier = supplierResponse.data.supplier;
+  assert.equal((await admin.request('/suppliers?limit=100')).data.suppliers.some(row => row.id === supplier.id), true);
+  assert.equal((await admin.request('/purchases/suppliers?limit=100')).data.suppliers.some(row => row.id === supplier.id), true);
+  assert.equal((await admin.request('/suppliers', 'POST', { name: supplier.name })).data.error.code, 'SUPPLIER_DUPLICATE');
+  assert.equal((await other.request('/suppliers/' + supplier.id)).status, 404);
+  const noCash = await admin.request('/purchases', 'POST', { operationKey: randomUUID(), supplierId: supplier.id, invoiceNumber: 'NO-CASH', purchaseType: 'CASH', paymentMethod: 'CASH', items: [{ productId: product.id, quantity: '1.000', unitCost: '6.00' }] });
+  assert.equal(noCash.data.error.code, 'SUPPLIER_CASH_CLOSED');
+
+  const opened = await admin.request('/cash/sessions', 'POST', { operationKey: randomUUID(), openingAmount: '100.00' });
+  assert.equal(opened.status, 201, JSON.stringify(opened.data));
+  const purchaseData = (overrides = {}) => ({ operationKey: randomUUID(), supplierId: supplier.id, invoiceNumber: 'INV-' + randomUUID().slice(0, 8), purchaseType: 'CASH', paymentMethod: 'CASH', items: [{ productId: product.id, quantity: '4.000', unitCost: '6.00' }], ...overrides });
+  const insufficientCash = await admin.request('/purchases', 'POST', purchaseData({ invoiceNumber: 'LOW-CASH', items: [{ productId: product.id, quantity: '1.000', unitCost: '101.00' }] }));
+  assert.equal(insufficientCash.status, 409); assert.equal(insufficientCash.data.error.code, 'CASH_BALANCE_INSUFFICIENT');
+  const supplierEdit = await admin.request('/suppliers/' + supplier.id, 'PATCH', { contact: 'Contacto actualizado' });
+  assert.equal(supplierEdit.status, 200); assert.equal(supplierEdit.data.supplier.contact, 'Contacto actualizado');
+  await admin.request('/suppliers/' + supplier.id + '/active', 'PATCH', { active: false });
+  const inactiveSupplier = await admin.request('/purchases', 'POST', purchaseData({ invoiceNumber: 'INACTIVE-SUPPLIER' }));
+  assert.equal(inactiveSupplier.data.error.code, 'SUPPLIER_INACTIVE');
+  await admin.request('/suppliers/' + supplier.id + '/active', 'PATCH', { active: true });
+  const productOff = await admin.request('/products/' + product.id, 'PATCH', { revision: product.revision, active: false });
+  assert.equal(productOff.status, 200);
+  const inactiveProduct = await admin.request('/purchases', 'POST', purchaseData({ invoiceNumber: 'INACTIVE-PRODUCT' }));
+  assert.equal(inactiveProduct.data.error.code, 'PRODUCT_INACTIVE');
+  const productOn = await admin.request('/products/' + product.id, 'PATCH', { revision: productOff.data.product.revision, active: true });
+  assert.equal(productOn.status, 200);
+  const firstPurchaseInput = purchaseData();
+  const firstPurchaseResponse = await admin.request('/purchases', 'POST', firstPurchaseInput);
+  assert.equal(firstPurchaseResponse.status, 201, JSON.stringify(firstPurchaseResponse.data));
+  const firstPurchase = firstPurchaseResponse.data.purchase;
+  assert.equal(firstPurchase.total, '24.00'); assert.equal(firstPurchase.purchaseType, 'CASH');
+  assert.match(firstPurchase.purchaseNumber, /^COMP-\d{6,}$/);
+  assert.equal(firstPurchase.supplierInvoiceNumber, firstPurchaseInput.invoiceNumber);
+  assert.equal((await admin.request('/purchases', 'POST', firstPurchaseInput)).data.purchase.id, firstPurchase.id, 'operation key makes a retried purchase idempotent');
+  let updatedProduct = (await admin.request('/products/' + product.id)).data.product;
+  assert.equal(updatedProduct.stock, '7.000'); assert.equal(updatedProduct.cost, '6.00');
+  assert.equal(updatedProduct.retailPrice, '7.20'); assert.equal(updatedProduct.wholesalePrice, '6.60');
+  assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount, '76.00');
+  assert.equal(Number((await rows(pool, 'SELECT COUNT(*) AS n FROM purchase_items WHERE business_id=? AND purchase_id=?', [business, firstPurchase.id]))[0].n), 1);
+  assert.equal(Number((await rows(pool, "SELECT COUNT(*) AS n FROM inventory_movements WHERE business_id=? AND reference_type='purchases' AND reference_id=? AND type='PURCHASE'", [business, firstPurchase.id]))[0].n), 1);
+  assert.equal(Number((await rows(pool, "SELECT COUNT(*) AS n FROM cash_movements WHERE business_id=? AND reference_type='purchases' AND reference_id=?", [business, firstPurchase.id]))[0].n), 1);
+
+  const creditInput = purchaseData({ invoiceNumber: 'CREDIT-' + randomUUID().slice(0, 8), purchaseType: 'CREDIT', paymentMethod: undefined, dueDays: 30, items: [{ productId: product.id, quantity: '2.000', unitCost: '6.00' }] });
+  delete creditInput.paymentMethod;
+  const creditResponse = await admin.request('/purchases', 'POST', creditInput);
+  assert.equal(creditResponse.status, 201, JSON.stringify(creditResponse.data));
+  const creditPurchase = creditResponse.data.purchase;
+  assert.equal(creditPurchase.total, '12.00'); assert.equal((await admin.request('/payables/' + creditPurchase.id)).data.purchase.id, creditPurchase.id);
+  let payables = await admin.request('/payables?limit=100');
+  assert.equal(payables.status, 200); assert.equal(payables.data.payables[0].balance, '12.00');
+  assert.equal((await admin.request('/payables/summary')).data.summary.balance, '12.00');
+  const overpay = await admin.request('/payables/' + creditPurchase.id + '/payments', 'POST', { operationKey: randomUUID(), amount: '12.01', paymentMethod: 'CASH' });
+  assert.equal(overpay.status, 409); assert.equal(overpay.data.error.code, 'PAYMENT_EXCEEDS_BALANCE');
+  const cardPaymentNo005 = await admin.request('/payables/' + creditPurchase.id + '/payments', 'POST', { operationKey: randomUUID(), amount: '1.00', paymentMethod: 'CARD' });
+  assert.equal(cardPaymentNo005.status, 503); assert.equal(cardPaymentNo005.data.error.code, 'SUPPLIER_PAYMENT_MIGRATION_REQUIRED');
+  let partial = payables.data.payables.find(row => row.id === creditPurchase.id);
+  assert.equal(partial.status, 'OPEN'); assert.equal(partial.paid, '0.00'); assert.equal(partial.balance, '12.00');
+  const firstCashPay = await admin.request('/payables/' + creditPurchase.id + '/payments', 'POST', { operationKey: randomUUID(), amount: '5.00', paymentMethod: 'CASH' });
+  assert.equal(firstCashPay.status, 201, JSON.stringify(firstCashPay.data)); assert.equal(firstCashPay.data.payment.status, 'POSTED');
+  partial = (await admin.request('/payables?limit=100')).data.payables.find(row => row.id === creditPurchase.id);
+  assert.equal(partial.status, 'PARTIAL'); assert.equal(partial.paid, '5.00'); assert.equal(partial.balance, '7.00');
+  const overpayAfterPartial = await admin.request('/payables/' + creditPurchase.id + '/payments', 'POST', { operationKey: randomUUID(), amount: '7.01', paymentMethod: 'CASH' });
+  assert.equal(overpayAfterPartial.status, 409); assert.equal(overpayAfterPartial.data.error.code, 'PAYMENT_EXCEEDS_BALANCE');
+  const cashPay = await admin.request('/payables/' + creditPurchase.id + '/payments', 'POST', { operationKey: randomUUID(), amount: '7.00', paymentMethod: 'CASH' });
+  assert.equal(cashPay.status, 201, JSON.stringify(cashPay.data)); assert.equal(cashPay.data.payment.status, 'POSTED');
+  assert.equal((await admin.request('/payables/' + creditPurchase.id)).data.purchase.status, 'PAID');
+  assert.equal((await admin.request('/payables/summary')).data.summary.balance, '0.00');
+  const statement = await admin.request('/suppliers/' + supplier.id + '/statement?limit=100&offset=0');
+  assert.equal(statement.status, 200); assert.ok(statement.data.entries.some(row => row.kind === 'PAYMENT' && row.paid === '5.00'));
+  assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount, '64.00');
+
+  const cashOnlyInput = purchaseData({ invoiceNumber: 'NO-005-CASH-' + randomUUID().slice(0, 8), items: [{ productId: product.id, quantity: '1.000', unitCost: '6.00' }] });
+  const cashOnly = await admin.request('/purchases', 'POST', cashOnlyInput);
+  assert.equal(cashOnly.status, 201, 'el pago de compra en efectivo no requiere la migración 005');
+  assert.equal(cashOnly.data.purchase.status, 'PAID');
+  const cardPurchaseInput = purchaseData({ invoiceNumber: 'NO-005-CARD-' + randomUUID().slice(0, 8), paymentMethod: 'CARD', items: [{ productId: product.id, quantity: '1.000', unitCost: '6.00' }] });
+  const cardPurchase = await admin.request('/purchases', 'POST', cardPurchaseInput);
+  assert.equal(cardPurchase.status, 503); assert.equal(cardPurchase.data.error.code, 'SUPPLIER_PAYMENT_MIGRATION_REQUIRED');
+
+  const cancelCash = await admin.request('/purchases/' + firstPurchase.id + '/cancel', 'POST', { operationKey: randomUUID(), reason: 'Factura duplicada' });
+  assert.equal(cancelCash.status, 200, JSON.stringify(cancelCash.data)); assert.equal(cancelCash.data.purchase.status, 'CANCELLED');
+  const reports = await admin.request('/reports/connected');
+  assert.equal(reports.status, 200, JSON.stringify(reports.data));
+  assert.equal(reports.data.report.purchases.total, '18.00');
+  assert.equal(reports.data.report.purchases.history.some(row => row.invoiceNumber === firstPurchase.invoiceNumber && row.status === 'CANCELLED'), true);
+  assert.equal(reports.data.report.payables.balance, '0.00');
+  assert.equal(reports.data.report.suppliers.list.find(row => row.name === supplier.name).totalPurchased, '18.00');
+  assert.ok(reports.data.report.suppliers.payments.some(row => row.invoiceNumber === creditPurchase.invoiceNumber && row.status === 'POSTED'));
+  assert.equal(reports.data.report.cash.currentExpected, '82.00');
+  assert.ok(reports.data.report.inventory.movements.some(row => row.type === 'PURCHASE'));
+  assert.equal((await other.request('/purchases?limit=100')).data.purchases.some(row => row.supplierName === supplier.name), false);
+
+  const noInvoiceInput = { operationKey: randomUUID(), supplierId: supplier.id, supplierInvoiceNumber: null, purchaseType: 'CREDIT', dueDays: 30, items: [{ productId: product.id, quantity: '1.000', unitCost: '6.00' }] };
+  const noInvoiceResponse = await admin.request('/purchases', 'POST', noInvoiceInput);
+  assert.equal(noInvoiceResponse.status, 201, JSON.stringify(noInvoiceResponse.data));
+  const noInvoicePurchase = noInvoiceResponse.data.purchase;
+  assert.match(noInvoicePurchase.purchaseNumber, /^COMP-\d{6,}$/);
+  assert.equal(noInvoicePurchase.supplierInvoiceNumber, '');
+  assert.equal((await admin.request('/purchases/' + noInvoicePurchase.id)).data.purchase.purchaseNumber, noInvoicePurchase.purchaseNumber);
+  assert.ok((await admin.request('/purchases?limit=100&q=' + encodeURIComponent(noInvoicePurchase.purchaseNumber))).data.purchases.some(row => row.purchaseNumber === noInvoicePurchase.purchaseNumber));
+  assert.ok((await admin.request('/payables?limit=100&q=' + encodeURIComponent(noInvoicePurchase.purchaseNumber))).data.payables.some(row => row.purchaseNumber === noInvoicePurchase.purchaseNumber));
+  const supplierLedger = await admin.request('/suppliers/' + supplier.id + '/statement?limit=100&offset=0');
+  assert.ok(supplierLedger.data.entries.some(row => row.reference.includes(noInvoicePurchase.purchaseNumber)));
+  const reportsWithInternalNumber = await admin.request('/reports/connected');
+  assert.ok(reportsWithInternalNumber.data.report.purchases.history.some(row => row.purchaseNumber === noInvoicePurchase.purchaseNumber && row.supplierInvoiceNumber === ''));
+  assert.ok(reportsWithInternalNumber.data.report.payables.invoices.some(row => row.purchaseNumber === noInvoicePurchase.purchaseNumber && row.supplierInvoiceNumber === ''));
+
+  const [audit] = await rows(pool, "SELECT COUNT(*) AS count FROM audit_logs a JOIN users u ON u.business_id=a.business_id AND u.id=a.user_id WHERE a.business_id=? AND u.username='procurementadmin' AND a.action IN ('CREATE_PURCHASE','CANCEL_PURCHASE','POST_SUPPLIER_PAYMENT','CREATE_SUPPLIER')", [business]);
+  assert.ok(Number(audit.count) >= 7, 'compras, proveedores y pagos a proveedores registran auditoría');
+});

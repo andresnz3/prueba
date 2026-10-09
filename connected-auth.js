@@ -12,7 +12,7 @@
   el('businessLoginGroup').classList.remove('hidden');
   el('loginBusinessId').disabled = false; el('loginBusinessId').required = true;
   el('adminUsernameGroup').classList.remove('hidden'); el('grantAdminUsername').disabled = false; el('grantAdminUsername').required = true;
-  el('modeDescription').textContent = 'Acceso verificado. Productos e inventario en MySQL; ventas de contado y caja MySQL; crédito y compras pendientes.';
+  el('modeDescription').textContent = 'Acceso verificado. Inventario, ventas, caja, gastos, proveedores, compras y cuentas por pagar usan MySQL.';
   const api = new window.PosApiClient(window.POS_API_BASE_URL);
   const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'reports', configView: 'settings' };
   let identity = null, boundBusiness = null, activeView = null, grant = null, pendingView = null;
@@ -59,7 +59,7 @@
     el('roleBadge').textContent = identity.role === 'ADMIN' ? 'Administrador' : 'Usuario';
     el('businessContext').textContent = 'Conectado · Negocio ' + identity.businessId;
     el('businessContext').classList.remove('hidden');
-    el('connectedNotice').textContent = 'Ventas, clientes, crédito, cuentas por cobrar y Caja en MySQL. Compras y movimientos manuales pendientes. Requiere conexión; no hay sincronización offline.';
+    el('connectedNotice').textContent = 'Ventas, inventario, caja, gastos, clientes, proveedores, compras y cuentas por cobrar y pagar usan MySQL. Requiere conexión; no hay sincronización offline.';
     el('connectedNotice').classList.remove('hidden');
     el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN'); el('renewSessionBtn').classList.remove('hidden');
     el('loginBusinessId').value = identity.businessId; el('loginBusinessId').disabled = true;
@@ -89,7 +89,7 @@
         activeView = view; renderPosView(view); renderUsers(users); return;
       }
       await api.enter(views[view]); assertGeneration(version);
-      await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version);
+      await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version); await window.PosPurchases.load(view); assertGeneration(version); await window.PosExpenses.load(view); assertGeneration(version);
       activeView = view; renderPosView(view); pendingView = null;
       if (view === 'reportesView') { await window.PosReports.load(); assertGeneration(version); }
       if (view === 'dashboardView') { await window.PosDashboard.load(); assertGeneration(version); }
@@ -126,7 +126,7 @@
     try {
       const value = await api.authorize(views[view], el('grantAdminUsername').value.trim(), el('gestorPassword').value);
       await api.enter(views[view]); assertGeneration(version);
-      await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version);
+      await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version); await window.PosPurchases.load(view); assertGeneration(version); await window.PosExpenses.load(view); assertGeneration(version);
       grant = { view, until: Date.parse(value.expiresAt) }; activeView = view; pendingView = null;
       el('authModal').classList.add('hidden'); renderPosView(view);
       if (view === 'reportesView') await window.PosReports.load();

@@ -45,11 +45,30 @@
     RECEIVABLE_NOT_CREDIT: 'La factura no tiene una cuenta por cobrar.',
     RECEIVABLE_ALREADY_PAID: 'La factura ya est\u00e1 pagada.',
     PAYMENT_EXCEEDS_BALANCE: 'El abono no puede superar el saldo de la factura.',
-    PAYMENT_CONFIRMATION_PENDING: 'Hay un abono pendiente de confirmar para esta factura.',
+    PAYMENT_CONFIRMATION_PENDING: 'Hay un pago pendiente de confirmar para esta factura.',
     ORDER_PAYMENT_CHANGED: 'El medio de pago del pedido cambi\u00f3. Vuelve a cotizarlo.',
     CREDIT_HAS_PAYMENTS: 'No se puede anular la factura mientras tenga abonos registrados.',
     CREDIT_MIGRATION_REQUIRED: 'Clientes y cuentas por cobrar requieren la migraci\u00f3n 004 aprobada. Consulta al administrador.',
     SALES_MIGRATION_REQUIRED: 'Ventas y caja requieren las migraciones 002 y 003 aprobadas. Consulta al administrador.',
+    EXPENSE_CASH_CLOSED: 'Abre una caja antes de registrar un gasto en efectivo.',
+    CASH_BALANCE_INSUFFICIENT: 'La caja no tiene saldo suficiente para registrar este movimiento.',
+    EXPENSE_NOT_FOUND: 'No se encontró ese gasto en este negocio.',
+    EXPENSE_CANCELLED: 'El gasto ya está anulado.',
+    EXPENSE_CASH_MOVEMENT_MISSING: 'No se puede anular este gasto porque falta su movimiento de caja. Solicita revisión al administrador.',
+    SUPPLIER_PAYMENT_MIGRATION_REQUIRED: 'Los pagos a proveedor con tarjeta o transferencia requieren la migración 005. El efectivo sigue disponible; solicita autorización antes de migrar la base principal.',
+    SUPPLIER_CASH_CLOSED: 'Abre una caja antes de registrar una compra en efectivo o pagar una factura de proveedor en efectivo.',
+    PURCHASE_CANCEL_REQUIRES_OPEN_CASH: 'Abre la caja donde se registró el pago en efectivo antes de anular esta compra.',
+    SUPPLIER_DUPLICATE: 'Ya existe un proveedor con ese nombre en este negocio.',
+    SUPPLIER_NOT_FOUND: 'No se encontró el proveedor en este negocio.',
+    SUPPLIER_INACTIVE: 'El proveedor está inactivo y no puede usarse en una compra.',
+    PURCHASE_DUPLICATE: 'El número de factura ya existe. Comprueba la operación antes de intentarlo de nuevo.',
+    PURCHASE_NOT_FOUND: 'No se encontró la factura de compra en este negocio.',
+    PURCHASE_CANCELLED: 'La factura de compra ya está anulada.',
+    PURCHASE_CANCEL_STOCK_INSUFFICIENT: 'No se puede anular la compra porque parte de esas existencias ya se consumió.',
+    PAYABLE_NOT_FOUND: 'No se encontró la cuenta por pagar de esa factura.',
+    PAYABLE_ALREADY_PAID: 'La factura ya está pagada.',
+    PURCHASE_PRODUCT_IMAGE_UNAVAILABLE: 'La creación rápida de producto desde Compras no admite cargar una fotografía.',
+    PROCUREMENT_MIGRATION_REQUIRED: 'Compras y cuentas por pagar necesitan las migraciones conectadas aprobadas.',
     NETWORK_ERROR: 'No se pudo conectar con el servidor. Comprueba tu conexión',
     INVALID_RESPONSE: 'El servidor devolvió una respuesta inesperada.',
     INVALID_CREDENTIALS: 'El usuario o la contraseña son incorrectos (Credenciales incorrectas).',
@@ -161,7 +180,7 @@
       return operation;
     }
     #salesResult(value) {
-      const record = value?.sale || value?.cash || value?.order || value?.movement || value?.payment || value?.overview || value;
+      const record = value?.sale || value?.cash || value?.order || value?.movement || value?.payment || value?.supplierPayment || value?.purchase || value?.overview || value;
       if (record.businessId !== this.#identity?.businessId) throw new ApiError('INVALID_RESPONSE');
       if (value.sale) {
         const sale = value.sale;
@@ -192,7 +211,7 @@
       const value = await this.#request('/reports/connected' + (queryString ? '?' + queryString : ''));
       const report = value?.report;
       const moneyValue = candidate => typeof candidate === 'string' && /^-?\d{1,10}\.\d{2}$/.test(candidate);
-      if (report?.businessId !== this.#identity?.businessId || !report.sales || !report.cash || !report.inventory || !report.receivables || !moneyValue(report.sales.total) || !moneyValue(report.sales.cost) || !moneyValue(report.sales.grossProfit) || !moneyValue(report.cash.periodIn) || !moneyValue(report.cash.periodOut) || !(report.cash.currentExpected === null || moneyValue(report.cash.currentExpected)) || !Array.isArray(report.sales.history) || !Array.isArray(report.sales.paymentMethods) || !Array.isArray(report.sales.sellers) || !Array.isArray(report.sales.topProducts) || !Array.isArray(report.cash.closures) || !Array.isArray(report.cash.movements) || !Array.isArray(report.inventory.products) || !Array.isArray(report.receivables.clients) || !Array.isArray(report.receivables.payments)) throw new ApiError('INVALID_RESPONSE');
+      if (report?.businessId !== this.#identity?.businessId || !report.sales || !report.cash || !report.inventory || !report.receivables || !report.expenses || !report.purchases || !report.payables || !report.suppliers || !moneyValue(report.sales.total) || !moneyValue(report.sales.cost) || !moneyValue(report.sales.grossProfit) || !moneyValue(report.sales.netProfit) || !moneyValue(report.expenses.total) || !Number.isSafeInteger(report.expenses.count) || !Array.isArray(report.expenses.byCategory) || !Array.isArray(report.expenses.history) || !Array.isArray(report.inventory.movements) || !moneyValue(report.cash.periodIn) || !moneyValue(report.cash.periodOut) || !(report.cash.currentExpected === null || moneyValue(report.cash.currentExpected)) || !Array.isArray(report.sales.history) || !Array.isArray(report.sales.paymentMethods) || !Array.isArray(report.sales.sellers) || !Array.isArray(report.sales.topProducts) || !Array.isArray(report.cash.closures) || !Array.isArray(report.cash.movements) || !Array.isArray(report.inventory.products) || !Array.isArray(report.receivables.clients) || !Array.isArray(report.receivables.payments) || !moneyValue(report.purchases.total) || !Array.isArray(report.purchases.history) || !moneyValue(report.payables.balance) || !moneyValue(report.payables.pendingPayments) || !Array.isArray(report.payables.invoices) || !Array.isArray(report.suppliers.list) || !Array.isArray(report.suppliers.payments)) throw new ApiError('INVALID_RESPONSE');
       return report;
     }
     async confirmPayment(id,data) { return this.#salesResult(await this.#write('/cash/payments/'+encodeURIComponent(id)+'/confirm','POST',data)); }
@@ -262,6 +281,47 @@
     }
     async clientStatement(id) { const value = await this.#request('/clients/' + encodeURIComponent(id) + '/statement?limit=100&offset=0'); if (value?.client?.businessId !== this.#identity?.businessId || !Array.isArray(value.invoices) || !Array.isArray(value.payments)) throw new ApiError('INVALID_RESPONSE'); return value; }
     async payReceivable(id, data) { return this.#salesResult(await this.#write('/receivables/' + encodeURIComponent(id) + '/payments', 'POST', data)); }
+    async expenses(offset = 0, q = '') { const value = await this.#request('/expenses?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : '')); if (!Array.isArray(value?.expenses) || value.expenses.length > 100 || value?.summary?.businessId !== this.#identity?.businessId || !['total', 'today'].every(key => /^\d+\.\d{2}$/.test(value.summary[key] || '')) || !Number.isSafeInteger(value.summary.count)) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async createExpense(data) { const value = await this.#write('/expenses', 'POST', data); if (value?.kind !== 'EXPENSE' || value.expense?.businessId !== this.#identity?.businessId || !/^[1-9]\d*$/.test(value.expense.id || '') || !/^\d+\.\d{2}$/.test(value.expense.amount || '')) throw new ApiError('INVALID_RESPONSE'); return value.expense; }
+    async cancelExpense(id, data) { const value = await this.#write('/expenses/' + encodeURIComponent(id) + '/cancel', 'POST', data); if (value?.kind !== 'EXPENSE' || value.expense?.businessId !== this.#identity?.businessId || value.expense.id !== String(id) || value.expense.status !== 'VOID') throw new ApiError('INVALID_RESPONSE'); return value.expense; }
+    async suppliers(offset = 0, q = '') {
+      const value = await this.#request('/suppliers?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : ''));
+      if (!Array.isArray(value?.suppliers) || value.suppliers.length > 100) throw new ApiError('INVALID_RESPONSE');
+      return value.suppliers.map(item => {
+        if (!/^[1-9]\d{0,19}$/.test(item.id || '') || item.businessId !== this.#identity?.businessId || typeof item.name !== 'string' || typeof item.active !== 'boolean' || !['totalPurchased', 'debt', 'pendingPayments'].every(key => /^-?\d+\.\d{2}$/.test(item[key] || ''))) throw new ApiError('INVALID_RESPONSE');
+        return item;
+      });
+    }
+    async createSupplier(data) { const value = await this.#write('/suppliers', 'POST', data); if (value?.supplier?.businessId !== this.#identity?.businessId) throw new ApiError('INVALID_RESPONSE'); return value.supplier; }
+    async purchaseSuppliers(offset = 0, q = '') {
+      const value = await this.#request('/purchases/suppliers?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : ''));
+      if (!Array.isArray(value?.suppliers) || value.suppliers.length > 100) throw new ApiError('INVALID_RESPONSE');
+      return value.suppliers.map(item => {
+        if (!/^[1-9]\d{0,19}$/.test(item.id || '') || item.businessId !== this.#identity?.businessId || typeof item.name !== 'string' || typeof item.active !== 'boolean') throw new ApiError('INVALID_RESPONSE');
+        return item;
+      });
+    }
+    async createPurchaseSupplier(data) { const value = await this.#write('/purchases/suppliers', 'POST', data); if (value?.supplier?.businessId !== this.#identity?.businessId) throw new ApiError('INVALID_RESPONSE'); return value.supplier; }
+    async updateSupplier(id, data) { const value = await this.#write('/suppliers/' + encodeURIComponent(id), 'PATCH', data); if (value?.supplier?.businessId !== this.#identity?.businessId || value.supplier.id !== String(id)) throw new ApiError('INVALID_RESPONSE'); return value.supplier; }
+    async setSupplierActive(id, active) { const value = await this.#write('/suppliers/' + encodeURIComponent(id) + '/active', 'PATCH', { active }); if (value?.businessId !== this.#identity?.businessId || value.id !== String(id) || value.active !== active) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async supplierStatement(id) { const value = await this.#request('/suppliers/' + encodeURIComponent(id) + '/statement?limit=100&offset=0'); if (value?.supplier?.businessId !== this.#identity?.businessId || !Array.isArray(value.entries)) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async purchaseProducts(offset = 0, q = '') {
+      const value = await this.#request('/purchases/products?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : ''));
+      if (!Array.isArray(value?.products) || value.products.length > 100) throw new ApiError('INVALID_RESPONSE');
+      return value.products.map(item => {
+        if (!/^[1-9]\d{0,19}$/.test(item.id || '') || item.businessId !== this.#identity?.businessId || typeof item.name !== 'string' || !['cost', 'marginRetail', 'marginWholesale', 'retailPrice', 'wholesalePrice', 'stock'].every(field => Number.isFinite(Number(item[field])))) throw new ApiError('INVALID_RESPONSE');
+        return { ...item, business_id: item.businessId, deleted: false };
+      });
+    }
+    async createPurchaseProduct(data) { const value = await this.#write('/purchases/products', 'POST', data); if (value?.product?.businessId !== this.#identity?.businessId || !/^[1-9]\d{0,19}$/.test(value.product.id || '')) throw new ApiError('INVALID_RESPONSE'); return value.product; }
+    async purchases(offset = 0, q = '') { const value = await this.#request('/purchases?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : '')); if (!Array.isArray(value?.purchases) || value.purchases.length > 100) throw new ApiError('INVALID_RESPONSE'); return value.purchases; }
+    async purchase(id) { const value = await this.#request('/purchases/' + encodeURIComponent(id)); if (value?.purchase?.businessId !== this.#identity?.businessId || !Array.isArray(value.purchase.items)) throw new ApiError('INVALID_RESPONSE'); return value.purchase; }
+    async createPurchase(data) { const value = this.#salesResult(await this.#write('/purchases', 'POST', data)); if (value?.purchase?.businessId !== this.#identity?.businessId) throw new ApiError('INVALID_RESPONSE'); return value.purchase; }
+    async cancelPurchase(id, data) { const value = this.#salesResult(await this.#write('/purchases/' + encodeURIComponent(id) + '/cancel', 'POST', data)); if (value?.purchase?.businessId !== this.#identity?.businessId || value.purchase.status !== 'CANCELLED') throw new ApiError('INVALID_RESPONSE'); return value.purchase; }
+    async payables(offset = 0, q = '') { const value = await this.#request('/payables?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : '')); if (!Array.isArray(value?.payables) || value.payables.length > 100) throw new ApiError('INVALID_RESPONSE'); return value.payables; }
+    async payable(id) { const value = await this.#request('/payables/' + encodeURIComponent(id)); if (value?.purchase?.businessId !== this.#identity?.businessId || value.purchase.purchaseType !== 'CREDIT' || !Array.isArray(value.purchase.items)) throw new ApiError('INVALID_RESPONSE'); return value.purchase; }
+    async payablesSummary() { const value = await this.#request('/payables/summary'); if (value?.summary?.businessId !== this.#identity?.businessId || !/^\d+\.\d{2}$/.test(value.summary.balance || '') || !/^\d+\.\d{2}$/.test(value.summary.pendingPayments || '')) throw new ApiError('INVALID_RESPONSE'); return value.summary; }
+    async paySupplierInvoice(id, data) { const value = await this.#write('/payables/' + encodeURIComponent(id) + '/payments', 'POST', data); if (value?.payment?.businessId !== this.#identity?.businessId || value.payment.purchaseId !== String(id) || !['CASH', 'CARD', 'TRANSFER', 'OTHER'].includes(value.payment.paymentMethod) || !['PENDING', 'POSTED'].includes(value.payment.status)) throw new ApiError('INVALID_RESPONSE'); return value.payment; }
     async users(offset = 0) {
       const value = await this.#request('/users?limit=100&offset=' + encodeURIComponent(offset));
       if (!Array.isArray(value?.users)) throw new ApiError('INVALID_RESPONSE');

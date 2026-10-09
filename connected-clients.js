@@ -55,8 +55,10 @@
   function renderReceivables() {
     const body = el('receivablesTableBody'); if (!body) return;
     body.replaceChildren();
-    if (!receivables.length) { const row = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 9; cell.className = 'text-center'; cell.textContent = 'No hay cuentas por cobrar que coincidan.'; row.append(cell); body.append(row); return; }
-    for (const item of receivables) {
+    const range = window.PosPeriodFilters?.range('receivables') || { from: '', until: '' };
+    const visibleReceivables = receivables.filter(item => window.PosPeriodFilters?.matches(item.date, range));
+    if (!visibleReceivables.length) { const row = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 9; cell.className = 'text-center'; cell.textContent = receivables.length ? 'No hay facturas en este período.' : 'No hay cuentas por cobrar que coincidan.'; row.append(cell); body.append(row); return; }
+    for (const item of visibleReceivables) {
       const row = document.createElement('tr'); row.dataset.saleId = item.id;
       row.dataset.tableDate = window.PosTables.dateKey(item.date);
       appendCell(row, item.clientName); appendCell(row, '#' + item.invoiceNumber); appendCell(row, formatDate(item.date));
@@ -146,7 +148,8 @@
         ...value.payments.map(payment => { const invoice = invoiceMap.get(payment.saleId); return { date: payment.createdAt, ref: 'Abono factura #' + payment.invoiceNumber, detail: payment.paymentMethod + ' · ' + statusText(payment.status), charge: '-', paid: money(payment.amount), balance: invoice ? money(invoice.balance) : '-' }; })
       ].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
       const body = el('statementTableBody'); body.replaceChildren();
-      for (const entry of entries) { const row = document.createElement('tr'); appendCell(row, new Date(entry.date).toLocaleString()); appendCell(row, entry.ref); appendCell(row, entry.detail); appendCell(row, entry.charge); appendCell(row, entry.paid); appendCell(row, entry.balance); appendCell(row, '-'); body.append(row); }
+      for (const entry of entries) { const row = document.createElement('tr'); row.dataset.periodDate = window.PosPeriodFilters?.dateKey(entry.date) || ''; appendCell(row, new Date(entry.date).toLocaleString()); appendCell(row, entry.ref); appendCell(row, entry.detail); appendCell(row, entry.charge); appendCell(row, entry.paid); appendCell(row, entry.balance); appendCell(row, '-'); body.append(row); }
+      window.PosPeriodFilters?.filterTable('statementTableBody', window.PosPeriodFilters.range('statement'));
       el('statementModal').classList.remove('hidden');
     } catch (error) { message(error.message, 'error'); }
   }
@@ -214,5 +217,9 @@
   });
   el('creditDays').readOnly = true;
   el('clientModal')?.querySelector('.close-modal-btn')?.addEventListener('click', () => { el('clientDebt').required = true; el('clientCreditDays').required = false; el('clientDebtField').classList.remove('hidden'); el('clientCreditDaysField').classList.add('hidden'); });
+  document.addEventListener('pos:period-changed', event => {
+    if (event.detail?.id === 'receivables') renderReceivables();
+    if (event.detail?.id === 'statement') window.PosPeriodFilters?.filterTable('statementTableBody', event.detail.range);
+  });
   window.PosClients = Object.freeze({ load, loadCreditClients, edit, toggle, statement, save, submitPayment, openPayment, refreshCreditClients: loadCreditClients });
 })();
