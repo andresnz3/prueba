@@ -75,16 +75,24 @@
       actions.append(button); row.append(actions); body.append(row);
     }
   }
-  async function load(view = 'clientsView', q = el('clientSearchInput')?.value.trim() || '') {
+  async function load(view = 'clientsView', q = null) {
     if (!connectedMode || view !== 'clientsView') return;
+    const searchInput = el('clientSearchInput');
+    const isUserSearching = document.activeElement === searchInput;
+    const query = q !== null ? String(q).trim() : (isUserSearching ? (searchInput?.value.trim() || '') : '');
+    if (!isUserSearching && q === null && searchInput) {
+      searchInput.value = '';
+      selectedClientSuggestionId = null;
+    }
     const request = ++pageRequest; message('Cargando clientes y cuentas por cobrar...', 'info');
     el('connectedClientsControls')?.classList.remove('hidden');
     try {
-      const [nextClients, nextReceivables] = await Promise.all([allPages('clients', q), allPages('receivables', q)]);
-      if (request !== pageRequest || q !== (el('clientSearchInput')?.value.trim() || '')) return;
+      const [nextClients, nextReceivables] = await Promise.all([allPages('clients', query), allPages('receivables', query)]);
+      if (request !== pageRequest) return;
+      if (isUserSearching && query !== (searchInput?.value.trim() || '')) return;
       clients = nextClients; receivables = nextReceivables;
       renderClients(); renderReceivables(); message('');
-      if (document.activeElement === el('clientSearchInput') && !selectedClientSuggestionId) clientAutocomplete?.refresh();
+      if (isUserSearching && !selectedClientSuggestionId) clientAutocomplete?.refresh();
     } catch (error) { if (request === pageRequest) message(error.message, 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
   }
   function fillCreditSelect(values, selected) {

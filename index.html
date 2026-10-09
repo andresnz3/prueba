@@ -399,7 +399,8 @@
                             <button id="filtroTodoBtn" class="btn btn-secondary">Todo</button>
                             <button id="exportReportsSalesBtn" onclick="window.exportarExcelReporte('repVentasBox', 'ventas')" class="btn btn-secondary btn-export-excel report-export-button local-report-only">Exportar Excel de Ventas</button>
                             <button id="exportReportsSellersBtn" onclick="window.exportarExcelReporte('repVendedoresBox', 'vendedores')" class="btn btn-secondary btn-export-excel report-export-button local-report-only">Exportar Excel de Vendedores</button>
-                            <button type="button" class="btn btn-export-excel connected-report-only hidden" onclick="window.PosReports?.exportExcel()">Exportar Excel</button>
+                            <button type="button" class="btn btn-secondary btn-export-excel report-export-button connected-report-only hidden" onclick="window.PosReports?.exportExcel('sales')">Exportar Excel de Ventas</button>
+                            <button type="button" class="btn btn-secondary btn-export-excel report-export-button connected-report-only hidden" onclick="window.PosReports?.exportExcel('sellers')">Exportar Excel de Vendedores</button>
                         </div>
                         <p id="reporteRangoLabel" style="margin-top: 10px; color: #666; font-size: 0.9rem;"></p>
                         <p id="connectedReportScope" class="connected-report-scope connected-report-only hidden">El período filtra las actividades; Cuentas por Cobrar, Cuentas por Pagar e inventario muestran el estado actual.</p>
