@@ -169,7 +169,7 @@
           const status = payment.status === 'PENDING' ? ' · Abono pendiente de confirmar' : '';
           return { type: 'payment', date: payment.createdAt, ref: 'Abono #' + String(payment.invoiceNumber).padStart(6, '0'),
             detail: 'Pago recibido por ' + method + (payment.userName ? ' (' + payment.userName + ')' : '') + status,
-            amount: Number(payment.amount), paymentStatus: payment.status, saleId: payment.saleId, invoice };
+            amount: Number(payment.amount), paymentStatus: payment.status, saleId: payment.saleId, invoice, receipt: payment };
         })
       ].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
       const body = el('statementTableBody'); body.replaceChildren();
@@ -201,6 +201,15 @@
         if (entry.type === 'payment') paid.style.cssText = 'color:#28a745;font-weight:bold;';
         const balance = appendCell(row, money(runningBalance)); balance.style.cssText = 'font-weight:bold;font-size:1.1em;';
         const actions = appendCell(row, '');
+        if (entry.type === 'payment') {
+          const receiptButton = document.createElement('button');
+          receiptButton.type = 'button'; receiptButton.className = 'btn btn-sm btn-info'; receiptButton.textContent = 'Ver comprobante';
+          receiptButton.addEventListener('click', () => {
+            el('statementModal').classList.add('hidden');
+            window.verComprobanteAbono(entry.receipt, 'cliente', value.client.name, '#' + String(entry.receipt.invoiceNumber).padStart(6, '0'));
+          });
+          actions.append(receiptButton);
+        }
         const invoice = entry.type === 'charge' && receivables.find(item => String(item.id) === String(entry.saleId));
         if (invoice) {
           actions.append(actionButton('Ver Factura', 'invoice', invoice.id, 'info'));

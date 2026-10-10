@@ -200,11 +200,24 @@
     finally { button.disabled = false; }
   }
   function viewPurchase(purchase) {
-    const lines = (purchase.items || []).map(item => '<div style="display:flex;justify-content:space-between;gap:12px;margin:5px 0"><span>' + Number(item.quantity).toFixed(3) + ' × ' + esc(item.name) + ' · costo ' + money(item.unitCost) + '</span><strong>' + money(item.total) + '</strong></div>').join('');
-    const status = purchase.status === 'CANCELLED' ? '<p style="color:#b91c1c;font-weight:700">Factura anulada: ' + esc(purchase.cancelReason || '') + '</p>' : '';
-    el('ticketContent').innerHTML = '<div id="imprimibleTicket" style="font-family:system-ui;background:#fff;border:1px dashed #cbd5e1;padding:22px;width:100%;max-width:440px;color:#172033"><h3 style="text-align:center;margin:0">COMPROBANTE DE COMPRA</h3><p style="text-align:center">Proveedor: ' + esc(purchase.supplierName) + '</p><hr><p>N° compra interno: <strong>' + esc(purchaseNumber(purchase)) + '</strong></p>' + (purchase.supplierInvoiceNumber ? '<p>Factura del proveedor: <strong>' + esc(purchase.supplierInvoiceNumber) + '</strong></p>' : '') + '<p>Fecha: ' + esc(dateTime(purchase.createdAt)) + '</p><p>Condición: ' + (purchase.purchaseType === 'CREDIT' ? 'Crédito · vence ' + esc(date(purchase.dueAt)) : 'Contado') + '</p>' + status + '<hr>' + lines + '<hr><p style="text-align:right"><strong>Total ' + money(purchase.total) + '</strong></p><p>Abonado: ' + money(purchase.paid) + ' · Saldo: ' + money(purchase.balance) + '</p></div>';
+    const lines = (purchase.items || []).map(item => '<div class="invoice-item-row"><span class="invoice-item-description">' + Number(item.quantity).toFixed(3) + ' × ' + esc(item.name) + '<small>costo ' + money(item.unitCost) + '</small></span><strong class="invoice-item-amount">' + money(item.total) + '</strong></div>').join('');
+    const cancelled = purchase.status === 'CANCELLED';
+    const status = cancelled ? '<p class="invoice-note invoice-note--danger">Factura anulada: ' + esc(purchase.cancelReason || '') + '</p>' : '';
+    const condition = purchase.purchaseType === 'CREDIT' ? 'Crédito · vence ' + esc(date(purchase.dueAt)) : 'Contado';
+    el('ticketContent').innerHTML = '<div id="imprimibleTicket" class="invoice-view invoice-view--purchase">' +
+      '<header class="invoice-header"><div><span class="invoice-eyebrow">Documento del proveedor</span><h3 class="invoice-company-name">COMPROBANTE DE COMPRA</h3><p class="invoice-subtitle">Proveedor: ' + esc(purchase.supplierName) + '</p></div><span class="invoice-badge ' + (cancelled ? 'invoice-badge--danger' : 'invoice-badge--success') + '">' + (cancelled ? 'Anulada' : 'Registrada') + '</span></header>' +
+      '<div class="invoice-card"><div class="invoice-grid">' +
+      '<div class="invoice-field"><span class="invoice-field-label">N° compra interno</span><strong>' + esc(purchaseNumber(purchase)) + '</strong></div>' +
+      (purchase.supplierInvoiceNumber ? '<div class="invoice-field"><span class="invoice-field-label">Factura del proveedor</span><strong>' + esc(purchase.supplierInvoiceNumber) + '</strong></div>' : '') +
+      '<div class="invoice-field"><span class="invoice-field-label">Fecha</span><strong>' + esc(dateTime(purchase.createdAt)) + '</strong></div>' +
+      '<div class="invoice-field"><span class="invoice-field-label">Condición</span><strong>' + condition + '</strong></div>' +
+      '</div></div>' + status +
+      '<section class="invoice-card"><h4 class="invoice-section-title">Detalle de compra</h4><div class="invoice-items">' + lines + '</div></section>' +
+      '<section class="invoice-total-box"><div class="invoice-summary-row invoice-total-row"><span>Total</span><strong>' + money(purchase.total) + '</strong></div>' +
+      '<div class="invoice-summary-row"><span>Abonado</span><strong>' + money(purchase.paid) + '</strong></div><div class="invoice-summary-row"><span>Saldo</span><strong>' + money(purchase.balance) + '</strong></div></section></div>';
     el('ticketModal').classList.remove('hidden');
   }
+
   async function viewPurchaseById(id) {
     try { const purchase = await request(async (api, business) => { const row = state.currentView === 'payablesView' ? await api.payable(id) : await api.purchase(id); if (row.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401); return row; }); viewPurchase(purchase); }
     catch (error) { showError(error); }
@@ -268,17 +281,32 @@
       catch (error) { showError(error); }
     });
   }
+  let supplierPaymentReceipts = new Map();
   async function supplierStatement(id) {
     try {
       const data = await request(api => api.supplierStatement(id));
+      supplierPaymentReceipts.clear();
       el('statementModalTitle').textContent = 'Estado de cuenta: ' + data.supplier.name;
       el('statementModalSubtitle').textContent = 'Deuda actual: ' + money(data.supplier.debt) + ' · Compras registradas: ' + Number(data.supplier.purchaseCount || 0);
       const payableRows = [];
-      const renderedRows = data.entries.map(entry => {
+      const renderedRows = data.entries.map((entry, index) => {
         const charge = Number(entry.charge || 0), paid = Number(entry.paid || 0);
         const canPay = entry.kind === 'PURCHASE' && entry.canPay === true;
         payableRows.push(canPay);
-        const buttons = entry.kind === 'PURCHASE' ? '<button type="button" class="btn btn-sm btn-info" data-statement-action="view" data-purchase-id="' + esc(entry.purchaseId) + '">Ver factura</button>' + (canPay ? ' <button type="button" class="btn btn-sm btn-success" data-statement-action="pay" data-purchase-id="' + esc(entry.purchaseId) + '">Abonar</button>' : '') : '';
+        let buttons = '';
+        if (entry.kind === 'PURCHASE') buttons = '<button type="button" class="btn btn-sm btn-info" data-statement-action="view" data-purchase-id="' + esc(entry.purchaseId) + '">Ver factura</button>' + (canPay ? ' <button type="button" class="btn btn-sm btn-success" data-statement-action="pay" data-purchase-id="' + esc(entry.purchaseId) + '">Abonar</button>' : '');
+        else if (entry.kind === 'PAYMENT') {
+          const amount = Number(entry.status === 'PENDING' ? entry.pending : entry.paid);
+          if (amount > 0) {
+            const paymentKey = String(index);
+            supplierPaymentReceipts.set(paymentKey, {
+              payment: { amount, paymentMethod: entry.description, status: entry.status, createdAt: entry.date, reference: entry.reference },
+              supplierName: data.supplier.name,
+              invoiceReference: entry.reference || ''
+            });
+            buttons = '<button type="button" class="btn btn-sm btn-info" data-statement-action="receipt" data-payment-key="' + paymentKey + '">Ver comprobante</button>';
+          }
+        }
         return '<tr data-period-date="' + esc(window.PosPeriodFilters?.dateKey(entry.date) || '') + '"><td>' + esc(dateTime(entry.date)) + '</td><td>' + esc(entry.reference || '—') + '</td><td>' + esc(entry.description || '—') + (entry.pending ? '<br><small>Por confirmar ' + money(entry.pending) + '</small>' : '') + '</td><td>' + (charge ? money(charge) : '—') + '</td><td>' + (paid ? money(paid) : '—') + '</td><td>' + money(entry.runningBalance) + '</td><td>' + buttons + '</td></tr>';
       });
       const orderedRows = [...renderedRows.filter((_, index) => payableRows[index]), ...renderedRows.filter((_, index) => !payableRows[index])];
@@ -334,6 +362,13 @@
   });
   el('statementTableBody').addEventListener('click', event => {
     const button = event.target.closest('[data-statement-action]'); if (!button) return;
+    if (button.dataset.statementAction === 'receipt') {
+      const receipt = supplierPaymentReceipts.get(button.dataset.paymentKey);
+      if (!receipt) return;
+      el('statementModal').classList.add('hidden');
+      window.verComprobanteAbono(receipt.payment, 'proveedor', receipt.supplierName, receipt.invoiceReference);
+      return;
+    }
     el('statementModal').classList.add('hidden');
     if (button.dataset.statementAction === 'view') viewPurchaseById(button.dataset.purchaseId);
     else openInvoicePayment(button.dataset.purchaseId);

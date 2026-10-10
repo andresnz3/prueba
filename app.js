@@ -1034,33 +1034,149 @@ async function registrarVenta(total, pago, vuelto) {
 
 window.reimprimirTicket = function(id) { ticketEsVentaNueva = false; const sale = salesHistory.find(s => String(s.id) === String(id)); if(!sale) return; generarVisualizacionTicket(sale, sale.total, 0, true); };
 
+window.verComprobanteAbono = function(payment, kind, accountName, invoiceReference) {
+    if (!payment || ["cliente", "proveedor"].indexOf(kind) === -1) return;
+    const rawAmount = payment.amount ?? payment.monto ?? (payment.status === "PENDING" ? payment.pending : payment.paid);
+    const amount = Number(rawAmount);
+    if (!Number.isFinite(amount) || amount < 0) return;
+    const rawStatus = String(payment.status || payment.estado || (payment.anulado ? "VOID" : "")).toUpperCase();
+    const cancelled = payment.anulado === true || ["VOID", "CANCELLED", "ANULADO", "ANULADA"].includes(rawStatus);
+    const pending = !cancelled && (rawStatus.includes("PENDING") || rawStatus.startsWith("PENDIENTE"));
+    const confirmed = !cancelled && !pending && ["POSTED", "CONFIRMED", "CONFIRMADO", "CONFIRMADA"].includes(rawStatus);
+    const badgeClass = cancelled ? "invoice-badge--danger" : confirmed ? "invoice-badge--success" : "invoice-badge--neutral";
+    const statusLabel = cancelled ? "Anulado" : pending ? "Pendiente de confirmar" : confirmed ? "Confirmado" : "Registrado";
+    const partyLabel = kind === "cliente" ? "Cliente" : "Proveedor";
+    const currency = connectedMode ? "C$" : (sysConfig.currency || "C$");
+    const rawMethod = payment.paymentMethod || payment.metodoPago || payment.description || "";
+    const methodMap = { CASH: "Efectivo", CARD: "Tarjeta", TRANSFER: "Transferencia", OTHER: "Otro", EFECTIVO: "Efectivo", TARJETA: "Tarjeta", TRANSFERENCIA: "Transferencia" };
+    const method = methodMap[String(rawMethod).toUpperCase()] || rawMethod || "No indicado";
+    const rawDate = payment.createdAt || payment.fechaTS || payment.fecha || "";
+    const parsedDate = rawDate ? new Date(rawDate) : null;
+    const dateText = parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.toLocaleString() : (rawDate || "—");
+    const linkedReference = invoiceReference || payment.invoiceReference || payment.supplierInvoiceNumber || payment.invoiceNumber || "";
+    const paymentReference = payment.paymentReference || payment.receiptReference || payment.externalReference || payment.comprobante || "";
+    const reason = payment.cancelReason || payment.motivoAnulacion || "";
+    const note = cancelled
+        ? '<p class="invoice-note invoice-note--danger">Abono anulado' + (reason ? ': ' + escapeHtml(reason) : '') + '</p>'
+        : pending ? '<p class="invoice-note">Pendiente de confirmación en Caja.</p>' : "";
+    const currencyAmount = currency + amount.toFixed(2);
+    const referenceField = paymentReference
+        ? '<div class="invoice-field"><span class="invoice-field-label">Referencia</span><strong>' + escapeHtml(paymentReference) + '</strong></div>'
+        : "";
+    const linkedField = linkedReference
+        ? '<div class="invoice-field"><span class="invoice-field-label">Factura o cuenta asociada</span><strong>' + escapeHtml(linkedReference) + '</strong></div>'
+        : "";
+    const userName = payment.userName || payment.usuario;
+    const userField = userName
+        ? '<div class="invoice-field"><span class="invoice-field-label">Registrado por</span><strong>' + escapeHtml(userName) + '</strong></div>'
+        : "";
+    const detail = kind === "cliente" ? "Abono recibido del cliente" : "Pago aplicado al proveedor";
+    const linkedDetail = linkedReference ? "Factura o cuenta: " + escapeHtml(linkedReference) : "Abono a cuenta";
+    const ticket = document.getElementById("ticketContent");
+    if (ticket) {
+        ticket.innerHTML = '<div id="imprimibleTicket" class="invoice-view invoice-view--payment">' +
+            '<header class="invoice-header"><div><span class="invoice-eyebrow">Comprobante de cuenta</span><h3 class="invoice-company-name">COMPROBANTE DE ABONO</h3></div><span class="invoice-badge ' + badgeClass + '">' + statusLabel + '</span></header>' +
+            '<div class="invoice-card"><div class="invoice-grid">' +
+                '<div class="invoice-field"><span class="invoice-field-label">' + partyLabel + '</span><strong>' + escapeHtml(accountName || "—") + '</strong></div>' +
+                '<div class="invoice-field"><span class="invoice-field-label">Fecha y hora</span><strong>' + escapeHtml(dateText) + '</strong></div>' +
+                '<div class="invoice-field"><span class="invoice-field-label">Método de pago</span><strong>' + escapeHtml(method) + '</strong></div>' +
+                linkedField + referenceField + userField +
+            '</div></div>' + note +
+            '<section class="invoice-card"><h4 class="invoice-section-title">Detalle del abono</h4><div class="invoice-items"><div class="invoice-item-row"><span class="invoice-item-description">' + detail + '<small>' + linkedDetail + '</small></span><strong class="invoice-item-amount">' + currencyAmount + '</strong></div></div></section>' +
+            '<section class="invoice-total-box"><div class="invoice-summary-row invoice-total-row"><span>Total abonado</span><strong>' + currencyAmount + '</strong></div></section>' +
+        '</div>';
+    }
+    ticketEsVentaNueva = false;
+    document.getElementById("ticketModal")?.classList.remove("hidden");
+};
+
+window.verComprobanteAbonoLocal = function(id, kind) {
+    if (connectedMode || ["cliente", "proveedor"].indexOf(kind) === -1) return;
+    const payment = abonosHistory.find(item => String(item.id) === String(id) &&
+        (item.tipo === kind || (kind === "cliente" && item.tipo === "factura")));
+    if (!payment) return;
+    const account = kind === "cliente"
+        ? clients.find(item => String(item.id) === String(payment.referenciaId))
+        : suppliers.find(item => String(item.id) === String(payment.referenciaId));
+    const invoice = payment.facturaId
+        ? (kind === "cliente"
+            ? salesHistory.find(item => String(item.id) === String(payment.facturaId))
+            : purchasesHistory.find(item => String(item.id) === String(payment.facturaId)))
+        : null;
+    const invoiceReference = invoice
+        ? (kind === "cliente" ? "#" + String(invoice.numero).padStart(6, "0") : invoice.factura)
+        : "";
+    window.verComprobanteAbono(payment, kind, account?.name, invoiceReference);
+};
+
 function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
     let prods; let subtotalTicket = 0;
-    if (sale.items && sale.items.length > 0) { prods = sale.items.map(i => { const precio = sale.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0); const lineAmount = connectedMode && Number.isFinite(i.connectedSubtotal) ? i.connectedSubtotal : precio * i.cantidad; subtotalTicket += lineAmount; return `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${i.cantidad}x ${escapeHtml(i.name)}</span><span>${sysConfig.currency}${lineAmount.toFixed(2)}</span></div>`; }).join(""); } else { prods = `<div style="text-align:center; font-size:12px; color:#888;">(Detalle no disponible)</div>`; subtotalTicket = sale.total; }
+    if (sale.items && sale.items.length > 0) {
+        prods = sale.items.map(i => {
+            const precio = sale.tarifa === "Menudeo" ? (i.retailPrice || i.retail || 0) : (i.wholesalePrice || i.wholesale || 0);
+            const lineAmount = connectedMode && Number.isFinite(i.connectedSubtotal) ? i.connectedSubtotal : precio * i.cantidad;
+            subtotalTicket += lineAmount;
+            return '<div class="invoice-item-row"><span class="invoice-item-description">' + i.cantidad + 'x ' + escapeHtml(i.name) + '</span><strong class="invoice-item-amount">' + sysConfig.currency + lineAmount.toFixed(2) + '</strong></div>';
+        }).join("");
+    } else {
+        prods = '<div class="invoice-note">(Detalle no disponible)</div>';
+        subtotalTicket = sale.total;
+    }
     let saldoPendienteHtml = "";
     if (sale.metodo === "Crédito") {
         const c = clients.find(cl => String(cl.id) === String(sale.clienteId)) || clients.find(cl => cl.name === sale.cliente);
         const saldo = connectedMode && Number.isFinite(sale.saldoPendiente) ? sale.saldoPendiente : (c ? obtenerSaldoFactura("cliente", sale) : 0);
-        if (c || connectedMode) saldoPendienteHtml = `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top:5px; border-top:1px dashed #000; padding-top:5px; color:#d32f2f;"><span>Saldo Pendiente:</span><span>${sysConfig.currency}${saldo.toFixed(2)}</span></div>`;
+        if (c || connectedMode) saldoPendienteHtml = '<div class="invoice-summary-row"><span>Saldo pendiente</span><strong>' + sysConfig.currency + saldo.toFixed(2) + '</strong></div>';
     }
     let pagoH;
     if (sale.metodo === "Contado") {
         const medio = obtenerMedioPagoVenta(sale);
-        const recibido = medio === "cash" && !esCopia ? `<span>Recibido: ${sysConfig.currency}${(pago||0).toFixed(2)}</span>` : "";
-        const cambio = medio === "cash" && !esCopia ? `<div style="display:flex; justify-content:space-between; font-weight:bold;"><span>CAMBIO:</span><span>${sysConfig.currency}${(vuelto||0).toFixed(2)}</span></div>` : "";
-        pagoH = `<div style="display:flex; justify-content:space-between; margin-top:10px;"><span>Pago con ${mediosPagoVenta[medio] || "Efectivo"}</span>${recibido}</div>${cambio}`;
+        const recibido = medio === "cash" && !esCopia ? '<div class="invoice-payment-received">Recibido: ' + sysConfig.currency + (pago||0).toFixed(2) + '</div>' : "";
+        const cambio = medio === "cash" && !esCopia ? '<div class="invoice-payment-change"><span>Cambio:</span><strong>' + sysConfig.currency + (vuelto||0).toFixed(2) + '</strong></div>' : "";
+        pagoH = '<div class="invoice-payment-method">Pago con ' + (mediosPagoVenta[medio] || "Efectivo") + '</div>' + recibido + cambio;
     } else if (sale.metodo === "Crédito") {
-        pagoH = `<div style="border: 2px dashed #000; padding: 10px; margin-top:10px; background:#f9f9f9; font-size:12px;"><div style="text-align:center; font-weight:bold; margin-bottom:5px;">*** FACTURA DE CRÉDITO ***</div><div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>A nombre de:</span><span style="font-weight:bold; text-align:right;">${escapeHtml(sale.cliente)}</span></div>${sale.plazo && sale.plazo !== "-" ? `<div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Plazo a pagar:</span><span>${sale.plazo}</span></div>` : ''}<div style="display:flex; justify-content:space-between; font-weight:bold; border-top:1px solid #ccc; padding-top:2px;"><span>VENCE:</span><span style="color:#d32f2f;">${sale.vencimiento || '-'}</span></div>${saldoPendienteHtml}</div>`;
+        pagoH = '<div class="invoice-credit-details"><div class="invoice-credit-title">*** FACTURA DE CRÉDITO ***</div>' +
+            '<div class="invoice-summary-row"><span>A nombre de</span><strong>' + escapeHtml(sale.cliente) + '</strong></div>' +
+            (sale.plazo && sale.plazo !== "-" ? '<div class="invoice-summary-row"><span>Plazo a pagar</span><strong>' + sale.plazo + '</strong></div>' : '') +
+            '<div class="invoice-summary-row"><span>Vence</span><strong>' + (sale.vencimiento || '-') + '</strong></div>' + saldoPendienteHtml + '</div>';
     } else {
-        pagoH = `<div style="display:flex; justify-content:space-between; margin-top:10px;"><span>Pago con ${escapeHtml(sale.metodo)}</span><strong>${sysConfig.currency}${r2(sale.total).toFixed(2)}</strong></div>`;
+        pagoH = '<div class="invoice-summary-row"><span>Pago con ' + escapeHtml(sale.metodo) + '</span><strong>' + sysConfig.currency + r2(sale.total).toFixed(2) + '</strong></div>';
     }
-    const statusAnulada = sale.anulada ? `<div style="text-align:center; color:white; background:#d32f2f; font-weight:bold; padding:5px; margin-bottom:10px;">FACTURA ANULADA</div>` : ``;
-    const confLogoImg = sysConfig.logo ? `<div style="text-align:center; margin-bottom: 5px;"><img src="${escapeHtml(sysConfig.logo)}" style="max-width: 120px; max-height: 80px; object-fit: contain;"></div>` : ''; const confH3 = `<h3 style="text-align:center; margin:0;">${escapeHtml(sysConfig.name)}</h3>`; const confRucInfo = sysConfig.ruc ? `<div style="text-align:center; font-size:12px;">RUC: ${escapeHtml(sysConfig.ruc)}</div>` : ''; const confAddressInfo = sysConfig.address ? `<div style="text-align:center; font-size:12px;">Dir: ${escapeHtml(sysConfig.address)}</div>` : ''; const confPhoneInfo = sysConfig.phone ? `<div style="text-align:center; font-size:12px;">Tel: ${escapeHtml(sysConfig.phone)}</div>` : ''; const confExtraHeader = sysConfig.header ? `<div style="text-align:center; font-size:12px; margin-bottom:5px;">${escapeHtml(sysConfig.header)}</div>` : ''; const confFooterFinal = sysConfig.footer ? `<div style="text-align: center; margin-top: 15px; font-size: 13px;">${escapeHtml(sysConfig.footer)}</div>` : `<div style="text-align: center; margin-top: 15px; font-size: 13px;">¡Gracias por su compra!</div>`;
+    const statusAnulada = sale.anulada ? '<span class="invoice-badge invoice-badge--danger">FACTURA ANULADA</span>' : '';
+    const confLogoImg = sysConfig.logo ? '<img class="invoice-logo" src="' + escapeHtml(sysConfig.logo) + '" alt="">' : '';
+    const confH3 = '<h3 class="invoice-company-name">' + escapeHtml(sysConfig.name) + '</h3>';
+    const confRucInfo = sysConfig.ruc ? '<span>RUC: ' + escapeHtml(sysConfig.ruc) + '</span>' : '';
+    const confAddressInfo = sysConfig.address ? '<span>Dir: ' + escapeHtml(sysConfig.address) + '</span>' : '';
+    const confPhoneInfo = sysConfig.phone ? '<span>Tel: ' + escapeHtml(sysConfig.phone) + '</span>' : '';
+    const confExtraHeader = sysConfig.header ? '<p class="invoice-subtitle">' + escapeHtml(sysConfig.header) + '</p>' : '';
+    const confFooterFinal = sysConfig.footer ? '<span>' + escapeHtml(sysConfig.footer) + '</span>' : '<span>¡Gracias por su compra!</span>';
     const subtotalFinal = Number.isFinite(Number(sale.subtotal)) ? Number(sale.subtotal) : subtotalTicket;
     const descuentoTicket = r2(sale.descuentoMonto || 0);
-    const resumenDescuento = descuentoTicket > 0 ? `<div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:3px;"><span>Subtotal</span><span>${sysConfig.currency}${subtotalFinal.toFixed(2)}</span></div><div style="display:flex; justify-content:space-between; font-size:14px; margin-bottom:3px;"><span>Descuento${sale.descuentoPct ? ` (${sale.descuentoPct}%)` : ""}</span><span>-${sysConfig.currency}${descuentoTicket.toFixed(2)}</span></div>` : "";
-    const tkCont = document.getElementById("ticketContent"); if(tkCont) { tkCont.innerHTML = `<div id="imprimibleTicket" style="font-family: monospace; background: #fff; border: 1px dashed #ccc; padding: 25px; width: 100%; max-width: 350px; margin: 0 auto;">${statusAnulada}${confLogoImg}${confH3}${confRucInfo}${confAddressInfo}${confPhoneInfo}${confExtraHeader}<div style="text-align:center; color:#555; font-size:12px; margin-bottom:10px;">${esCopia ? "COPIA DE FACTURA" : "COMPROBANTE DE VENTA"}</div><div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Factura:</span><span>#${String(sale.numero).padStart(6, '0')}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Fecha/Hora:</span><span>${sale.fecha}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:12px;"><span>Cajero:</span><span>${escapeHtml(sale.vendedor)}</span></div><div style="border-top:1px dashed #000; margin:10px 0;"></div>${prods}<div style="border-top:1px dashed #000; margin:10px 0;"></div>${resumenDescuento}<div style="display:flex; justify-content:space-between; font-weight:bold; font-size:18px; margin-top:5px; border-top:1px solid #000; padding-top:5px;"><span>TOTAL</span><span>${sysConfig.currency}${(sale.total||0).toFixed(2)}</span></div>${pagoH}<div style="border-top:1px dashed #000; margin:10px 0;"></div>${confFooterFinal}${esCopia ? '<div style="text-align: center; color: #333; margin-top: 5px; font-size: 13px;">*** REIMPRESIÓN ***</div>' : ''}</div>`; }
-    document.getElementById("ticketModal")?.classList.remove("hidden"); actualizarTablaClientes();
+    const resumenDescuento = descuentoTicket > 0
+        ? '<div class="invoice-summary-row"><span>Subtotal</span><strong>' + sysConfig.currency + subtotalFinal.toFixed(2) + '</strong></div><div class="invoice-summary-row"><span>Descuento' + (sale.descuentoPct ? ' (' + sale.descuentoPct + '%)' : '') + '</span><strong>-' + sysConfig.currency + descuentoTicket.toFixed(2) + '</strong></div>'
+        : "";
+    const tkCont = document.getElementById("ticketContent");
+    if (tkCont) {
+        tkCont.innerHTML = '<div id="imprimibleTicket" class="invoice-view invoice-view--sale">' +
+            '<header class="invoice-header">' +
+                '<div class="invoice-brand">' + confLogoImg + '<div class="invoice-brand-copy">' + confH3 + '<div class="invoice-business-details">' + confRucInfo + confAddressInfo + confPhoneInfo + '</div>' + confExtraHeader + '</div></div>' +
+                '<div class="invoice-heading">' + statusAnulada + '<span class="invoice-badge invoice-badge--info">' + (esCopia ? "COPIA DE FACTURA" : "COMPROBANTE DE VENTA") + '</span></div>' +
+            '</header>' +
+            '<div class="invoice-card"><div class="invoice-grid">' +
+                '<div class="invoice-field"><span class="invoice-field-label">Factura</span><strong>#' + String(sale.numero).padStart(6, '0') + '</strong></div>' +
+                '<div class="invoice-field"><span class="invoice-field-label">Fecha y hora</span><strong>' + sale.fecha + '</strong></div>' +
+                '<div class="invoice-field"><span class="invoice-field-label">Cajero</span><strong>' + escapeHtml(sale.vendedor) + '</strong></div>' +
+            '</div></div>' +
+            '<section class="invoice-card"><h4 class="invoice-section-title">Detalle de venta</h4><div class="invoice-items">' + prods + '</div></section>' +
+            '<section class="invoice-total-box">' + resumenDescuento +
+                '<div class="invoice-summary-row invoice-total-row"><span>Total</span><strong>' + sysConfig.currency + (sale.total||0).toFixed(2) + '</strong></div>' +
+                '<div class="invoice-payment">' + pagoH + '</div>' +
+            '</section>' +
+            '<div class="invoice-footer">' + confFooterFinal + (esCopia ? '<div class="invoice-note">*** REIMPRESIÓN ***</div>' : '') + '</div>' +
+        '</div>';
+    }
+    document.getElementById("ticketModal")?.classList.remove("hidden");
+    actualizarTablaClientes();
 }
 
 document.querySelectorAll("#closeTicketBtn, #newSaleBtn").forEach(b => {
@@ -1079,11 +1195,24 @@ document.querySelectorAll("#closeTicketBtn, #newSaleBtn").forEach(b => {
     });
 });
 
+function prepararTicketSalida(elemento) {
+    const ticket = elemento.cloneNode(true);
+    ticket.classList.add("invoice-view--ticket-output");
+    const contenedor = document.createElement("div");
+    contenedor.className = "invoice-output-measure";
+    contenedor.appendChild(ticket);
+    document.body.appendChild(contenedor);
+    const altoPx = Math.max(ticket.getBoundingClientRect().height, ticket.scrollHeight);
+    contenedor.remove();
+    const alturaMm = Math.max(1, Math.ceil((altoPx * 25.4) / 96) + 3);
+    return { elemento: ticket, alturaMm };
+}
 document.getElementById("pdfTicketBtn")?.addEventListener("click", () => {
     const el = document.getElementById("imprimibleTicket");
     if (!el) return;
     if (typeof html2pdf === 'undefined') { showAlert("La librería PDF no está cargada."); return; }
-    html2pdf().set({ filename: `ticket_${Date.now()}.pdf`, jsPDF: { unit: 'mm', format: [58, 200] } }).from(el).save();
+    const salida = prepararTicketSalida(el);
+    html2pdf().set({ filename: 'ticket_' + Date.now() + '.pdf', margin: 0, jsPDF: { unit: 'mm', format: [80, salida.alturaMm] } }).from(salida.elemento).save();
 });
 
 window.abrirAnularVenta = function(id) { if (!isAdmin('historyView')) { showAlert("No tiene permisos para anular ventas."); return; } const s = salesHistory.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("anularVentaId").value = s.id; document.getElementById("anularVentaNumero").textContent = '#' + String(s.numero).padStart(6, '0'); document.getElementById("anularVentaMotivo").value = ""; document.getElementById("anularVentaModal").classList.remove("hidden"); };
@@ -1699,7 +1828,7 @@ window.verEstadoCuentaCliente = function(id) {
                 btnHtml = `<button class="btn btn-sm btn-info" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.reimprimirTicket('${mov.saleId}'), 100);">Ver Factura</button> ` +
                           (!mov.anulado && mov.saldoFactura > 0 ? `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoVenta('${mov.saleId}'), 100);">Abonar</button>` : '');
             } 
-            else if (mov.type === 'abono') { btnHtml = mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoCliente('${mov.id}'), 100);">Anular</button>`; }
+            else if (mov.type === 'abono') { btnHtml = `<button class="btn btn-sm btn-info" onclick="window.verComprobanteAbonoLocal('${escapeHtml(mov.id)}', 'cliente')">Ver comprobante</button> ` + (mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoCliente('${mov.id}'), 100);">Anular</button>`); }
             
             const trStyle = mov.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : '';
             return `<tr data-period-date="${window.PosPeriodFilters?.dateKey(mov.ts) || ''}" ${trStyle}><td>${dateHtml}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>`;
@@ -1838,7 +1967,7 @@ window.verEstadoCuentaProveedor = function(id) {
                 btnHtml = `<button class="btn btn-sm btn-info" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.verFacturaCompra('${mov.id}'), 100);">Ver Factura</button> ` +
                           (canPay ? `<button class="btn btn-sm btn-success" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.abrirAbonoFacturaProveedor('${mov.id}'), 100);">Abonar</button>` : '');
             }
-            else if (mov.type === 'abono') { btnHtml = mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoProveedor('${mov.id}'), 100);">Anular</button>`; }
+            else if (mov.type === 'abono') { btnHtml = `<button class="btn btn-sm btn-info" onclick="window.verComprobanteAbonoLocal('${escapeHtml(mov.id)}', 'proveedor')">Ver comprobante</button> ` + (mov.anulado ? `<span style="color:#d32f2f; font-weight:bold; font-size:10px;">ANULADO</span>` : `<button class="btn btn-sm btn-danger" onclick="document.getElementById('statementModal').classList.add('hidden'); setTimeout(() => window.anularAbonoProveedor('${mov.id}'), 100);">Anular</button>`); }
             
             const trStyle = mov.anulado ? 'style="background-color:#fdf5f5; color:#888;"' : '';
             return { canPay, html: `<tr data-period-date="${window.PosPeriodFilters?.dateKey(mov.ts) || ''}" ${trStyle}><td>${mov.date}</td><td><strong>${escapeHtml(mov.ref)}</strong></td><td>${escapeHtml(mov.detail)}</td><td style="color:#d32f2f; font-weight:bold;">${cargoHtml}</td><td style="color:#28a745; font-weight:bold;">${abonoHtml}</td><td style="font-weight:bold; font-size:1.1em;">${sysConfig.currency}${saldo.toFixed(2)}</td><td>${btnHtml}</td></tr>` };
@@ -1876,7 +2005,30 @@ window.anularAbonoProveedor = async function(abonoId) {
     });
 };
 
-window.verFacturaCompra = function(id) { const p = purchasesHistory.find(x => String(x.id) === String(id)); if(!p) return; let prods = p.items && p.items.length > 0 ? p.items.map(i => `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${i.cantidad}x ${escapeHtml(i.producto)}</span><span>${sysConfig.currency}${(i.total||0).toFixed(2)}</span></div>`).join("") : `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:12px;"><span>${p.cantidad || '-'}x ${escapeHtml(p.producto) || 'Varios'}</span><span>${sysConfig.currency}${(p.total||0).toFixed(2)}</span></div>`; const estadoAnulada = p.anulada ? `<div style="text-align:center; color:white; background:#d32f2f; font-weight:bold; padding:5px; margin-bottom:10px;">FACTURA ANULADA${p.motivoAnulacion ? ' - ' + escapeHtml(p.motivoAnulacion) : ''}</div>` : ''; const tkCont = document.getElementById("ticketContent"); if(tkCont) { tkCont.innerHTML = `<div id="imprimibleTicket" style="font-family: monospace; background: #fff; border: 1px dashed #ccc; padding: 25px; width: 100%; max-width: 350px;">${estadoAnulada}<h3 style="text-align:center; margin:0;">COMPROBANTE DE COMPRA</h3><div style="text-align:center; color:#555; font-size:12px; margin-bottom:10px;">PROVEEDOR: ${escapeHtml(p.proveedor)}</div><div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Factura Nº:</span><span>${escapeHtml(p.factura)}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Fecha:</span><span>${p.fecha}</span></div><div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Condición:</span><span>${p.tipo.toUpperCase()}</span></div>${p.tipo === 'credito' ? `<div style="display:flex; justify-content:space-between; margin-bottom:3px; color:#d32f2f;"><span>Vence:</span><span>${p.vencimiento || '-'}</span></div>` : ''}<div style="border-top:1px dashed #000; margin:10px 0;"></div>${prods}<div style="border-top:1px dashed #000; margin:10px 0;"></div><div style="display:flex; justify-content:space-between; font-weight:bold; font-size:18px;"><span>TOTAL</span><span>${sysConfig.currency}${(p.total||0).toFixed(2)}</span></div></div>`; } document.getElementById("ticketModal")?.classList.remove("hidden"); };
+window.verFacturaCompra = function(id) {
+    const p = purchasesHistory.find(x => String(x.id) === String(id));
+    if (!p) return;
+    const prods = p.items && p.items.length > 0
+        ? p.items.map(i => '<div class="invoice-item-row"><span class="invoice-item-description">' + i.cantidad + 'x ' + escapeHtml(i.producto) + '</span><strong class="invoice-item-amount">' + sysConfig.currency + (i.total||0).toFixed(2) + '</strong></div>').join("")
+        : '<div class="invoice-item-row"><span class="invoice-item-description">' + (p.cantidad || '-') + 'x ' + (escapeHtml(p.producto) || 'Varios') + '</span><strong class="invoice-item-amount">' + sysConfig.currency + (p.total||0).toFixed(2) + '</strong></div>';
+    const estadoAnulada = p.anulada ? '<p class="invoice-note invoice-note--danger">FACTURA ANULADA' + (p.motivoAnulacion ? ' - ' + escapeHtml(p.motivoAnulacion) : '') + '</p>' : '';
+    const condicion = p.tipo.toUpperCase();
+    const tkCont = document.getElementById("ticketContent");
+    if (tkCont) {
+        tkCont.innerHTML = '<div id="imprimibleTicket" class="invoice-view invoice-view--purchase">' +
+            '<header class="invoice-header"><div><span class="invoice-eyebrow">Documento del proveedor</span><h3 class="invoice-company-name">COMPROBANTE DE COMPRA</h3><p class="invoice-subtitle">Proveedor: ' + escapeHtml(p.proveedor) + '</p></div><span class="invoice-badge invoice-badge--neutral">' + condicion + '</span></header>' +
+            estadoAnulada +
+            '<div class="invoice-card"><div class="invoice-grid">' +
+                '<div class="invoice-field"><span class="invoice-field-label">Factura del proveedor</span><strong>' + escapeHtml(p.factura) + '</strong></div>' +
+                '<div class="invoice-field"><span class="invoice-field-label">Fecha</span><strong>' + p.fecha + '</strong></div>' +
+                (p.tipo === 'credito' ? '<div class="invoice-field"><span class="invoice-field-label">Vence</span><strong>' + (p.vencimiento || '-') + '</strong></div>' : '') +
+            '</div></div>' +
+            '<section class="invoice-card"><h4 class="invoice-section-title">Detalle de compra</h4><div class="invoice-items">' + prods + '</div></section>' +
+            '<div class="invoice-total-box"><div class="invoice-summary-row invoice-total-row"><span>Total</span><strong>' + sysConfig.currency + (p.total||0).toFixed(2) + '</strong></div></div>' +
+        '</div>';
+    }
+    document.getElementById("ticketModal")?.classList.remove("hidden");
+};
 
 const mostrarFacturaCompraOriginal = window.verFacturaCompra;
 window.verFacturaCompra = function(id) {
@@ -2536,8 +2688,27 @@ function renderReportes() {
 }
 
 window.imprimirTicket = function() {
-    const elementoTicket = document.getElementById("imprimibleTicket"); if (!elementoTicket) return; const contenido = elementoTicket.outerHTML; const ventana = window.open('', '_blank', 'width=400,height=600');
-    ventana.document.write(`<html><head><title>Ticket de Venta</title><style>body { margin: 0; padding: 0; font-family: monospace; color: #000; width: 58mm; background: #fff; } #imprimibleTicket { width: 100%; max-width: 58mm; padding: 0 !important; margin: 0 !important; border: none !important; } @media print { @page { margin: 0; } body { margin: 0; padding: 0; } }</style></head><body onload="setTimeout(() => { window.print(); window.close(); }, 250);">${contenido}</body></html>`); ventana.document.close();
+    const elementoTicket = document.getElementById("imprimibleTicket"); if (!elementoTicket) return; const salida = prepararTicketSalida(elementoTicket); const contenido = salida.elemento.outerHTML; const ventana = window.open('', '_blank', 'width=400,height=600');
+    ventana.document.write(`<html><head><title>Ticket de Venta</title><style id="ticketPageSize">@page { size: 80mm auto; margin: 0; }</style><style>body { margin: 0; padding: 0; font-family: monospace; color: #000; width: 80mm; background: #fff; } #imprimibleTicket { width: 100%; max-width: 80mm; padding: 2mm !important; margin: 0 !important; border: none !important; } @media print { body { margin: 0; padding: 0; } }.invoice-view { box-sizing:border-box; width:100%; max-width:80mm; margin:0 auto; padding:2mm; color:#172033; background:#fff; border:0; font:10px/1.4 Arial,sans-serif; }
+.invoice-header,.invoice-brand,.invoice-heading,.invoice-grid,.invoice-item-row,.invoice-summary-row,.invoice-total-row { display:flex; justify-content:space-between; gap:6px; }
+.invoice-header { align-items:flex-start; padding-bottom:6px; border-bottom:1px solid #dbe3ed; }
+.invoice-brand { justify-content:flex-start; align-items:center; }.invoice-logo { display:block; flex:0 0 auto; width:auto; max-width:72px; max-height:56px; object-fit:contain; }
+.invoice-heading { flex-direction:column; align-items:flex-end; }
+.invoice-card,.invoice-total-box { margin-top:6px; padding:6px; border:1px solid #dbe3ed; border-radius:4px; background:#fff; }
+.invoice-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,32mm),1fr)); gap:5px 6px; }
+.invoice-field { display:grid; flex:1 1 40%; gap:2px; }
+.invoice-field > strong { font-size:9px; overflow-wrap:break-word; word-break:normal; }
+.invoice-payment-method { color:#334155; font-weight:600; }
+.invoice-payment-received { color:#475569; }
+.invoice-payment-change,.invoice-payment > .invoice-summary-row { display:flex; align-items:baseline; justify-content:space-between; gap:6px; }
+.invoice-field-label,.invoice-eyebrow,.invoice-item-description small { color:#64748b; font-size:8px; }
+.invoice-items > div { display:flex; justify-content:space-between; gap:6px; padding:4px 0; border-bottom:1px solid #e3e8ef; font-size:9px; }
+.invoice-badge { display:inline-block; padding:3px 6px; border:1px solid #bfdbfe; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:8px; }
+.invoice-note { margin-top:5px; padding:5px; border:1px solid #dbeafe; border-radius:3px; background:#f8fafc; color:#475569; }
+.invoice-total-box { background:#eff6ff; border-color:#bfdbfe; }.invoice-total-box > div { display:flex; justify-content:space-between; gap:6px; padding:3px 0; font-size:9px; }
+.invoice-total-row { padding-top:5px; border-top:1px solid #bfdbfe; font-weight:700; }
+.invoice-total-row strong { color:#1d4ed8; font-size:13px; }
+.invoice-footer { margin-top:6px; color:#64748b; text-align:center; }</style></head><body onload="setTimeout(() => { const ticket = document.getElementById('imprimibleTicket'); const pageSize = document.getElementById('ticketPageSize'); if (ticket && pageSize) { const heightMm = Math.max(1, Math.ceil((Math.max(ticket.getBoundingClientRect().height, ticket.scrollHeight) * 25.4) / 96) + 3); pageSize.textContent = '@page { size: 80mm ' + heightMm + 'mm; margin: 0; }'; } window.print(); window.close(); }, 250);">${contenido}</body></html>`); ventana.document.close();
 };
 
 window.exportarTablaCSV = function(containerId, nombreArchivo) {
