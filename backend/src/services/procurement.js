@@ -164,7 +164,31 @@ function createProcurementService({ repo, auth, config }) {
     const purchases = await repo.rows(db, purchaseSelect + ' WHERE p.business_id=? AND p.supplier_id=? ORDER BY p.created_at,p.id LIMIT ? OFFSET ?', [current.business_id, id, options.limit, options.offset]);
     const payments = await repo.rows(db, 'SELECT sp.id,sp.purchase_id,sp.amount,sp.payment_method,sp.status,sp.created_at,p.id AS purchase_id_ref,p.invoice_number FROM supplier_payments sp LEFT JOIN purchases p ON p.business_id=sp.business_id AND p.id=sp.purchase_id WHERE sp.business_id=? AND sp.supplier_id=? ORDER BY sp.created_at,sp.id LIMIT ? OFFSET ?', [current.business_id, id, options.limit, options.offset]);
     const ledger = [
-      ...purchases.map(row => ({ date: row.created_at, kind: 'PURCHASE', reference: purchaseReference(row), supplierInvoiceNumber: supplierInvoiceNumber(row) || null, description: row.status === 'CANCELLED' ? 'Factura de compra anulada' : row.purchase_type === 'CREDIT' ? 'Factura de compra a crédito' : 'Factura de compra al contado', charge: row.status === 'CANCELLED' ? '0.00' : row.total, paid: '0.00', status: row.status, purchaseId: String(row.id) })),
+      ...purchases.map(row => {
+        const total = units(row.total || '0.00');
+        const paidConfirmed = units(row.paid || '0.00');
+        const pendingPayments = units(row.pending || '0.00');
+        const balance = total > paidConfirmed ? total - paidConfirmed : 0n;
+        const availableBalance = balance > pendingPayments ? balance - pendingPayments : 0n;
+        return {
+          date: row.created_at,
+          kind: 'PURCHASE',
+          reference: purchaseReference(row),
+          supplierInvoiceNumber: supplierInvoiceNumber(row) || null,
+          description: row.status === 'CANCELLED' ? 'Factura de compra anulada' : row.purchase_type === 'CREDIT' ? 'Factura de compra a crédito' : 'Factura de compra al contado',
+          charge: row.status === 'CANCELLED' ? '0.00' : row.total,
+          paid: '0.00',
+          status: row.status,
+          purchaseId: String(row.id),
+          purchaseType: row.purchase_type,
+          total: fixed(total, 2),
+          paidConfirmed: fixed(paidConfirmed, 2),
+          pendingPayments: fixed(pendingPayments, 2),
+          balance: fixed(balance, 2),
+          availableBalance: fixed(availableBalance, 2),
+          canPay: row.purchase_type === 'CREDIT' && row.status !== 'CANCELLED' && balance > 0n && availableBalance > 0n
+        };
+      }),
       ...payments.map(row => {
         const supplierInvoice = row.purchase_id_ref === null ? '' : supplierInvoiceNumber({ id: row.purchase_id_ref, invoice_number: row.invoice_number });
         return { date: row.created_at, kind: 'PAYMENT', reference: row.purchase_id_ref === null ? 'Pago a proveedor' : 'Pago ' + purchaseNumber(row.purchase_id_ref) + (supplierInvoice ? ' · Factura proveedor ' + supplierInvoice : ''), supplierInvoiceNumber: supplierInvoice || null, description: row.payment_method, charge: '0.00', paid: row.status === 'POSTED' ? row.amount : '0.00', pending: row.status === 'PENDING' ? row.amount : '0.00', status: row.status, purchaseId: row.purchase_id === null ? null : String(row.purchase_id) };
@@ -173,7 +197,7 @@ function createProcurementService({ repo, auth, config }) {
     let balance = 0n;
     for (const entry of ledger) {
       balance += units(entry.charge) - units(entry.paid);
-      entry.balance = fixed(balance, 2);
+      entry.runningBalance = fixed(balance, 2);
     }
     return { supplier: publicSupplier(supplier), entries: ledger };
   });

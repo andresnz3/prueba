@@ -305,7 +305,18 @@
     async createPurchaseSupplier(data) { const value = await this.#write('/purchases/suppliers', 'POST', data); if (value?.supplier?.businessId !== this.#identity?.businessId) throw new ApiError('INVALID_RESPONSE'); return value.supplier; }
     async updateSupplier(id, data) { const value = await this.#write('/suppliers/' + encodeURIComponent(id), 'PATCH', data); if (value?.supplier?.businessId !== this.#identity?.businessId || value.supplier.id !== String(id)) throw new ApiError('INVALID_RESPONSE'); return value.supplier; }
     async setSupplierActive(id, active) { const value = await this.#write('/suppliers/' + encodeURIComponent(id) + '/active', 'PATCH', { active }); if (value?.businessId !== this.#identity?.businessId || value.id !== String(id) || value.active !== active) throw new ApiError('INVALID_RESPONSE'); return value; }
-    async supplierStatement(id) { const value = await this.#request('/suppliers/' + encodeURIComponent(id) + '/statement?limit=100&offset=0'); if (value?.supplier?.businessId !== this.#identity?.businessId || !Array.isArray(value.entries)) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async supplierStatement(id) {
+      const value = await this.#request('/suppliers/' + encodeURIComponent(id) + '/statement?limit=100&offset=0');
+      const moneyValue = candidate => typeof candidate === 'string' && /^\d+\.\d{2}$/.test(candidate);
+      const runningBalanceValue = candidate => typeof candidate === 'string' && /^-?\d+\.\d{2}$/.test(candidate);
+      if (value?.supplier?.businessId !== this.#identity?.businessId || !Array.isArray(value.entries) || value.entries.some(entry => {
+        if (!entry || !runningBalanceValue(entry.runningBalance)) return true;
+        if (entry.kind !== 'PURCHASE') return entry.kind !== 'PAYMENT';
+        return typeof entry.purchaseId !== 'string' || !['CREDIT', 'CASH'].includes(entry.purchaseType) || typeof entry.status !== 'string' ||
+          !['total', 'paidConfirmed', 'pendingPayments', 'balance', 'availableBalance'].every(key => moneyValue(entry[key])) || typeof entry.canPay !== 'boolean';
+      })) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
     async purchaseProducts(offset = 0, q = '') {
       const value = await this.#request('/purchases/products?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : ''));
       if (!Array.isArray(value?.products) || value.products.length > 100) throw new ApiError('INVALID_RESPONSE');

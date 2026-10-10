@@ -155,6 +155,44 @@ test('Integración MySQL fase 5.6: proveedores, compras conectadas y CxP', async
   assert.ok(reportsWithInternalNumber.data.report.purchases.history.some(row => row.purchaseNumber === noInvoicePurchase.purchaseNumber && row.supplierInvoiceNumber === ''));
   assert.ok(reportsWithInternalNumber.data.report.payables.invoices.some(row => row.purchaseNumber === noInvoicePurchase.purchaseNumber && row.supplierInvoiceNumber === ''));
 
+  const [adminAccount] = await rows(pool, 'SELECT id FROM users WHERE business_id=? AND username=?', [business, 'procurementadmin']);
+  const createCreditPurchase = async (invoiceNumber, total) => {
+    const response = await admin.request('/purchases', 'POST', purchaseData({
+      invoiceNumber,
+      purchaseType: 'CREDIT',
+      paymentMethod: undefined,
+      dueDays: 30,
+      items: [{ productId: product.id, quantity: '1.000', unitCost: total }]
+    }));
+    assert.equal(response.status, 201, JSON.stringify(response.data));
+    return response.data.purchase;
+  };
+  const seedPostedPayments = async (purchaseId, amount, count = 1) => {
+    const valuesSql = Array(count).fill('(?,?,?,?,NULL,?,?,?,UTC_TIMESTAMP(3))').join(',');
+    const values = Array.from({ length: count }, () => [business, adminAccount.id, supplier.id, purchaseId, amount, 'OTHER', 'POSTED']).flat();
+    await rows(pool, 'INSERT INTO supplier_payments (business_id,user_id,supplier_id,purchase_id,cash_session_id,amount,payment_method,status,created_at) VALUES ' + valuesSql, values);
+  };
+  const paymentPagePurchase = await createCreditPurchase('STATEMENT-PAGE-FILLER', '1.00');
+  await seedPostedPayments(paymentPagePurchase.id, '0.01', 100);
+  const paidOffPage = await createCreditPurchase('STATEMENT-PAID-OFF-PAGE', '1.00');
+  const paidOffPagePayment = await admin.request('/payables/' + paidOffPage.id + '/payments', 'POST', { operationKey: randomUUID(), amount: '1.00', paymentMethod: 'CASH' });
+  assert.equal(paidOffPagePayment.status, 201, JSON.stringify(paidOffPagePayment.data));
+
+  const authoritativeStatement = await admin.request('/suppliers/' + supplier.id + '/statement?limit=100&offset=0');
+  assert.equal(authoritativeStatement.status, 200, JSON.stringify(authoritativeStatement.data));
+  const statementEntries = authoritativeStatement.data.entries;
+  const purchaseEntry = purchaseId => statementEntries.find(row => row.kind === 'PURCHASE' && row.purchaseId === purchaseId);
+  const paidEntry = purchaseEntry(paidOffPage.id);
+  assert.equal(statementEntries.some(row => row.kind === 'PAYMENT' && row.purchaseId === paidOffPage.id), false, 'el pago confirmado queda fuera de las primeras 100 filas visibles');
+  assert.deepEqual({
+    total: paidEntry.total,
+    paidConfirmed: paidEntry.paidConfirmed,
+    pendingPayments: paidEntry.pendingPayments,
+    balance: paidEntry.balance,
+    availableBalance: paidEntry.availableBalance,
+    canPay: paidEntry.canPay
+  }, { total: '1.00', paidConfirmed: '1.00', pendingPayments: '0.00', balance: '0.00', availableBalance: '0.00', canPay: false });
+
   const [audit] = await rows(pool, "SELECT COUNT(*) AS count FROM audit_logs a JOIN users u ON u.business_id=a.business_id AND u.id=a.user_id WHERE a.business_id=? AND u.username='procurementadmin' AND a.action IN ('CREATE_PURCHASE','CANCEL_PURCHASE','POST_SUPPLIER_PAYMENT','CREATE_SUPPLIER')", [business]);
   assert.ok(Number(audit.count) >= 7, 'compras, proveedores y pagos a proveedores registran auditoría');
 });

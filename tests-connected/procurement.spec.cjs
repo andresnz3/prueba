@@ -170,3 +170,56 @@ test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', as
   const [noInvoiceDashboardDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#dashboardView button[onclick="window.generarExcelDashboard()"]:visible').click()]);
   expect(JSON.stringify((await downloadedWorkbook(noInvoiceDashboardDownload)).Sheets)).toContain(noInvoiceNumber);
 });
+
+test('Estado de cuenta conectado usa canPay del backend aunque el pago no esté en las filas visibles', async ({ page }) => {
+  await login(page);
+  const now = new Date().toISOString();
+  const purchase = ({ id, reference, total, paidConfirmed, pendingPayments, balance, availableBalance, canPay }) => ({
+    date: now,
+    kind: 'PURCHASE',
+    reference,
+    description: 'Factura de compra a crédito',
+    charge: total,
+    paid: '0.00',
+    status: 'COMPLETED',
+    purchaseId: id,
+    purchaseType: 'CREDIT',
+    total,
+    paidConfirmed,
+    pendingPayments,
+    balance,
+    availableBalance,
+    canPay,
+    runningBalance: balance
+  });
+  const paymentRows = Array.from({ length: 100 }, (_, index) => ({
+    date: now,
+    kind: 'PAYMENT',
+    reference: 'PAGO-VISIBLE-' + index,
+    description: 'CASH',
+    charge: '0.00',
+    paid: '0.01',
+    status: 'POSTED',
+    purchaseId: 'other-' + index,
+    runningBalance: '0.00'
+  }));
+  const statement = {
+    supplier: { id: '987654', businessId: business, name: 'Proveedor de prueba', debt: '0.00', purchaseCount: 3 },
+    entries: [
+      purchase({ id: '9001', reference: 'COMP-PAID-OFF-PAGE', total: '1.00', paidConfirmed: '1.00', pendingPayments: '0.00', balance: '0.00', availableBalance: '0.00', canPay: false }),
+      ...paymentRows,
+      purchase({ id: '9002', reference: 'COMP-PENDING-COVERED', total: '5.00', paidConfirmed: '0.00', pendingPayments: '5.00', balance: '5.00', availableBalance: '0.00', canPay: false }),
+      purchase({ id: '9003', reference: 'COMP-PENDING-PARTIAL', total: '4.00', paidConfirmed: '0.00', pendingPayments: '1.00', balance: '4.00', availableBalance: '3.00', canPay: true })
+    ]
+  };
+  await page.route('**/suppliers/987654/statement*', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(statement) }));
+  await page.evaluate(() => window.PosPurchases.supplierStatement('987654'));
+  await expect(page.locator('#statementModal')).toBeVisible();
+
+  const rows = page.locator('#statementTableBody tr');
+  await expect(rows.first().locator('td').nth(1)).toHaveText('COMP-PENDING-PARTIAL');
+  await expect(page.locator('#statementTableBody [data-purchase-id="9001"][data-statement-action="pay"]')).toHaveCount(0);
+  await expect(page.locator('#statementTableBody [data-purchase-id="9002"][data-statement-action="pay"]')).toHaveCount(0);
+  await expect(page.locator('#statementTableBody [data-purchase-id="9003"][data-statement-action="pay"]')).toHaveCount(1);
+  await expect(page.locator('#statementTableBody [data-statement-action="pay"]')).toHaveCount(1);
+});
