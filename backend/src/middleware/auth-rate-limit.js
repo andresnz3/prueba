@@ -18,7 +18,7 @@ function createAuthRateLimit({ rateMax, rateWindowSeconds }, now = Date.now) {
   return (req, res, next) => {
     try {
       consume('ip:' + hashToken(req.ip || 'unknown'), rateMax * 5);
-      const identity = req.auth ? req.auth.business_id + ':' + req.auth.user_id : String(req.body?.businessId).slice(0, 20) + ':' + String(req.body?.username).slice(0, 100).toLowerCase();
+      const identity = req.auth ? req.auth.business_id + ':' + req.auth.user_id : String(req.body?.username || '').slice(0, 100).toLowerCase();
       consume('identity:' + hashToken(identity), rateMax);
       next();
     } catch (error) { res.set('Retry-After', String(error.retryAfter || rateWindowSeconds)); next(error); }

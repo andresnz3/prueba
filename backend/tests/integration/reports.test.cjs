@@ -27,9 +27,9 @@ function client(base) {
     if (data?.csrfToken) csrf = data.csrfToken;
     return { status: response.status, data };
   }
-  async function login(businessId, username, password) {
+  async function login(_businessId, username, password) {
     await request('/auth/csrf');
-    assert.equal((await request('/auth/login', 'POST', { businessId, username, password })).status, 200);
+    assert.equal((await request('/auth/login', 'POST', { username, password })).status, 200);
   }
   return { request, login };
 }

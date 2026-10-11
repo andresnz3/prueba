@@ -22,7 +22,7 @@ function client(base) {
     const data = response.status === 204 ? undefined : await response.json(); if (data?.csrfToken) csrf = data.csrfToken;
     return { status: response.status, data };
   }
-  async function login(businessId, username, password) { await request('/auth/csrf'); assert.equal((await request('/auth/login', 'POST', { businessId, username, password })).status, 200); }
+  async function login(_businessId, username, password) { await request('/auth/csrf'); assert.equal((await request('/auth/login', 'POST', { username, password })).status, 200); }
   return { request, login };
 }
 

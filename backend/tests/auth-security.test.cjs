@@ -43,7 +43,7 @@ test('validacion ids grandes, contrasenas y campos desconocidos', () => {
 test('rate limit cuenta intentos concurrentes y vence ventana', () => {
   let now = 0; const errors = [];
   const middleware = createAuthRateLimit({ rateMax: 3, rateWindowSeconds: 60 }, () => now);
-  const req = { ip: '127.0.0.1', body: { businessId: '1', username: 'owner' } }, res = { set() {} };
+  const req = { ip: '127.0.0.1', body: { username: 'owner' } }, res = { set() {} };
   for (let i = 0; i < 4; i++) middleware(req, res, e => errors.push(e));
   assert.equal(errors[3].publicStatus, 429);
   now = 60001; middleware(req, res, e => assert.equal(e, undefined));

@@ -9,8 +9,6 @@
     location.assign(url.href);
   });
   if (!connectedMode) return;
-  el('businessLoginGroup').classList.remove('hidden');
-  el('loginBusinessId').disabled = false; el('loginBusinessId').required = true;
   el('adminUsernameGroup').classList.remove('hidden'); el('grantAdminUsername').disabled = false; el('grantAdminUsername').required = true;
   el('modeDescription').textContent = 'Acceso verificado. Este modo necesita conexión a internet.';
   const api = new window.PosApiClient(window.POS_API_BASE_URL);
@@ -28,7 +26,7 @@
     document.querySelectorAll('.modal, .view-panel').forEach(node => node.classList.add('hidden'));
     el('app').classList.add('hidden'); el('app').inert = false; el('loginScreen').classList.remove('hidden');
     el('navUsersBtn').classList.add('hidden'); el('renewSessionBtn').classList.add('hidden');
-    el('loginBusinessId').disabled = false; el('authMode').disabled = false;
+    el('authMode').disabled = false;
     detenerCamaraVentas(); if (localDB) localDB.close();
     window.PosRuntime.clearCart(); window.PosRuntime.setProducts([]); window.PosInventory.closePanels();
     message('loginError', text);
@@ -57,10 +55,9 @@
     el('sellerName').textContent = identity.fullName;
     document.querySelector('.seller-info span').textContent = 'Sesión conectada';
     el('roleBadge').textContent = identity.role === 'ADMIN' ? 'Administrador' : 'Usuario';
-    el('businessContext').textContent = 'Conectado · Negocio ' + identity.businessId;
+    el('businessContext').textContent = 'Conectado · ' + (identity.businessName || 'Negocio ' + identity.businessId);
     el('businessContext').classList.remove('hidden');
     el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN'); el('renewSessionBtn').classList.remove('hidden');
-    el('loginBusinessId').value = identity.businessId; el('loginBusinessId').disabled = true;
     el('loginError').classList.add('hidden');
     grant = null; await api.enter('sales'); assertGeneration(version); await window.PosInventory.load('salesView'); assertGeneration(version); activeView = 'salesView'; await window.PosSales.load(activeView); assertGeneration(version); renderPosView(activeView); actualizarCatalogo();
     el('loginScreen').classList.add('hidden'); el('app').classList.remove('hidden');
@@ -107,7 +104,7 @@
     if (busy) return; if (!window.PosValidation.validate(el('loginForm'))) return; busy = true; const button = el('loginForm').querySelector('button[type=submit]'); button.disabled = true;
     try {
       // Si una cookie valida permanecio tras una interrupcion, restaurar solo la misma identidad.
-      const value = await api.login(el('loginBusinessId').value.trim(), el('loginUsername').value.trim(), el('loginPassword').value);
+      const value = await api.login(el('loginUsername').value.trim(), el('loginPassword').value);
       clearPasswords(); await establish(value);
     } catch (failure) { if (identity) expire(failure.message); else error(failure, 'loginError'); }
     finally { clearPasswords(); button.disabled = false; busy = false; }

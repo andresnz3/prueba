@@ -7,7 +7,7 @@ test.beforeEach(async ({page,context})=>{await context.addInitScript({path:requi
 test.afterEach(async ({page})=>{expect(errors.get(page)).toEqual([]);});
 async function login(page,username='browseradmin') {
   await page.goto('/?mode=connected');await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
-  await page.locator('#loginBusinessId').fill(business);await page.locator('#loginUsername').fill(username);await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button[type=submit]').click();await expect(page.locator('#app')).toBeVisible();await expect(page.locator('#app')).toHaveJSProperty('inert',false);
+  await page.locator('#loginUsername').fill(username);await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button[type=submit]').click();await expect(page.locator('#app')).toBeVisible();await expect(page.locator('#app')).toHaveJSProperty('inert',false);
 }
 async function call(page,method,...args) {
   return page.evaluate(async({method,args})=>{const client=new window.PosApiClient(window.POS_API_BASE_URL);await client.me();return client[method](...args);},{method,args});
@@ -24,10 +24,10 @@ async function add(page,product) {await page.locator('#barcodeInput').fill(produ
 async function checkout(page) {await page.locator('#processSaleBtn').click();await expect(page.locator('#connectedCheckoutModal')).toBeVisible();}
 async function confirm(page,value='100') {await page.locator('#connectedCashReceived').fill(value);await page.locator('#confirmConnectedSaleBtn').click();}
 async function closeAlert(page) {await expect(page.locator('#customAlertModal')).toBeVisible();await page.locator('#customAlertModal .close-modal-btn').click();}
-test('login: campos vacios e identificador invalido tienen errores junto al campo y foco',async({page})=>{
+test('login: usuario y contraseña vacios tienen errores junto al campo y foco',async({page})=>{
   await page.goto('/?mode=connected');await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();await page.locator('#loginForm button[type=submit]').click();
-  await expect(page.locator('#loginBusinessIdFieldError')).toHaveText('Ingresa el identificador de tu negocio');await expect(page.locator('#loginUsernameFieldError')).toHaveText('Ingresa tu nombre de usuario');await expect(page.locator('#loginPasswordFieldError')).toHaveText('Ingresa tu contraseña');await expect(page.locator('#loginBusinessId')).toBeFocused();
-  await page.locator('#loginBusinessId').fill('0');await page.locator('#loginUsername').fill('usuario');await page.locator('#loginPassword').fill('conservar');await page.locator('#loginForm button[type=submit]').click();await expect(page.locator('#loginBusinessIdFieldError')).toHaveText('El identificador del negocio no es válido');await expect(page.locator('#loginPassword')).toHaveValue('conservar');
+  await expect(page.locator('#loginUsernameFieldError')).toHaveText('Ingresa tu nombre de usuario');await expect(page.locator('#loginPasswordFieldError')).toHaveText('Ingresa tu contraseña');await expect(page.locator('#loginUsername')).toBeFocused();
+  await page.locator('#loginUsername').fill('usuario');await page.locator('#loginPassword').fill('conservar');await expect(page.locator('#loginBusinessId')).toHaveCount(0);
 });
 test('productos: validacion específica conserva campos y enfoca el primer error',async({page})=>{
   await login(page);await page.locator('#navInventoryBtn').click();await page.locator('#addNewProductBtn').click();await page.locator('#prodBarcode').fill('VALID-'+randomUUID());await page.locator('#prodCost').fill('-1');await page.locator('#prodStock').fill('-2');await page.locator('#productForm button[type=submit]').click();

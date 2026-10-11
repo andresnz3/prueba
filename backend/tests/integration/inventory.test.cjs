@@ -22,7 +22,7 @@ function client(base) {
     if (data?.csrfToken) csrf = data.csrfToken;
     return { status: response.status, data, headers: response.headers };
   }
-  async function login(businessId, username) { await request('/auth/csrf'); assert.equal((await request('/auth/login', 'POST', { businessId, username, password })).status, 200); }
+  async function login(_businessId, username) { await request('/auth/csrf'); assert.equal((await request('/auth/login', 'POST', { username, password })).status, 200); }
   return { request, login };
 }
 const input = overrides => ({ barcode: 'INV-1', name: 'Producto API', category: 'Bebidas', cost: '10.50', marginRetail: '17.1234', marginWholesale: '8.0000', retailPrice: '12.31', wholesalePrice: '11.34', stock: '10.125', minStock: '2.001', taxRate: '1.5000', image: null, active: true, ...overrides });
@@ -32,7 +32,7 @@ test('Integracion MySQL productos e inventario', async t => {
   const business = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Inventory A'])).insertId);
   const businessB = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Inventory B'])).insertId);
   const hash = await hashPassword(password);
-  for (const [tenant, username, role] of [[business, 'invadmin', 'ADMIN'], [business, 'invseller', 'VENDEDOR'], [businessB, 'invadmin', 'ADMIN']]) await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [tenant, username, username, hash, role]);
+  for (const [tenant, username, role] of [[business, 'invadmin', 'ADMIN'], [business, 'invseller', 'VENDEDOR'], [businessB, 'invadmin_b', 'ADMIN']]) await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [tenant, username, username, hash, role]);
   const repo = createAuthRepository(pool, authConfig), auth = createAuthService(repo, authConfig);
   let productLockRequested;
   const originalRows = repo.rows;
@@ -41,7 +41,7 @@ test('Integracion MySQL productos e inventario', async t => {
   await new Promise(resolve => server.once('listening', resolve)); t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
   const base = 'http://127.0.0.1:' + server.address().port;
   const admin = client(base), other = client(base), seller = client(base), anon = client(base);
-  await admin.login(business, 'invadmin'); await other.login(businessB, 'invadmin'); await seller.login(business, 'invseller');
+  await admin.login(business, 'invadmin'); await other.login(businessB, 'invadmin_b'); await seller.login(business, 'invseller');
   let product;
   const fresh = async () => (await admin.request('/products/' + product.id)).data.product;
   const ledger = async () => rows(pool, 'SELECT * FROM inventory_movements WHERE business_id = ? AND product_id = ? ORDER BY id', [business, product.id]);

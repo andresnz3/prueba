@@ -17,7 +17,7 @@ Se mantuvo ese comportamiento en modalidad local. La conectada usa api-client.js
 ## Dos modalidades
 
 - Local: URL sin mode=connected. Mismos usuarios locales, Dexie POS_OfflineDB, configuracion posSystemConfig y flujos operativos existentes. No realiza llamadas de autenticacion ni usuarios a la API. Los 122 tests anteriores permanecen sin cambios.
-- Conectada: URL con ?mode=connected o selector Modalidad en el login. Identidad y permisos provienen exclusivamente del backend. businessId se solicita antes del login; despues se fija al valor de la sesion. Al recargar se consulta /auth/me, sin almacenar una sesion en JS persistente. Cerrar sesion revoca la cookie en el servidor y recarga. Renovar sesion es explicito y regresa a Ventas porque el backend revoca concesiones.
+- Conectada: URL con ?mode=connected o selector Modalidad en el login. Identidad y permisos provienen exclusivamente del backend. Se solicitan usuario y contrasena; el backend resuelve businessId desde la cuenta y se fija al valor de la sesion. Al recargar se consulta /auth/me, sin almacenar una sesion en JS persistente. Cerrar sesion revoca la cookie en el servidor y recarga. Renovar sesion es explicito y regresa a Ventas porque el backend revoca concesiones.
 
 La navegacion conectada verifica la identidad con /auth/me y el acceso con /auth/modules/:module/enter. Antes de salir de un permiso temporal solicita DELETE /auth/authorizations/:module. Solo se concede un modulo y la gestion de usuarios siempre usa los endpoints ADMIN. Cambiar el currentUser local, mostrar botones ocultos o manipular roles de la interfaz no cambia la identidad o autoridad de la API. Las contrasenas se limpian de los formularios; cookies HttpOnly son gestionadas por el navegador; CSRF vive solo en el cliente API en memoria.
 
@@ -35,7 +35,7 @@ Ventas, compras, productos, inventario, caja, clientes y proveedores siguen guar
 2. Verificar CORS_ORIGINS=http://127.0.0.1:5500 (puede contener otros origenes exactos separados por comas). Reiniciar el backend si cambia .env.
 3. Desde la raiz: npm.cmd run dev --prefix backend. El API queda en http://127.0.0.1:3000/api.
 4. En otra terminal de la raiz: node scripts/build-static.cjs y luego npx.cmd http-server dist -a 127.0.0.1 -p 5500 -c-1. Si se cambia el frontend, regenerar dist. Esta carpeta contiene solo los archivos publicos.
-5. Abrir http://127.0.0.1:5500/, seleccionar Modo conectado e ingresar identificador del negocio, usuario MySQL y contrasena. Tambien puede abrirse http://127.0.0.1:5500/?mode=connected.
+5. Abrir http://127.0.0.1:5500/, seleccionar Modo conectado e ingresar usuario y contrasena MySQL; el backend resuelve el negocio desde la cuenta. Tambien puede abrirse http://127.0.0.1:5500/?mode=connected.
 6. ADMIN ve Usuarios: crear VENDEDOR por defecto, listar por paginas de 100, cambiar contrasenas, activar/desactivar y asignar ADMIN/VENDEDOR. Cambiar la propia contrasena/rol/estado revoca la sesion y obliga a autenticar otra vez. Los errores del ultimo administrador se muestran sin ignorar el rechazo del servidor.
 7. VENDEDOR entra directamente a Ventas. Para otro modulo debe escribir usuario y contrasena de un administrador activo del mismo negocio. Al volver a Ventas/cambiar modulo se revoca la concesion anterior. No aparece Usuarios y una concesion no lo habilita.
 

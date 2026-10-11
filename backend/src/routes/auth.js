@@ -29,8 +29,8 @@ function authRoutes({ repo, auth, users, config }) {
     res.json({ csrfToken });
   });
   router.post('/auth/login', m.loginProtection, rate, async (req, res) => {
-    const data = v.body(req.body, ['businessId', 'username', 'password']);
-    const input = { businessId: v.id(data.businessId), username: v.username(data.username), password: v.password(data.password) };
+    const data = v.body(req.body, ['username', 'password']);
+    const input = { username: v.username(data.username), password: v.password(data.password) };
     const result = await auth.login(input, { ip: req.ip.slice(0, 45), agent: (req.get('User-Agent') || '').slice(0, 512) });
     res.json(setSession(res, result));
   });

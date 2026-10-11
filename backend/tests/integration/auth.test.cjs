@@ -34,9 +34,9 @@ function client(base) {
     if (data?.csrfToken) csrf = data.csrfToken;
     return { status: response.status, data, headers: response.headers };
   }
-  async function login(businessId, username = 'owner', password = adminPassword) {
+  async function login(_businessId, username = 'owner', password = adminPassword) {
     assert.equal((await request('/auth/csrf')).status, 200);
-    return request('/auth/login', 'POST', { businessId, username, password });
+    return request('/auth/login', 'POST', { username, password });
   }
   return { request, login, jar, get csrf() { return csrf; } };
 }
@@ -60,33 +60,42 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
     assert.equal((await rows(pool, 'SELECT id FROM businesses', [])).length, 1);
   });
   const businessB = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Synthetic B'])).insertId);
-  const userB = String((await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessB, 'owner', 'Admin B', await hashPassword('Other-business-password-123!'), 'ADMIN'])).insertId);
+  const userB = String((await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessB, 'owner_b', 'Admin B', await hashPassword('Other-business-password-123!'), 'ADMIN'])).insertId);
   const base = await serve();
   const admin = client(base), other = client(base);
   let sellerId;
   await t.test('login correcto con cookie HttpOnly y hash en DB, sin token en JSON', async () => {
     const result = await admin.login(businessA);
     assert.equal(result.status, 200); assert.equal(result.data.user.role, 'ADMIN');
+    assert.equal(result.data.user.businessId, businessA); assert.equal(result.data.user.businessName, 'Synthetic A'); assert.equal(result.data.user.businessStatus, 'ACTIVE');
     assert.equal(result.data.token, undefined); assert.equal(result.data.user.password_hash, undefined);
     assert.match(result.headers.get('set-cookie'), /HttpOnly/); assert.match(result.headers.get('set-cookie'), /SameSite=Lax/);
     const [stored] = await rows(pool, 'SELECT token_hash FROM sessions WHERE business_id = ? AND user_id = ?', [businessA, rootId]);
     assert.equal(stored.token_hash, hashToken(admin.jar.get('pos_session')));
     assert.notEqual(stored.token_hash, admin.jar.get('pos_session'));
   });
-  await t.test('login incorrecto y desconocido son indistinguibles', async () => {
+  await t.test('login distingue usuario inexistente, contraseña incorrecta y usernames ambiguos', async () => {
     const bad = await client(base).login(businessA, 'owner', 'wrong-password');
     const missing = await client(base).login(businessA, 'missing', 'wrong-password');
-    const tenant = await client(base).login('999999', 'owner', 'wrong-password');
-    assert.equal(bad.status, 401); assert.deepEqual(bad.data, missing.data); assert.deepEqual(bad.data, tenant.data);
+    assert.equal(bad.status, 401); assert.equal(bad.data.error.code, 'INVALID_CREDENTIALS');
+    assert.equal(missing.status, 401); assert.equal(missing.data.error.code, 'USER_NOT_FOUND');
+    await rows(pool, 'UPDATE users SET username = ? WHERE business_id = ? AND id = ?', ['owner', businessB, userB]);
+    const ambiguousBad = await client(base).login(businessA, 'owner', 'wrong-password');
+    assert.equal(ambiguousBad.status, 401); assert.equal(ambiguousBad.data.error.code, 'INVALID_CREDENTIALS');
+    const ambiguous = await client(base).login(businessA, 'owner', adminPassword);
+    assert.equal(ambiguous.status, 409); assert.equal(ambiguous.data.error.code, 'USERNAME_AMBIGUOUS');
+    await rows(pool, 'UPDATE users SET username = ? WHERE business_id = ? AND id = ?', ['owner_b', businessB, userB]);
   });
   await t.test('login CSRF obligatorio y solicitudes simples rechazadas', async () => {
     assert.equal((await client(base).request('/auth/login', 'POST', { businessId: businessA, username: 'owner', password: adminPassword })).status, 403);
+    const legacy = client(base); await legacy.request('/auth/csrf');
+    assert.equal((await legacy.request('/auth/login', 'POST', { businessId: businessA, username: 'owner', password: adminPassword })).status, 400);
     const form = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'username=owner' });
     assert.equal(form.status, 415);
   });
   await t.test('me requiere sesion y muestra identidad aislada', async () => {
     assert.equal((await client(base).request('/auth/me')).status, 401);
-    const result = await admin.request('/auth/me'); assert.equal(result.status, 200); assert.equal(result.data.user.businessId, businessA);
+    const result = await admin.request('/auth/me'); assert.equal(result.status, 200); assert.equal(result.data.user.businessId, businessA); assert.equal(result.data.user.businessName, 'Synthetic A'); assert.equal(result.data.user.businessStatus, 'ACTIVE');
   });
   await t.test('ADMIN crea VENDEDOR con Argon2id y listado sin hashes', async () => {
     const result = await admin.request('/users', 'POST', { username: 'seller', fullName: 'Seller A', password: sellerPassword, role: 'VENDEDOR' });
@@ -174,7 +183,7 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
     assert.equal((await absolute.request('/auth/me')).status, 401);
   });
   await t.test('aislamiento: otro negocio no se lista ni modifica; businessId extra rechazado', async () => {
-    assert.equal((await other.login(businessB, 'owner', 'Other-business-password-123!')).status, 200);
+    assert.equal((await other.login(businessB, 'owner_b', 'Other-business-password-123!')).status, 200);
     const list = await other.request('/users'); assert.equal(list.data.users.length, 1); assert.equal(list.data.users[0].id, userB);
     assert.equal((await admin.request('/users/' + userB, 'PATCH', { active: false })).status, 404);
     assert.equal((await admin.request('/users/' + userB + '/password', 'PUT', { password: adminPassword })).status, 404);
@@ -196,10 +205,11 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
     assert.equal((await admin.request('/users/' + sellerId, 'PATCH', { active: 'false' })).status, 400);
     assert.equal((await admin.request('/auth/access/users')).status, 400);
   });
-  await t.test('desactivar usuario revoca sesiones y bloquea login; reactivar permite login', async () => {
+  await t.test('desactivar usuario revoca sesiones y bloquea login con error claro; reactivar permite login', async () => {
     assert.equal((await admin.request('/users/' + sellerId, 'PATCH', { active: false })).status, 200);
     assert.equal((await seller.request('/auth/me')).status, 401);
-    assert.equal((await client(base).login(businessA, 'seller', sellerPassword)).status, 401);
+    const blocked = await client(base).login(businessA, 'seller', sellerPassword);
+    assert.equal(blocked.status, 403); assert.equal(blocked.data.error.code, 'USER_INACTIVE');
     assert.equal((await admin.request('/users/' + sellerId, 'PATCH', { active: true })).status, 200);
     assert.equal((await seller.login(businessA, 'seller', sellerPassword)).status, 200);
   });
@@ -227,7 +237,8 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
   await t.test('negocio inactivo bloquea login y sesion existente', async () => {
     await rows(pool, 'UPDATE businesses SET status = ? WHERE id = ?', ['INACTIVE', businessB]);
     assert.equal((await other.request('/auth/me')).status, 401);
-    assert.equal((await client(base).login(businessB, 'owner', 'Other-business-password-123!')).status, 401);
+    const blocked = await client(base).login(businessB, 'owner_b', 'Other-business-password-123!');
+    assert.equal(blocked.status, 403); assert.equal(blocked.data.error.code, 'BUSINESS_INACTIVE');
     await rows(pool, 'UPDATE businesses SET status = ? WHERE id = ?', ['ACTIVE', businessB]);
   });
   await t.test('limite intentos login y autorizacion temporal', async () => {

@@ -1,13 +1,13 @@
 const { test, expect } = require('@playwright/test');
 const { randomBytes } = require('node:crypto');
-const business = process.env.POS_TEST_BUSINESS, businessB = process.env.POS_TEST_BUSINESS_B, api = process.env.POS_TEST_API;
+const business = process.env.POS_TEST_BUSINESS, api = process.env.POS_TEST_API;
 const password = 'Browser-fixture-password-123!';
 const errors = new WeakMap();
 test.beforeEach(async ({ page, context }) => { await context.addInitScript({ path: require.resolve('../tests/dexie-search-shim.js') }); const list = []; errors.set(page, list); page.on('pageerror', error => list.push(error.message)); });
 test.afterEach(async ({ page }) => { expect(errors.get(page)).toEqual([]); });
-async function login(page, username = 'browseradmin', tenant = business) {
+async function login(page, username = 'browseradmin') {
   await page.goto('/?mode=connected'); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
-  await page.locator('#loginBusinessId').fill(tenant); await page.locator('#loginUsername').fill(username); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
+  await page.locator('#loginUsername').fill(username); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
 }
 async function inventory(page) { await page.locator('#navInventoryBtn').click(); await expect(page.locator('#inventoryView')).toBeVisible(); }
 async function closeAlert(page) { await expect(page.locator('#customAlertModal')).toBeVisible(); await page.locator('#customAlertModal .close-modal-btn').click(); await expect(page.locator('#customAlertModal')).toBeHidden(); }
@@ -174,7 +174,7 @@ test('permiso vencido en MySQL rechaza escritura aunque la UI aun muestre formul
 test('otro negocio no ve productos ni movimientos ajenos', async ({ page }) => {
   await login(page); await inventory(page); const item = await create(page); const product = (await call(page, 'products')).value.find(p => p.barcode === item.barcode);
   await page.locator('#logoutBtn').click(); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
-  await page.locator('#loginBusinessId').fill(businessB); await page.locator('#loginUsername').fill('otheradmin'); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
+  await page.locator('#loginUsername').fill('otheradmin'); await page.locator('#loginPassword').fill(password); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
   expect((await call(page, 'products')).value.some(p => p.barcode === item.barcode)).toBe(false); expect((await call(page, 'product', product.id)).code).toBe('PRODUCT_NOT_FOUND'); expect((await call(page, 'movements', product.id)).code).toBe('PRODUCT_NOT_FOUND');
 });
 test('fallo de lectura no utiliza productos de Dexie como respaldo', async ({ page }) => {
@@ -197,7 +197,7 @@ test('ventas y caja MySQL, compra exige proveedor activo, sin documentos en Dexi
 test('cambio de cookie a otro negocio no reintenta una escritura recuperando CSRF', async ({ page, context }) => {
   await login(page); await page.evaluate(async () => { window.phase52Client = new window.PosApiClient(window.POS_API_BASE_URL); await window.phase52Client.me(); });
   const otherPage = await context.newPage(); await otherPage.goto('/?mode=connected'); await expect(otherPage.locator('#app')).toBeVisible();
-  await otherPage.evaluate(async ({ tenant, password }) => { const client = new window.PosApiClient(window.POS_API_BASE_URL); await client.login(tenant, 'otheradmin', password); }, { tenant: businessB, password });
+  await otherPage.evaluate(async ({ password }) => { const client = new window.PosApiClient(window.POS_API_BASE_URL); await client.login('otheradmin', password); }, { password });
   await otherPage.reload(); await expect(otherPage.locator('#app')).toBeVisible();
   const barcode = 'CROSS-' + randomBytes(5).toString('hex');
   const result = await page.evaluate(async barcode => { try { await window.phase52Client.createProduct({ barcode, name: 'No cruzar', category: 'Bebidas', cost: '1', marginRetail: '0', marginWholesale: '0', retailPrice: '1', wholesalePrice: '1', stock: '0', minStock: '0' }); return 'CREATED'; } catch (error) { return error.code; } }, barcode);

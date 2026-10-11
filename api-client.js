@@ -78,6 +78,10 @@
     ADMIN_REQUIRED: 'Solo un administrador del negocio puede gestionar usuarios.',
     LAST_ACTIVE_ADMIN: 'Debe permanecer al menos un administrador activo.',
     USERNAME_EXISTS: 'Ese nombre de usuario ya existe en el negocio.',
+    USER_NOT_FOUND: 'No existe un usuario con ese nombre.',
+    USERNAME_AMBIGUOUS: 'Este usuario está registrado en varios negocios. Cambia uno de los nombres de usuario con un administrador.',
+    USER_INACTIVE: 'Este usuario está inactivo. Contacta al administrador del negocio.',
+    BUSINESS_INACTIVE: 'El negocio está suspendido o inactivo. Contacta al administrador.',
     INVALID_INPUT: 'Revisa los campos ingresados.',
     PAYLOAD_TOO_LARGE: 'La solicitud es demasiado grande. Usa el selector para cargar la fotografia por separado.',
     IMAGE_REQUIRES_UPLOAD: 'La fotografia debe cargarse como archivo; no como Base64 dentro del producto.',
@@ -106,7 +110,9 @@
   }
   function user(value) {
     if (!value || typeof value.id !== 'string' || typeof value.businessId !== 'string' || !/^[1-9]\d{0,19}$/.test(value.id) || !/^[1-9]\d{0,19}$/.test(value.businessId) || !['ADMIN', 'VENDEDOR'].includes(value.role) || typeof value.username !== 'string' || typeof value.fullName !== 'string' || value.active !== true) throw new ApiError('INVALID_RESPONSE');
-    return Object.freeze({ id: value.id, businessId: value.businessId, username: value.username, fullName: value.fullName, role: value.role, active: true });
+    if (value.businessName !== undefined && (typeof value.businessName !== 'string' || !value.businessName.trim())) throw new ApiError('INVALID_RESPONSE');
+    if (value.businessStatus !== undefined && !['ACTIVE', 'INACTIVE'].includes(value.businessStatus)) throw new ApiError('INVALID_RESPONSE');
+    return Object.freeze({ id: value.id, businessId: value.businessId, username: value.username, fullName: value.fullName, role: value.role, active: true, ...(value.businessName !== undefined ? { businessName: value.businessName } : {}), ...(value.businessStatus !== undefined ? { businessStatus: value.businessStatus } : {}), ...(value.plan !== undefined ? { plan: value.plan } : {}) });
   }
   function session(value) {
     if (!value || typeof value.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value.csrfToken) || typeof value.expiresAt !== 'string' || !Number.isFinite(Date.parse(value.expiresAt))) throw new ApiError('INVALID_RESPONSE');
@@ -243,10 +249,10 @@
         return { ...item, quantity: Number(item.quantity), stockAfter: item.stockAfter === null ? null : Number(item.stockAfter), unitCost: Number(item.unitCost || 0) };
       });
     }
-    async login(businessId, username, password) {
+    async login(username, password) {
       try { await this.me(); await this.logout(); } catch (error) { if (error.code !== 'INVALID_SESSION') throw error; }
       this.#csrf = null; this.#identity = null;
-      const value = session(await this.#write('/auth/login', 'POST', { businessId, username, password })); this.#csrf = value.csrfToken; this.#identity = value.user; return value;
+      const value = session(await this.#write('/auth/login', 'POST', { username, password })); this.#csrf = value.csrfToken; this.#identity = value.user; return value;
     }
     async me() {
       const value = session(await this.#request('/auth/me'));

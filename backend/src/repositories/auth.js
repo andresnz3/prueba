@@ -1,6 +1,6 @@
 'use strict';
 const { httpError } = require('../middleware/errors');
-const publicUser = row => ({ id: String(row.user_id ?? row.id), businessId: String(row.business_id), username: row.username, fullName: row.full_name, role: row.role, active: Boolean(row.active) });
+const publicUser = row => ({ id: String(row.user_id ?? row.id), businessId: String(row.business_id), username: row.username, fullName: row.full_name, role: row.role, active: Boolean(row.active), ...(typeof row.business_name === 'string' ? { businessName: row.business_name } : {}), ...(typeof row.business_status === 'string' ? { businessStatus: row.business_status } : {}), ...(row.plan !== undefined ? { plan: row.plan } : {}) });
 async function rows(db, sql, values) { return (await db.execute(sql, values))[0]; }
 async function transaction(pool, work) {
   const db = await pool.getConnection();
@@ -12,7 +12,7 @@ async function lockBusiness(db, businessId) {
   if (!business || business.status !== 'ACTIVE') throw httpError(401, 'INVALID_SESSION');
 }
 function createAuthRepository(pool, config) {
-  const selectSession = 'SELECT s.id AS session_id, s.business_id, s.user_id, s.token_hash, s.expires_at, s.created_at, u.username, u.full_name, u.role, u.active FROM sessions s JOIN users u ON u.business_id = s.business_id AND u.id = s.user_id JOIN businesses b ON b.id = s.business_id WHERE s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP(3) AND s.created_at > TIMESTAMPADD(SECOND, -?, UTC_TIMESTAMP(3)) AND u.active = TRUE AND b.status = \'ACTIVE\' ';
+  const selectSession = 'SELECT s.id AS session_id, s.business_id, s.user_id, s.token_hash, s.expires_at, s.created_at, u.username, u.full_name, u.role, u.active, b.name AS business_name, b.status AS business_status FROM sessions s JOIN users u ON u.business_id = s.business_id AND u.id = s.user_id JOIN businesses b ON b.id = s.business_id WHERE s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP(3) AND s.created_at > TIMESTAMPADD(SECOND, -?, UTC_TIMESTAMP(3)) AND u.active = TRUE AND b.status = \'ACTIVE\' ';
   async function session(tokenHash) { return (await rows(pool, selectSession + 'AND s.token_hash = ?', [config.absoluteSeconds, tokenHash]))[0]; }
   async function tenant(auth, work) {
     return transaction(pool, async db => {

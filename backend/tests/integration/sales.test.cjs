@@ -21,7 +21,7 @@ function client(base) {
     const data = response.status === 204 ? undefined : await response.json(); if (data?.csrfToken) csrf = data.csrfToken;
     return {status:response.status,data};
   }
-  async function login(businessId,username) { await request('/auth/csrf'); assert.equal((await request('/auth/login','POST',{businessId,username,password})).status,200); }
+  async function login(_businessId,username) { await request('/auth/csrf'); assert.equal((await request('/auth/login','POST',{username,password})).status,200); }
   return {request,login};
 }
 test('Integracion MySQL ventas y caja fase 5.3', async t => {
@@ -29,13 +29,13 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
   const pool=createDatabasePool({...config.database,database,connectionLimit:20}); t.after(()=>pool.end());
   const business=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Sales A'])).insertId), businessB=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Sales B'])).insertId);
   const hash=await hashPassword(password);
-  for (const [tenant,username,role] of [[business,'salesadmin','ADMIN'],[business,'salesone','VENDEDOR'],[business,'salestwo','VENDEDOR'],[businessB,'salesadmin','ADMIN']]) await rows(pool,'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)',[tenant,username,username,hash,role]);
+  for (const [tenant,username,role] of [[business,'salesadmin','ADMIN'],[business,'salesone','VENDEDOR'],[business,'salestwo','VENDEDOR'],[businessB,'salesadmin_b','ADMIN']]) await rows(pool,'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)',[tenant,username,username,hash,role]);
   const repo=createAuthRepository(pool,authConfig),auth=createAuthService(repo,authConfig);
   const server=createApp({config,checkDatabase:async()=>{},authentication:{repo,auth,config:authConfig,users:createUsersService(repo)}}).listen(0,'127.0.0.1');
   await new Promise(ok=>server.once('listening',ok)); t.after(()=>new Promise(ok=>{server.close(ok);server.closeAllConnections();}));
   const base='http://127.0.0.1:'+server.address().port;
   const admin=client(base),one=client(base),two=client(base),other=client(base),anon=client(base);
-  await admin.login(business,'salesadmin'); await one.login(business,'salesone'); await two.login(business,'salestwo'); await other.login(businessB,'salesadmin');
+  await admin.login(business,'salesadmin'); await one.login(business,'salesone'); await two.login(business,'salestwo'); await other.login(businessB,'salesadmin_b');
   const productInput=overrides=>({barcode:randomUUID(),name:'Producto ventas',category:'Bebidas',cost:'7.00',marginRetail:'25',marginWholesale:'10',retailPrice:'12.31',wholesalePrice:'11.34',stock:'100.000',minStock:'0',...overrides});
   const createProduct=async(overrides={},owner=admin)=>(await owner.request('/products','POST',productInput(overrides))).data.product;
   const product=await createProduct(); let cash,firstSale;

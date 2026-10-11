@@ -2,7 +2,6 @@
 const { test, expect } = require('@playwright/test');
 const { randomBytes } = require('node:crypto');
 
-const business = process.env.POS_TEST_BUSINESS;
 const password = 'Browser-fixture-password-123!';
 const errors = new WeakMap();
 
@@ -18,7 +17,6 @@ test.afterEach(async ({ page }) => { expect(errors.get(page)).toEqual([]); });
 async function login(page) {
   await page.route('https://**/*', route => route.abort());
   await page.goto('/?mode=connected');
-  await page.locator('#loginBusinessId').fill(business);
   await page.locator('#loginUsername').fill('browseradmin');
   await page.locator('#loginPassword').fill(password);
   await page.locator('#loginForm button[type=submit]').click();

@@ -6,10 +6,18 @@ const { publicUser } = require('../repositories/auth');
 function createAuthService(repo, config) {
   async function login(input, metadata) {
     return repo.transaction(async db => {
-      const [business] = await repo.rows(db, 'SELECT id, status FROM businesses WHERE id = ? FOR UPDATE', [input.businessId]);
-      const [user] = await repo.rows(db, 'SELECT * FROM users WHERE business_id = ? AND username = ? FOR UPDATE', [input.businessId, input.username]);
-      const verified = await verifyOrDummy(user?.password_hash, input.password);
-      if (!verified || !user?.active || business?.status !== 'ACTIVE') throw httpError(401, 'INVALID_CREDENTIALS');
+      const matches = await repo.rows(db, 'SELECT u.*, b.name AS business_name, b.status AS business_status FROM users u JOIN businesses b ON b.id = u.business_id WHERE u.username = ? ORDER BY u.business_id, u.id FOR UPDATE', [input.username]);
+      if (!matches.length) {
+        await verifyOrDummy(undefined, input.password);
+        throw httpError(401, 'USER_NOT_FOUND');
+      }
+      const verified = [];
+      for (const candidate of matches) verified.push(await verifyOrDummy(candidate.password_hash, input.password));
+      if (!verified.some(Boolean)) throw httpError(401, 'INVALID_CREDENTIALS');
+      if (matches.length > 1) throw httpError(409, 'USERNAME_AMBIGUOUS');
+      const [user] = matches;
+      if (!user.active) throw httpError(403, 'USER_INACTIVE');
+      if (user.business_status !== 'ACTIVE') throw httpError(403, 'BUSINESS_INACTIVE');
       const token = randomToken();
       const expires = new Date(Date.now() + config.sessionSeconds * 1000);
       const result = await repo.rows(db, 'INSERT INTO sessions (business_id, user_id, token_hash, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(3), ?, ?)', [String(user.business_id), String(user.id), hashToken(token), expires, metadata.ip, metadata.agent]);

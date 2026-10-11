@@ -20,7 +20,7 @@ function client(base) {
     for (const cookie of response.headers.getSetCookie()) { const pair = cookie.split(';')[0], pos = pair.indexOf('='); jar.set(pair.slice(0,pos), pair.slice(pos+1)); }
     const data = response.status === 204 ? undefined : await response.json(); if (data?.csrfToken) csrf = data.csrfToken; return { status:response.status, data };
   }
-  async function login(businessId, username) { await request('/auth/csrf'); assert.equal((await request('/auth/login','POST',{businessId,username,password})).status,200); }
+  async function login(_businessId, username) { await request('/auth/csrf'); assert.equal((await request('/auth/login','POST',{username,password})).status,200); }
   return { request, login };
 }
 test('Fase 5.4: clientes, credito conectado, cuentas por cobrar y abonos', async t => {

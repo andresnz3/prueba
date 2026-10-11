@@ -8,7 +8,7 @@ Todas las rutas tienen prefijo /api. IDs BIGINT se envian como cadenas decimales
 | --- | --- | --- |
 | GET /health | Publico | 200 ok / 503 degraded |
 | GET /auth/csrf | Publico o sesion | csrfToken; cookie inicial HttpOnly si no hay sesion |
-| POST /auth/login | CSRF inicial; {businessId, username, password} | Usuario, expiresAt, csrfToken; cookie de sesion |
+| POST /auth/login | CSRF inicial; {username, password} | Usuario con businessId, businessName y businessStatus resueltos por el servidor; expiresAt, csrfToken y cookie de sesion |
 | GET /auth/me | Sesion valida | Usuario, expiresAt, csrfToken |
 | POST /auth/logout | Sesion + CSRF; {} | 204; revoca sesion, permisos y cookie |
 | POST /auth/renew | Sesion + CSRF; {} | Rota token/cookie y CSRF, renueva expiracion; revoca permisos |
@@ -27,29 +27,27 @@ El otorgante debe ser ADMIN activo del mismo negocio; se comprueba su hash Argon
 
 ## Seguridad
 
-- Argon2id: 19 MiB, dos iteraciones y paralelismo uno; sal aleatoria. Contrasenas nuevas: 12 caracteres minimo, maximo 256 bytes, sin truncado ni conversion silenciosa. Login incorrecto/inexistente/inactivo responde INVALID_CREDENTIALS y usa un hash ficticio para reducir diferencias de verificacion.
+- Argon2id: 19 MiB, dos iteraciones y paralelismo uno; sal aleatoria. Contrasenas nuevas: 12 caracteres minimo, maximo 256 bytes, sin truncado ni conversion silenciosa. El login busca el username, verifica la contrasena y deriva negocio desde users.business_id. Usuario inexistente, contrasena incorrecta, usuario inactivo y negocio inactivo tienen errores claros; usernames repetidos entre negocios devuelven USERNAME_AMBIGUOUS para que se corrijan sin seleccionar una cuenta arbitrariamente.
 - Tokens de sesion: 32 bytes criptograficamente aleatorios. Solo SHA256(token) llega a MySQL; el token se entrega exclusivamente en la cookie HttpOnly. Ningun hash de contrasena o token de sesion aparece en las respuestas.
 - Cookie sin Domain, Path=/, SameSite=Lax por defecto y Secure en produccion. En produccion usa prefijo __Host-. COOKIE_SAME_SITE admite lax, strict y none; none requiere produccion/Secure. El futuro despliegue en dominios diferentes requiere HTTPS y revisar SameSite/CORS antes de conectar el frontend. No se confia automaticamente en headers de proxy.
 - CSRF: el login requiere un token inicial firmado, cookie HttpOnly y header X-CSRF-Token coincidentes (vence en 10 minutos). Las escrituras autenticadas requieren un token HMAC ligado al hash de esa sesion. Se compara en tiempo constante. CORS solo permite origenes exactos, credenciales y el header CSRF; JSON impide formularios simples. Clientes sin Origin pueden usar la API con cookies y CSRF, como PowerShell/Postman.
 - Sesion: 30 minutos, renovacion explicita y tope absoluto de ocho horas. Usuarios y negocio se verifican en cada peticion. No hay renovacion automatica en GET. Token y CSRF anteriores dejan de funcionar tras renovar. Logout no borra el historial de sesiones.
 - Limites: diez intentos por identidad por 15 minutos y cincuenta por IP, tanto login como concesion de permisos. Cuenta antes de verificar, incluyendo exitos, para acotar trabajo de Argon2. HTTP 429 incluye Retry-After. Almacen acotado de un proceso; reinicios reinician los contadores. No es un limitador distribuido.
-- Todas las consultas con datos externos son parametrizadas. Login usa businessId como selector de identidad, nunca como autoridad. Tras autenticar, negocios/usuarios/permisos se toman de la sesion. Las claves compuestas impiden referencias entre negocios. Transacciones y bloqueo del negocio serializan cambios sensibles y protegen al ultimo administrador activo incluso contra carreras. Desactivar o degradar al ultimo ADMIN devuelve 409 LAST_ACTIVE_ADMIN.
+- Todas las consultas con datos externos son parametrizadas. Login no acepta businessId. Tras autenticar, negocios/usuarios/permisos se toman de la sesion. Las claves compuestas impiden referencias entre negocios. Transacciones y bloqueo del negocio serializan cambios sensibles y protegen al ultimo administrador activo incluso contra carreras. Desactivar o degradar al ultimo ADMIN devuelve 409 LAST_ACTIVE_ADMIN.
 - Cambios de rol, estado o contrasena revocan las sesiones del usuario y sus autorizaciones. Cambiar solo fullName no revoca sesiones. Al modificar la propia contrasena/rol hay que iniciar sesion nuevamente. Usuarios se desactivan, no se borran.
-- Errores publicos: 400 validacion, 401 credenciales/sesion, 403 permisos/CSRF/origen, 404 usuario, 409 duplicado/ultimo ADMIN, 429 intentos y 500 error interno. Sin SQL, stack ni credenciales. La auditoria registra acciones exitosas y otorgantes, sin contrasenas, tokens o CSRF.
+- Errores publicos: 400 validacion, 401 contrasena incorrecta/usuario inexistente/sesion, 403 usuario o negocio inactivo/permisos/CSRF/origen, 409 username ambiguo/duplicado/ultimo ADMIN, 429 intentos y 500 error interno. Sin SQL, stack ni credenciales. La auditoria registra acciones exitosas y otorgantes, sin contrasenas, tokens o CSRF.
 
 ## Ejemplo PowerShell (sin frontend)
 
-Primero aplicar la migracion y crear el primer negocio siguiendo README.md; iniciar npm.cmd run dev en otra terminal. Usar el businessId informado por el registro inicial:
+Crear el primer negocio siguiendo README.md e iniciar npm.cmd run dev en otra terminal. El login conectado solo necesita usuario y contrasena; el backend obtiene business_id desde users:
 
 ```powershell
 $posApi = 'http://127.0.0.1:3000/api'
 $posHttp = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 $posCsrf = Invoke-RestMethod "$posApi/auth/csrf" -WebSession $posHttp
-$posBusiness = Read-Host 'businessId'
 $posUsername = Read-Host 'Usuario'
 $posPassword = Read-Host 'Contrasena' -AsSecureString
 $posLoginBody = @{
-  businessId = $posBusiness
   username = $posUsername
   password = ([System.Net.NetworkCredential]::new('', $posPassword)).Password
 } | ConvertTo-Json

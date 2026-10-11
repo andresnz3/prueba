@@ -8,8 +8,8 @@ const errors = new WeakMap();
 test.beforeEach(async ({ page, context }) => { await context.addInitScript({ path: require.resolve('../tests/dexie-search-shim.js') }); const list = []; errors.set(page, list); page.on('pageerror', e => list.push(e.message)); });
 test.afterEach(async ({ page }) => { expect(errors.get(page)).toEqual([]); });
 async function open(page) { await page.goto('/?mode=connected'); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled(); }
-async function login(page, username = 'browseradmin', id = business, pass = password) {
-  await page.locator('#loginBusinessId').fill(id); await page.locator('#loginUsername').fill(username); await page.locator('#loginPassword').fill(pass); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
+async function login(page, username = 'browseradmin', pass = password) {
+  await page.locator('#loginUsername').fill(username); await page.locator('#loginPassword').fill(pass); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
 }
 async function authorize(page, button = 'navInventoryBtn', view = 'inventoryView') {
   await page.locator('#' + button).click(); await expect(page.locator('#authModal')).toBeVisible();
@@ -33,16 +33,18 @@ test('ojito de contraseña funciona por teclado y permite el login conectado',as
   await login(page); await expect(page.locator('#salesView')).toBeVisible();
 });
 
-test('ADMIN inicia sesion real, negocio fijo y restauracion mediante cookies', async ({ page }) => {
-  await open(page); await login(page); await expect(page.locator('#roleBadge')).toHaveText('Administrador'); await expect(page.locator('#businessContext')).toContainText(business); await expect(page.locator('#loginBusinessId')).toBeDisabled();
+test('ADMIN inicia sesion real, negocio resuelto y restauracion mediante cookies', async ({ page }) => {
+  await open(page); await expect(page.locator('#loginBusinessId')).toHaveCount(0);
+  const loginBodies = []; page.on('request', request => { if (request.url() === apiBase + '/auth/login') loginBodies.push(JSON.parse(request.postData())); });
+  await login(page); expect(loginBodies).toEqual([{ username: 'browseradmin', password }]); await expect(page.locator('#roleBadge')).toHaveText('Administrador'); await expect(page.locator('#businessContext')).toContainText('Browser fixture A');
   await page.locator('#navInventoryBtn').click(); await expect(page.locator('#inventoryView')).toBeVisible();
   await page.reload(); await expect(page.locator('#app')).toBeVisible(); await expect(page.locator('#salesView')).toBeVisible(); await expect(page.locator('#navUsersBtn')).toBeVisible();
 });
 test('VENDEDOR solo accede directamente a Ventas', async ({ page }) => {
   await open(page); await login(page, 'browserseller'); await expect(page.locator('#salesView')).toBeVisible(); await expect(page.locator('#navUsersBtn')).toBeHidden(); await page.locator('#navInventoryBtn').click(); await expect(page.locator('#authModal')).toBeVisible(); await expect(page.locator('#inventoryView')).toBeHidden();
 });
-test('no acepta usuarios locales en modo conectado', async ({ page }) => {
-  await open(page); await page.locator('#loginBusinessId').fill(business); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#loginError')).toContainText('Credenciales incorrectas'); await expect(page.locator('#app')).toBeHidden(); await expect(page.locator('#loginPassword')).toHaveValue('');
+test('no acepta usuarios locales en modo conectado y explica que no existen', async ({ page }) => {
+  await open(page); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#loginError')).toContainText('No existe un usuario'); await expect(page.locator('#app')).toBeHidden(); await expect(page.locator('#loginPassword')).toHaveValue('');
 });
 test('autorizacion temporal, rechazo de contrasena incorrecta y revocacion al cambiar', async ({ page }) => {
   await open(page); await login(page, 'browserseller'); await page.locator('#navInventoryBtn').click(); await page.locator('#grantAdminUsername').fill('browseradmin'); await page.locator('#gestorPassword').fill('wrong'); await page.locator('#authForm button[type=submit]').click(); await expect(page.locator('#authError')).toContainText('Credenciales incorrectas'); await expect(page.locator('#gestorPassword')).toHaveValue('');
@@ -94,7 +96,7 @@ test('Dexie separa modo local y dos negocios sin copiar datos', async ({ page })
   await open(page); await page.evaluate(async () => { const db = createPosDatabase('POS_OfflineDB'); await db.products.put({ id: 1, barcode: 'LOCAL', name: 'LOCAL SECRET' }); db.close(); }); await login(page);
   expect(await page.evaluate(() => localDB.products.count())).toBe(0);
   await page.evaluate(() => localDB.products.put({ id: 2, barcode: 'A', name: 'BUSINESS A SECRET', business_id: DEFAULT_BUSINESS_ID }));
-  await page.locator('#logoutBtn').click(); await expect(page.locator('#loginScreen')).toBeVisible(); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled(); await login(page, 'otheradmin', businessB);
+  await page.locator('#logoutBtn').click(); await expect(page.locator('#loginScreen')).toBeVisible(); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled(); await login(page, 'otheradmin');
   expect(await page.evaluate(() => localDB.products.count())).toBe(0); expect(await page.evaluate(() => DEFAULT_BUSINESS_ID)).toBe(businessB);
 });
 test('modo local no invoca API y cambio de modalidad recarga sin conservar identidad', async ({ page }) => {
@@ -124,7 +126,7 @@ test('respuesta tardia no reabre una sesion vencida', async ({ page }) => {
 });
 test('login conectado usable en pantalla movil', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await open(page);
-  await expect(page.locator('#loginBusinessId')).toBeVisible();
+  await expect(page.locator('#loginBusinessId')).toHaveCount(0); await expect(page.locator('#loginUsername')).toBeVisible(); await expect(page.locator('#loginPassword')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath('login-mobile.png'), fullPage: true });
 });

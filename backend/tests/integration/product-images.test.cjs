@@ -27,7 +27,7 @@ function client(base) {
     if(data.csrfToken)csrf=data.csrfToken;
     return {status:response.status,data,headers:response.headers};
   }
-  async function login(businessId,username) {await request('/api/auth/csrf');assert.equal((await request('/api/auth/login','POST',{businessId,username,password})).status,200);}
+  async function login(_businessId,username) {await request('/api/auth/csrf');assert.equal((await request('/api/auth/login','POST',{username,password})).status,200);}
   return {request,login};
 }
 test('Integracion MySQL y almacenamiento privado de fotografias',async t=>{
@@ -36,11 +36,11 @@ test('Integracion MySQL y almacenamiento privado de fotografias',async t=>{
   const pool=createDatabasePool({...config.database,database});t.after(()=>pool.end());
   const business=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Images A'])).insertId),otherBusiness=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Images B'])).insertId);
   const hash=await hashPassword(password);
-  for(const [owner,name,role]of[[business,'imgadmin','ADMIN'],[business,'imgseller','VENDEDOR'],[otherBusiness,'imgadmin','ADMIN']])await rows(pool,'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)',[owner,name,name,hash,role]);
+  for(const [owner,name,role]of[[business,'imgadmin','ADMIN'],[business,'imgseller','VENDEDOR'],[otherBusiness,'imgadmin_b','ADMIN']])await rows(pool,'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)',[owner,name,name,hash,role]);
   const repo=createAuthRepository(pool,authConfig),authentication={repo,config:authConfig,auth:createAuthService(repo,authConfig),users:createUsersService(repo)};
   async function serve(options=config){const server=createApp({config:options,checkDatabase:async()=>{},authentication}).listen(0,'127.0.0.1');await new Promise(ok=>server.once('listening',ok));t.after(()=>new Promise(ok=>{server.close(ok);server.closeAllConnections();}));return 'http://127.0.0.1:'+server.address().port;}
   const base=await serve(),admin=client(base),other=client(base),seller=client(base),anon=client(base);
-  await admin.login(business,'imgadmin');await other.login(otherBusiness,'imgadmin');await seller.login(business,'imgseller');
+  await admin.login(business,'imgadmin');await other.login(otherBusiness,'imgadmin_b');await seller.login(business,'imgseller');
   const source=await photo();let image,product;
   await t.test('regresion: JSON Base64 no llega a MySQL y el limite JSON sigue en 16 KiB',async()=>{
     assert.ok(source.toString('base64').length>65000);
