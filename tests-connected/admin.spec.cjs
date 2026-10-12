@@ -27,14 +27,15 @@ test('usuario normal no ve el panel ni puede eliminar negocios por el API', asyn
     await window.PosConnected.navigate('systemAdminView');
     window.renderPosView('systemAdminView');
     const response = await fetch(window.POS_API_BASE_URL + '/admin/businesses', { credentials: 'include' });
+    const billing = await fetch(window.POS_API_BASE_URL + '/admin/billing', { credentials: 'include' });
     const csrf = await fetch(window.POS_API_BASE_URL + '/auth/csrf', { credentials: 'include' }).then(value => value.json());
     const deletion = await fetch(window.POS_API_BASE_URL + '/admin/businesses/1', { method: 'DELETE', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.csrfToken }, body: JSON.stringify({ confirmation: 'ELIMINAR' }) });
     const deletionBody = await deletion.json();
     const support = await fetch(window.POS_API_BASE_URL + '/admin/support-session', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.csrfToken }, body: JSON.stringify({ businessId: '1' }) });
     const supportBody = await support.json();
-    return { visible: !document.getElementById('systemAdminView').classList.contains('hidden'), status: response.status, deleteStatus: deletion.status, deleteCode: deletionBody.error?.code, supportStatus: support.status, supportCode: supportBody.error?.code };
+    return { visible: !document.getElementById('systemAdminView').classList.contains('hidden'), status: response.status, billingStatus: billing.status, deleteStatus: deletion.status, deleteCode: deletionBody.error?.code, supportStatus: support.status, supportCode: supportBody.error?.code };
   });
-  expect(result.visible).toBe(false); expect(result.status).toBe(403); expect(result.deleteStatus).toBe(403); expect(result.deleteCode).toBe('SYSTEM_ADMIN_REQUIRED'); expect(result.supportStatus).toBe(403); expect(result.supportCode).toBe('SYSTEM_ADMIN_REQUIRED');
+  expect(result.visible).toBe(false); expect(result.status).toBe(403); expect(result.billingStatus).toBe(403); expect(result.deleteStatus).toBe(403); expect(result.deleteCode).toBe('SYSTEM_ADMIN_REQUIRED'); expect(result.supportStatus).toBe(403); expect(result.supportCode).toBe('SYSTEM_ADMIN_REQUIRED');
   await expect(page.locator('#salesView')).toBeVisible();
 });
 
@@ -204,4 +205,67 @@ test('andres administra otro negocio sin sustituir su sesión y vuelve al panel 
   await expect(page.locator('#supportSessionBanner')).toBeHidden();
   const returnedSession = await page.evaluate(async () => new window.PosApiClient(window.POS_API_BASE_URL).me());
   expect(returnedSession.user.username).toBe('andres'); expect(returnedSession.user.businessId).toBe('1'); expect(returnedSession.support).toBeNull();
+});
+
+test('andres gestiona planes, pagos USD y recordatorios sin exponerlos a usuarios normales', async ({ page }) => {
+  await open(page); await login(page, 'andres');
+  await page.locator('#navSystemAdminBtn').click();
+  await page.locator('#systemAdminBillingTab').click();
+  await expect(page.locator('#systemAdminBillingPanel')).toBeVisible();
+  const businessName = 'Plan de prueba ' + randomBytes(4).toString('hex');
+  const fixture = await page.evaluate(async businessName => {
+    const api = new window.PosApiClient(window.POS_API_BASE_URL); await api.me();
+    const business = await api.createAdminBusiness(businessName);
+    return { businessId: business.id, today: (await api.adminBilling()).today };
+  }, businessName);
+  await page.locator('#systemAdminRefreshBtn').click();
+  const row = page.locator('#systemAdminBillingBody tr[data-business-id="' + fixture.businessId + '"]');
+  await expect(row).toBeVisible();
+  await row.locator('select').selectOption('CONECTADO_BASICO');
+  await row.locator('input[type=date]').fill(fixture.today);
+  await row.getByRole('button', { name: 'Guardar plan y fecha' }).click();
+  await expect(page.locator('#systemAdminBillingReminder')).toContainText(businessName);
+  await expect(row.locator('.system-admin-payment-state')).toHaveText('Vence hoy');
+  await row.getByRole('button', { name: 'Registrar pago' }).click();
+  await expect(page.locator('#systemAdminPaymentModal')).toBeVisible();
+  await page.locator('#systemAdminPaymentAmount').fill('125.50');
+  await page.locator('#systemAdminPaymentDate').fill(fixture.today);
+  await page.locator('#systemAdminPaymentSubmitBtn').click();
+  const nextDueDate = await page.evaluate(date => {
+    const [year, month, day] = date.split('-').map(Number);
+    const nextMonth = month;
+    const nextYear = year + Math.floor(nextMonth / 12);
+    const monthNumber = nextMonth % 12 + 1;
+    const last = new Date(Date.UTC(nextYear, monthNumber, 0)).getUTCDate();
+    return String(nextYear).padStart(4, '0') + '-' + String(monthNumber).padStart(2, '0') + '-' + String(Math.min(day, last)).padStart(2, '0');
+  }, fixture.today);
+  await expect(page.locator('#systemAdminPaymentHistory')).toContainText('USD 125.50');
+  await expect(page.locator('#systemAdminMessage')).toContainText('Pago registrado en USD');
+  await expect(page.locator('#systemAdminPaymentDescription')).toContainText('avanzará un mes');
+  await page.locator('#systemAdminPaymentCancelBtn').click();
+  const renewedRow = page.locator('#systemAdminBillingBody tr[data-business-id="' + fixture.businessId + '"]');
+  await expect(renewedRow.locator('input[type=date]')).toHaveValue(nextDueDate);
+  await expect(renewedRow.locator('td').nth(4)).toContainText('USD 125.50');
+  await renewedRow.locator('select').selectOption('LOCAL');
+  await renewedRow.getByRole('button', { name: 'Guardar plan y fecha' }).click();
+  await expect(page.locator('#systemAdminBillingLocal')).toHaveText('1');
+  await expect(page.locator('#systemAdminBillingMonthly')).toHaveText('0');
+  await expect(page.locator('#systemAdminBillingReminder')).toBeHidden();
+  const history = await page.evaluate(async businessId => {
+    const api = new window.PosApiClient(window.POS_API_BASE_URL); await api.me();
+    return api.adminSubscriptionPayments(businessId);
+  }, fixture.businessId);
+  expect(history).toHaveLength(1); expect(history[0].amount).toBe('125.50'); expect(history[0].paymentDate).toBe(fixture.today);
+  await renewedRow.getByRole('button', { name: 'Eliminar' }).click();
+  await page.locator('#systemAdminDeleteInput').fill('ELIMINAR');
+  await page.locator('#systemAdminDeleteConfirmBtn').click();
+  await expect(page.locator('#systemAdminBillingBody tr[data-business-id="' + fixture.businessId + '"]')).toHaveCount(0);
+  const config = readConfig(), database = process.env.POS_INTEGRATION_DATABASE;
+  if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === config.database.database) throw new Error('Base temporal de billing insegura');
+  const pool = createDatabasePool({ ...config.database, database });
+  try {
+    const [subscriptions] = await pool.execute('SELECT business_id FROM business_subscriptions WHERE business_id = ?', [fixture.businessId]);
+    const [payments] = await pool.execute('SELECT business_id FROM business_subscription_payments WHERE business_id = ?', [fixture.businessId]);
+    expect(subscriptions).toHaveLength(0); expect(payments).toHaveLength(0);
+  } finally { await pool.end(); }
 });

@@ -538,6 +538,37 @@ input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
 .system-admin-table-wrap th, .system-admin-table-wrap td { padding: 11px 9px; border-bottom: 1px solid #e7ecf2; text-align: left; vertical-align: middle; }
 .system-admin-table-wrap td:last-child { min-width: 140px; }
 #systemAdminUsersBody .btn, #systemAdminBusinessesBody .btn { margin: 2px; white-space: nowrap; }
+.system-admin-billing-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.system-admin-billing-heading h2 { margin-bottom: 4px; }
+.system-admin-billing-heading .system-admin-help { margin: 0 0 16px; }
+.system-admin-billing-summary { display: grid; grid-template-columns: repeat(5, minmax(130px, 1fr)); gap: 12px; margin: 8px 0 16px; }
+.system-admin-billing-summary article { display: grid; gap: 8px; min-height: 82px; align-content: space-between; padding: 14px 16px; border: 1px solid #dce3ed; border-radius: 10px; background: #f8fafc; color: #475569; }
+.system-admin-billing-summary span { font-size: .88rem; }
+.system-admin-billing-summary strong { color: #1e293b; font-size: 1.45rem; font-variant-numeric: tabular-nums; }
+.system-admin-reminder { margin: 0 0 16px; padding: 12px 14px; border: 1px solid #f2d28d; border-radius: 8px; background: #fff8e8; color: #7c4a03; line-height: 1.45; }
+.system-admin-billing-table-wrap table { min-width: 1120px; }
+.system-admin-billing-table-wrap th:first-child { min-width: 170px; }
+.system-admin-billing-table-wrap td { min-width: 145px; }
+.system-admin-billing-table-wrap td:first-child { min-width: 175px; font-weight: 600; }
+.system-admin-plan-control { display: grid; gap: 6px; min-width: 170px; }
+.system-admin-plan-control select, .system-admin-plan-control input { width: 100%; min-height: 36px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 8px; background: #fff; color: #243044; }
+.system-admin-plan-control input:disabled { background: #f1f5f9; color: #64748b; }
+.system-admin-plan-control small, .system-admin-billing-last-payment { color: #64748b; font-size: .82rem; font-weight: 400; }
+.system-admin-payment-state { display: inline-flex; align-items: center; min-height: 26px; padding: 4px 9px; border-radius: 999px; background: #eef2f7; color: #475569; font-size: .82rem; white-space: nowrap; }
+.system-admin-payment-state.is-good { background: #e8f5ee; color: #17643a; }
+.system-admin-payment-state.is-due { background: #fff2d6; color: #8a5700; }
+.system-admin-payment-state.is-overdue { background: #fff0ed; color: #a43324; }
+.system-admin-payment-state.is-pending { background: #eff6ff; color: #1d4f91; }
+.system-admin-billing-actions { display: flex; flex-wrap: wrap; gap: 4px; min-width: 290px; }
+.system-admin-billing-actions .btn { white-space: nowrap; }
+.system-admin-payment-card { width: min(100%, 560px); max-height: 90vh; overflow-y: auto; border-top: 4px solid #2870bb; }
+.system-admin-payment-card .form-group { margin-bottom: 12px; }
+.system-admin-payment-card input { width: 100%; }
+.system-admin-payment-history { margin: 16px 0 4px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
+.system-admin-payment-history h3 { margin: 0 0 8px; font-size: 1rem; color: #334155; }
+.system-admin-payment-history ul { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: #475569; }
+.system-admin-payment-history li { padding-left: 2px; }
+.system-admin-payment-card .modal-actions { margin-top: 16px; }
 @media (max-width: 600px) {
   #systemAdminView { padding: 16px; }
   .system-admin-heading { align-items: flex-start; }
@@ -546,6 +577,10 @@ input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
   .system-admin-delete-card { padding: 20px; }
   .system-admin-delete-card .modal-actions { flex-wrap: wrap; }
   .system-admin-delete-card .modal-actions .btn { flex: 1 1 130px; }
+  .system-admin-billing-summary { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+  .system-admin-payment-card { padding: 20px; }
+  .system-admin-payment-card .modal-actions { flex-wrap: wrap; }
+  .system-admin-payment-card .modal-actions .btn { flex: 1 1 130px; }
 }
 
 .field-error { display: block; color: #b91c1c; font-size: .85rem; margin-top: 5px; }

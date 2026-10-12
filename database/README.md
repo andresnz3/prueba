@@ -15,6 +15,7 @@ Ventas, lineas, stock, caja, secuencias y auditoria conectadas utilizan MySQL. [
 - `cash_sessions`, `cash_movements`, `expenses`: cash register lifecycle, auditable cash entries/exits, and expense records.
 - `inventory_movements`: stock ledger with quantity deltas, stock-after snapshots, reason and optional source document reference.
 - `audit_logs`: append-oriented backend activity log; it does not replace operational records.
+- `business_subscriptions`, `business_subscription_payments`: owner-only plan metadata, monthly due dates, and USD payment history added by migration 006; these billing records are separate from POS financial operations and are not added to `schema.sql`.
 
 ## Tenant and history safeguards
 

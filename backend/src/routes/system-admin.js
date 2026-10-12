@@ -29,6 +29,22 @@ function systemAdminRoutes({ repo, config }) {
     if (Object.keys(req.query).length) v.invalid();
     res.json({ businesses: await service.listBusinesses(req.auth) });
   });
+  router.get('/admin/billing', async (req, res) => {
+    if (Object.keys(req.query).length) v.invalid();
+    res.json(await service.listBilling(req.auth));
+  });
+  router.patch('/admin/businesses/:id/plan', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['planCode', 'nextDueDate']);
+    res.json({ subscription: await service.setBusinessPlan(req.auth, v.id(req.params.id), data.planCode, data.nextDueDate) });
+  });
+  router.get('/admin/businesses/:id/payments', async (req, res) => {
+    if (Object.keys(req.query).length) v.invalid();
+    res.json({ payments: await service.listSubscriptionPayments(req.auth, v.id(req.params.id)) });
+  });
+  router.post('/admin/businesses/:id/payments', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['amount', 'paymentDate']);
+    res.status(201).json(await service.recordSubscriptionPayment(req.auth, v.id(req.params.id), data.amount, data.paymentDate));
+  });
   router.post('/admin/support-session', middleware.csrf, async (req, res) => {
     const data = v.body(req.body, ['businessId']);
     const metadata = { ip: req.ip.slice(0, 45), agent: (req.get('User-Agent') || '').slice(0, 512) };

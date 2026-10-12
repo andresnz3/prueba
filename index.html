@@ -74,6 +74,7 @@
                 <div class="system-admin-tabs" role="tablist" aria-label="Secciones de administración">
                     <button id="systemAdminBusinessesTab" class="btn btn-primary" type="button" role="tab" aria-selected="true" aria-controls="systemAdminBusinessesPanel">Negocios</button>
                     <button id="systemAdminUsersTab" class="btn btn-secondary" type="button" role="tab" aria-selected="false" aria-controls="systemAdminUsersPanel">Usuarios</button>
+                    <button id="systemAdminBillingTab" class="btn btn-secondary" type="button" role="tab" aria-selected="false" aria-controls="systemAdminBillingPanel">Planes y pagos</button>
                 </div>
                 <section id="systemAdminBusinessesPanel" class="system-admin-panel" role="tabpanel" aria-labelledby="systemAdminBusinessesTab">
                     <h2>Negocios</h2>
@@ -95,6 +96,19 @@
                     </form>
                     <p class="system-admin-help">Los nombres de usuario deben ser únicos entre todos los negocios. El rol VENDEDOR necesita autorización del administrador del negocio para acceder a Caja.</p>
                     <div class="table-container system-admin-table-wrap"><table><thead><tr><th>Usuario</th><th>Nombre</th><th>Negocio</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="systemAdminUsersBody"></tbody></table></div>
+                </section>
+                <section id="systemAdminBillingPanel" class="system-admin-panel hidden" role="tabpanel" aria-labelledby="systemAdminBillingTab" aria-hidden="true">
+                    <div class="system-admin-billing-heading"><div><h2>Planes y pagos</h2><p class="system-admin-help">Los pagos se registran en USD. Los planes locales no generan vencimientos ni recordatorios.</p></div></div>
+                    <div class="system-admin-billing-summary" aria-label="Resumen de planes y pagos">
+                        <article><span>Negocios activos</span><strong id="systemAdminBillingActive">0</strong></article>
+                        <article><span>Planes locales</span><strong id="systemAdminBillingLocal">0</strong></article>
+                        <article><span>Planes mensuales</span><strong id="systemAdminBillingMonthly">0</strong></article>
+                        <article><span>Pagos por vencer</span><strong id="systemAdminBillingDue">0</strong></article>
+                        <article><span>Pagos vencidos</span><strong id="systemAdminBillingOverdue">0</strong></article>
+                    </div>
+                    <p id="systemAdminBillingReminder" class="system-admin-reminder hidden" role="status" aria-live="polite"></p>
+                    <p id="systemAdminBillingEmpty" class="system-admin-help hidden">Asigna un plan mensual y una fecha de vencimiento para activar los recordatorios.</p>
+                    <div class="table-container system-admin-table-wrap system-admin-billing-table-wrap"><table><thead><tr><th>Negocio</th><th>Plan actual</th><th>Estado de pago</th><th>Próximo vencimiento</th><th>Último pago</th><th>Acciones</th></tr></thead><tbody id="systemAdminBillingBody"></tbody></table></div>
                 </section>
             </div>
             <div id="salesView" class="view-panel">
@@ -935,6 +949,24 @@
                 <div class="modal-actions">
                     <button id="systemAdminDeleteCancelBtn" type="button" class="btn btn-secondary">Cancelar</button>
                     <button id="systemAdminDeleteConfirmBtn" type="submit" class="btn btn-danger">Eliminar</button>
+                </div>
+            </form>
+        </section>
+    </div>
+
+    <div id="systemAdminPaymentModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="systemAdminPaymentTitle" aria-describedby="systemAdminPaymentDescription">
+        <div class="modal-overlay"></div>
+        <section class="modal-card system-admin-payment-card">
+            <h2 id="systemAdminPaymentTitle" tabindex="-1">Registrar pago</h2>
+            <p id="systemAdminPaymentDescription" class="system-admin-delete-message"></p>
+            <form id="systemAdminPaymentForm" novalidate>
+                <div class="form-group"><label for="systemAdminPaymentAmount">Importe (USD)</label><input id="systemAdminPaymentAmount" type="number" min="0.01" max="9999999999.99" step="0.01" inputmode="decimal" required aria-describedby="systemAdminPaymentError"></div>
+                <div class="form-group"><label for="systemAdminPaymentDate">Fecha del pago</label><input id="systemAdminPaymentDate" type="date" required aria-describedby="systemAdminPaymentError"></div>
+                <p id="systemAdminPaymentError" class="message error hidden" role="alert" aria-live="assertive"></p>
+                <div class="system-admin-payment-history"><h3>Pagos recientes</h3><ul id="systemAdminPaymentHistory"><li>No hay pagos registrados.</li></ul></div>
+                <div class="modal-actions">
+                    <button id="systemAdminPaymentCancelBtn" type="button" class="btn btn-secondary">Cerrar</button>
+                    <button id="systemAdminPaymentSubmitBtn" type="submit" class="btn btn-primary">Guardar pago</button>
                 </div>
             </form>
         </section>

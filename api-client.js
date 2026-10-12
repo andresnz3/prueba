@@ -90,6 +90,11 @@
     BUSINESS_DELETE_PROTECTED: 'No se puede eliminar el negocio principal del sistema.',
     BUSINESS_HAS_DATA: 'No se puede eliminar porque el negocio ya tiene información registrada. Puede suspenderlo.',
     BUSINESS_DELETE_CONFIRMATION_REQUIRED: 'Eliminación cancelada. Debes escribir exactamente ELIMINAR.',
+    SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED: 'La gestión de planes y pagos necesita la migración 006 aprobada. Consulta al administrador del sistema.',
+    BUSINESS_PLAN_INVALID: 'Selecciona uno de los planes disponibles.',
+    BUSINESS_PLAN_NOT_MONTHLY: 'Solo se pueden registrar pagos para planes conectados mensuales.',
+    PAYMENT_AMOUNT_INVALID: 'Ingresa un importe en USD mayor que cero y con hasta dos decimales.',
+    PAYMENT_DATE_FUTURE: 'La fecha del pago no puede estar en el futuro.',
     SYSTEM_ADMIN_PROTECTED: 'La cuenta del dueño del sistema no se puede desactivar desde este panel.',
     USER_NOT_FOUND: 'No existe un usuario con ese nombre.',
     USERNAME_AMBIGUOUS: 'Este usuario está registrado en varios negocios. Cambia uno de los nombres de usuario con un administrador.',
@@ -201,7 +206,8 @@
         const error = new ApiError(code, response.status);
         const serverMessage = data?.error?.message;
         const businessDeleteCodes = ['BUSINESS_NOT_FOUND', 'BUSINESS_DELETE_PROTECTED', 'BUSINESS_HAS_DATA', 'BUSINESS_DELETE_CONFIRMATION_REQUIRED'];
-        if (businessDeleteCodes.includes(code) && typeof serverMessage === 'string' && serverMessage.trim() && serverMessage.length <= 500) error.message = serverMessage.trim();
+        const businessPlanCodes = ['SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED', 'BUSINESS_PLAN_INVALID', 'BUSINESS_PLAN_NOT_MONTHLY', 'PAYMENT_AMOUNT_INVALID', 'PAYMENT_DATE_FUTURE'];
+        if ((businessDeleteCodes.includes(code) || businessPlanCodes.includes(code)) && typeof serverMessage === 'string' && serverMessage.trim() && serverMessage.length <= 500) error.message = serverMessage.trim();
         else if (typeof receivedCode === 'string' && !Object.prototype.hasOwnProperty.call(messages, code)) error.message = 'El servidor devolvi\u00f3 el error ' + code + '.';
         error.field = data?.error?.field;
         if (error.code === 'TOO_MANY_ATTEMPTS') { error.retryAfter = Number(response.headers.get('Retry-After')) || 60; error.message = 'Demasiados intentos. Intenta nuevamente en ' + error.retryAfter + ' segundos.'; }
@@ -432,6 +438,43 @@
       await this.#write('/admin/support-session/end', 'POST', {});
       this.#support = null;
       await this.me();
+    }
+    async adminBilling() {
+      this.#requireSystemAdmin();
+      const value = await this.#request('/admin/billing');
+      const planCodes = ['LOCAL', 'CONECTADO_BASICO', 'CONECTADO_PREMIUM'];
+      const statuses = ['UNASSIGNED', 'NOT_APPLICABLE', 'DATE_PENDING', 'OVERDUE', 'DUE_TODAY', 'DUE_SOON', 'CURRENT'];
+      const summaryFields = ['activeBusinesses', 'localPlans', 'monthlyPlans', 'paymentsDueSoon', 'paymentsOverdue', 'unassignedPlans'];
+      const date = candidate => candidate === null || /^\d{4}-\d{2}-\d{2}$/.test(candidate || '');
+      if (!value || !Array.isArray(value.plans) || !Array.isArray(value.businesses) || !value.summary || !summaryFields.every(key => Number.isSafeInteger(value.summary[key]) && value.summary[key] >= 0) || !date(value.today)) throw new ApiError('INVALID_RESPONSE');
+      if (!value.plans.every(plan => planCodes.includes(plan.code) && typeof plan.name === 'string' && typeof plan.monthly === 'boolean' && typeof plan.reminders === 'boolean' && Number.isSafeInteger(plan.includedUsers))) throw new ApiError('INVALID_RESPONSE');
+      for (const business of value.businesses) {
+        if (!/^[1-9]\d{0,19}$/.test(business.id || '') || typeof business.name !== 'string' || !['ACTIVE', 'INACTIVE'].includes(business.status) || !Number.isSafeInteger(business.userCount) || !(business.planCode === null || planCodes.includes(business.planCode)) || typeof business.planName !== 'string' || typeof business.monthly !== 'boolean' || !date(business.nextDueDate) || !statuses.includes(business.paymentStatus) || !(business.lastPayment === null || (date(business.lastPayment.date) && /^\d+\.\d{2}$/.test(business.lastPayment.amount || '')))) throw new ApiError('INVALID_RESPONSE');
+      }
+      const reminder = value.reminder;
+      if (reminder !== null && (!reminder || !/^[1-9]\d{0,19}$/.test(reminder.businessId || '') || typeof reminder.businessName !== 'string' || !date(reminder.dueDate) || !Number.isSafeInteger(reminder.daysUntil) || reminder.daysUntil < 0 || reminder.daysUntil > 7)) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async setAdminBusinessPlan(id, planCode, nextDueDate) {
+      this.#requireSystemAdmin();
+      if (typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id) || !['LOCAL', 'CONECTADO_BASICO', 'CONECTADO_PREMIUM'].includes(planCode) || !(nextDueDate === null || nextDueDate === '' || /^\d{4}-\d{2}-\d{2}$/.test(nextDueDate))) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/admin/businesses/' + encodeURIComponent(id) + '/plan', 'PATCH', { planCode, nextDueDate: nextDueDate || null });
+      if (value?.subscription?.businessId !== id || value.subscription.planCode !== planCode || (planCode === 'LOCAL' && value.subscription.nextDueDate !== null) || (value.subscription.nextDueDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(value.subscription.nextDueDate))) throw new ApiError('INVALID_RESPONSE');
+      return value.subscription;
+    }
+    async adminSubscriptionPayments(id) {
+      this.#requireSystemAdmin();
+      if (typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id)) throw new ApiError('INVALID_INPUT');
+      const value = await this.#request('/admin/businesses/' + encodeURIComponent(id) + '/payments');
+      if (!Array.isArray(value?.payments) || !value.payments.every(payment => /^[1-9]\d{0,19}$/.test(payment.id || '') && /^\d+\.\d{2}$/.test(payment.amount || '') && /^\d{4}-\d{2}-\d{2}$/.test(payment.paymentDate || ''))) throw new ApiError('INVALID_RESPONSE');
+      return value.payments;
+    }
+    async recordAdminSubscriptionPayment(id, data) {
+      this.#requireSystemAdmin();
+      if (typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id) || !data || typeof data.amount !== 'string' || !/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/.test(data.amount) || !/^\d{4}-\d{2}-\d{2}$/.test(data.paymentDate || '')) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/admin/businesses/' + encodeURIComponent(id) + '/payments', 'POST', data);
+      if (!value?.payment || !/^[1-9]\d{0,19}$/.test(value.payment.id || '') || !/^\d+\.\d{2}$/.test(value.payment.amount || '') || value.payment.currency !== 'USD' || value.payment.paymentDate !== data.paymentDate || !value.subscription || value.subscription.businessId !== id || !/^\d{4}-\d{2}-\d{2}$/.test(value.subscription.nextDueDate || '')) throw new ApiError('INVALID_RESPONSE');
+      return value;
     }
     async adminBusinesses() {
       this.#requireSystemAdmin();

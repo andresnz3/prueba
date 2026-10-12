@@ -3,6 +3,7 @@ const { hashPassword } = require('./passwords');
 const { randomToken, hashToken } = require('./tokens');
 const { publicUser } = require('../repositories/auth');
 const { httpError } = require('../middleware/errors');
+const billingValues = require('./system-admin-billing-values');
 
 const isSystemAdmin = auth => auth?.username === 'andres' && auth.role === 'ADMIN' && String(auth.business_id) === '1';
 const requireSystemAdmin = auth => { if (!isSystemAdmin(auth)) throw httpError(403, 'SYSTEM_ADMIN_REQUIRED'); };
@@ -14,8 +15,124 @@ const operationalTables = [
   'pos_operations'
 ];
 const removableConfigurationTables = ['business_settings'];
+const PLAN_CATALOG = Object.freeze([
+  Object.freeze({ code: 'LOCAL', name: 'Local (pago único)', billingType: 'Pago único', monthly: false, reminders: false, includedUsers: 1 }),
+  Object.freeze({ code: 'CONECTADO_BASICO', name: 'Conectado Básico', billingType: 'Mensual', monthly: true, reminders: true, includedUsers: 2 }),
+  Object.freeze({ code: 'CONECTADO_PREMIUM', name: 'Conectado Premium', billingType: 'Mensual', monthly: true, reminders: true, includedUsers: 10 })
+]);
+const planByCode = new Map(PLAN_CATALOG.map(plan => [plan.code, plan]));
 
 function createSystemAdminService(repo) {
+  async function assertBillingTables() {
+    const rows = await repo.rows(repo.pool, 'SELECT TABLE_NAME AS tableName FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?, ?)', ['business_subscriptions', 'business_subscription_payments']);
+    if (rows.length !== 2) throw httpError(503, 'SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED');
+  }
+
+  function billingBusiness(row, today, soon) {
+    const plan = planByCode.get(row.plan_code) || null;
+    const nextDueDate = billingValues.dateOnly(row.next_due_date);
+    const daysUntilDue = nextDueDate ? billingValues.dayDifference(today, nextDueDate) : null;
+    let paymentStatus = 'UNASSIGNED';
+    if (plan && !plan.monthly) paymentStatus = 'NOT_APPLICABLE';
+    else if (plan?.monthly) {
+      if (!nextDueDate) paymentStatus = 'DATE_PENDING';
+      else if (daysUntilDue < 0) paymentStatus = 'OVERDUE';
+      else if (daysUntilDue === 0) paymentStatus = 'DUE_TODAY';
+      else if (daysUntilDue <= soon) paymentStatus = 'DUE_SOON';
+      else paymentStatus = 'CURRENT';
+    }
+    return {
+      id: String(row.id), name: row.name, status: row.status, userCount: Number(row.user_count || 0),
+      planCode: plan?.code || null, planName: plan?.name || 'Sin asignar', monthly: Boolean(plan?.monthly),
+      includedUsers: plan?.includedUsers ?? null, nextDueDate, daysUntilDue, paymentStatus,
+      lastPayment: row.last_payment_date ? { date: billingValues.dateOnly(row.last_payment_date), amount: String(row.last_payment_amount) } : null
+    };
+  }
+
+  async function listBilling(auth) {
+    requireSystemAdmin(auth);
+    await assertBillingTables();
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const soon = 7;
+    const businesses = await repo.rows(repo.pool,
+      `SELECT b.id, b.name, b.status, COUNT(DISTINCT u.id) AS user_count,
+        s.plan_code, s.next_due_date,
+        (SELECT p.payment_date FROM business_subscription_payments p WHERE p.business_id = b.id ORDER BY p.payment_date DESC, p.id DESC LIMIT 1) AS last_payment_date,
+        (SELECT p.amount FROM business_subscription_payments p WHERE p.business_id = b.id ORDER BY p.payment_date DESC, p.id DESC LIMIT 1) AS last_payment_amount
+       FROM businesses b
+       LEFT JOIN users u ON u.business_id = b.id
+       LEFT JOIN business_subscriptions s ON s.business_id = b.id
+       GROUP BY b.id, b.name, b.status, s.plan_code, s.next_due_date
+       ORDER BY b.id`, []);
+    const records = businesses.map(row => billingBusiness(row, today, soon));
+    const reminder = records.filter(item => item.monthly && item.daysUntilDue !== null && item.daysUntilDue >= 0 && item.daysUntilDue <= soon)
+      .sort((a, b) => a.daysUntilDue - b.daysUntilDue || a.id.localeCompare(b.id))[0] || null;
+    return {
+      plans: PLAN_CATALOG.map(plan => ({ ...plan })),
+      summary: {
+        activeBusinesses: records.filter(item => item.status === 'ACTIVE').length,
+        localPlans: records.filter(item => item.planCode === 'LOCAL').length,
+        monthlyPlans: records.filter(item => item.monthly).length,
+        paymentsDueSoon: records.filter(item => item.paymentStatus === 'DUE_SOON' || item.paymentStatus === 'DUE_TODAY').length,
+        paymentsOverdue: records.filter(item => item.paymentStatus === 'OVERDUE').length,
+        unassignedPlans: records.filter(item => item.paymentStatus === 'UNASSIGNED').length
+      },
+      today, reminder: reminder ? { businessId: reminder.id, businessName: reminder.name, dueDate: reminder.nextDueDate, daysUntil: reminder.daysUntilDue } : null,
+      businesses: records
+    };
+  }
+
+  async function setBusinessPlan(auth, businessId, planCode, nextDueDate) {
+    requireSystemAdmin(auth);
+    await assertBillingTables();
+    const plan = planByCode.get(planCode);
+    if (!plan) throw httpError(400, 'BUSINESS_PLAN_INVALID');
+    let dueDate = null;
+    if (nextDueDate !== null && nextDueDate !== '') dueDate = billingValues.date(nextDueDate, 'nextDueDate');
+    if (!plan.monthly) dueDate = null;
+    return repo.transaction(async db => {
+      const [business] = await repo.rows(db, 'SELECT id FROM businesses WHERE id = ? FOR UPDATE', [businessId]);
+      if (!business) throw httpError(404, 'BUSINESS_NOT_FOUND');
+      await repo.rows(db, 'INSERT INTO business_subscriptions (business_id, plan_code, next_due_date, updated_at) VALUES (?, ?, ?, UTC_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE plan_code = VALUES(plan_code), next_due_date = VALUES(next_due_date), updated_at = UTC_TIMESTAMP(3)', [businessId, plan.code, dueDate]);
+      await repo.audit(db, auth, 'UPDATE_BUSINESS_PLAN', 'businesses', businessId, { planCode: plan.code, nextDueDate: dueDate });
+      return { businessId: String(businessId), planCode: plan.code, planName: plan.name, nextDueDate: dueDate, monthly: plan.monthly };
+    });
+  }
+
+  async function listSubscriptionPayments(auth, businessId) {
+    requireSystemAdmin(auth);
+    await assertBillingTables();
+    const [business] = await repo.rows(repo.pool, 'SELECT id FROM businesses WHERE id = ?', [businessId]);
+    if (!business) throw httpError(404, 'BUSINESS_NOT_FOUND');
+    const payments = await repo.rows(repo.pool, 'SELECT id, amount, payment_date, created_at FROM business_subscription_payments WHERE business_id = ? ORDER BY payment_date DESC, id DESC LIMIT 50', [businessId]);
+    return payments.map(payment => ({ id: String(payment.id), amount: String(payment.amount), paymentDate: billingValues.dateOnly(payment.payment_date), createdAt: payment.created_at }));
+  }
+
+  async function recordSubscriptionPayment(auth, businessId, amount, paymentDate) {
+    requireSystemAdmin(auth);
+    await assertBillingTables();
+    const validAmount = billingValues.amount(amount);
+    const validDate = billingValues.date(paymentDate, 'paymentDate');
+    const today = new Date().toISOString().slice(0, 10);
+    if (validDate > today) throw httpError(400, 'PAYMENT_DATE_FUTURE');
+    const nextDueDate = billingValues.addMonth(validDate);
+    return repo.transaction(async db => {
+      const [business] = await repo.rows(db, 'SELECT id FROM businesses WHERE id = ? FOR UPDATE', [businessId]);
+      if (!business) throw httpError(404, 'BUSINESS_NOT_FOUND');
+      const [subscription] = await repo.rows(db, 'SELECT plan_code FROM business_subscriptions WHERE business_id = ? FOR UPDATE', [businessId]);
+      const plan = planByCode.get(subscription?.plan_code);
+      if (!plan?.monthly) throw httpError(409, 'BUSINESS_PLAN_NOT_MONTHLY');
+      const result = await repo.rows(db, 'INSERT INTO business_subscription_payments (business_id, amount, payment_date, created_by_user_id, created_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(3))', [businessId, validAmount, validDate, auth.user_id]);
+      await repo.rows(db, 'UPDATE business_subscriptions SET next_due_date = ?, updated_at = UTC_TIMESTAMP(3) WHERE business_id = ?', [nextDueDate, businessId]);
+      await repo.audit(db, auth, 'RECORD_SUBSCRIPTION_PAYMENT', 'businesses', businessId, { paymentId: String(result.insertId), amount: validAmount, currency: 'USD', paymentDate: validDate, nextDueDate });
+      return {
+        payment: { id: String(result.insertId), amount: validAmount, currency: 'USD', paymentDate: validDate },
+        subscription: { businessId: String(businessId), planCode: plan.code, planName: plan.name, nextDueDate }
+      };
+    });
+  }
+
   async function listBusinesses(auth) {
     requireSystemAdmin(auth);
     const businesses = await repo.rows(repo.pool, 'SELECT b.id, b.name, b.status, b.created_at, COUNT(u.id) AS user_count FROM businesses b LEFT JOIN users u ON u.business_id = b.id GROUP BY b.id, b.name, b.status, b.created_at ORDER BY b.id', []);
@@ -161,7 +278,11 @@ function createSystemAdminService(repo) {
     });
   }
 
-  return { isSystemAdmin, listBusinesses, createBusiness, setBusinessStatus, deleteBusiness, listBusinessUsers, createBusinessUser, setUserStatus, startSupportSession, endSupportSession };
+  return {
+    isSystemAdmin, listBusinesses, listBilling, setBusinessPlan, listSubscriptionPayments, recordSubscriptionPayment,
+    createBusiness, setBusinessStatus, deleteBusiness, listBusinessUsers, createBusinessUser, setUserStatus,
+    startSupportSession, endSupportSession
+  };
 }
 
 module.exports = { createSystemAdminService, isSystemAdmin, requireSystemAdmin };
