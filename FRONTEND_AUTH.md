@@ -2,6 +2,12 @@
 
 Ventas de contado, caja e historial conectados utilizan MySQL. Ver [PHASE53.md](PHASE53.md) y [contrato de ventas](backend/SALES.md). Las secciones de fases anteriores son historicas; sus bloqueos de ventas/caja quedan sustituidos por 5.3.
 
+## Administración privada del sistema
+
+El menú **Administración** solo se muestra al usuario cuya sesión autenticada resuelve `username=andres`, `role=ADMIN` y `businessId=1`. La navegación manual desde URL o `renderPosView` no abre la vista para otras cuentas; el backend vuelve a verificar la identidad en cada endpoint. El panel lista, crea, activa y suspende negocios, y gestiona usuarios globales por negocio. Los cambios requieren CSRF. El modo local conserva su navegación y almacenamiento.
+
+La primera versión usa las tablas actuales. Los roles disponibles son `ADMIN` y `VENDEDOR`; `VENDEDOR` no recibe acceso automático a Caja. No se puede suspender el negocio 1 ni desactivar la cuenta temporal del dueño.
+
 # Estado actualizado: fase 5.2
 
 Productos, stock y Kardex conectados usan MySQL. Ventas, compras, caja y otras escrituras pendientes estan bloqueadas; no se usan los productos operativos de Dexie como respaldo ni se implementa sincronizacion. Ver [PHASE52.md](PHASE52.md) y [backend/INVENTORY.md](backend/INVENTORY.md) para el contrato, los limites y los resultados actuales. El contrato siguiente documenta la base de autenticacion de la fase 5.1; sus notas anteriores sobre persistencia operativa en Dexie en modo conectado quedan sustituidas por esta etapa.

@@ -48,6 +48,9 @@ test("login correcto permite entrar al sistema", async ({ page }) => {
 
   await expect(page.locator("#loginScreen")).toBeHidden();
   await expect(page.locator("#app")).toBeVisible();
+  await expect(page.locator('#navSystemAdminBtn')).toBeHidden();
+  const adminViewVisible = await page.evaluate(() => { window.renderPosView('systemAdminView'); return !document.getElementById('systemAdminView').classList.contains('hidden'); });
+  expect(adminViewVisible).toBe(false);
 });
 
 test("después del login se muestra el módulo de ventas", async ({ page }) => {

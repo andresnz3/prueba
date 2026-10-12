@@ -18,6 +18,7 @@ function authRoutes({ repo, auth, users, config }) {
   function setSession(res, result) {
     res.cookie(config.cookieName, result.token, { ...m.cookieOptions, expires: result.expires });
     res.clearCookie(config.preCookieName, m.cookieOptions);
+    res.clearCookie(config.supportCookieName, m.cookieOptions);
     return { user: result.user, expiresAt: result.expires, csrfToken: sessionCsrf(config.secret, hashToken(result.token)) };
   }
   router.get('/auth/csrf', async (req, res) => {
@@ -35,7 +36,10 @@ function authRoutes({ repo, auth, users, config }) {
     res.json(setSession(res, result));
   });
   router.use(m.authenticate);
-  router.get('/auth/me', (req, res) => res.json({ user: publicUser(req.auth), expiresAt: req.auth.expires_at, csrfToken: sessionCsrf(config.secret, req.auth.token_hash) }));
+  router.get('/auth/me', (req, res) => {
+    const owner = req.ownerAuth || req.auth;
+    res.json({ user: publicUser(owner), ...(req.support ? { support: req.support } : {}), expiresAt: owner.expires_at, csrfToken: sessionCsrf(config.secret, owner.token_hash) });
+  });
   router.get('/auth/access/:module', async (req, res) => {
     const module = v.moduleName(req.params.module);
     if (!await auth.canAccess(req.auth, module)) throw httpError(403, 'MODULE_FORBIDDEN');
@@ -49,10 +53,10 @@ function authRoutes({ repo, auth, users, config }) {
   });
   router.use(m.csrf);
   router.post('/auth/logout', async (req, res) => {
-    v.body(req.body, []); await auth.logout(req.auth);
-    res.clearCookie(config.cookieName, m.cookieOptions); res.status(204).end();
+    v.body(req.body, []); await auth.logout(req.ownerAuth || req.auth);
+    res.clearCookie(config.cookieName, m.cookieOptions); res.clearCookie(config.supportCookieName, m.cookieOptions); res.status(204).end();
   });
-  router.post('/auth/renew', async (req, res) => { v.body(req.body, []); res.json(setSession(res, await auth.renew(req.auth))); });
+  router.post('/auth/renew', async (req, res) => { v.body(req.body, []); res.json(setSession(res, await auth.renew(req.ownerAuth || req.auth))); });
   router.post('/auth/authorizations', rate, async (req, res) => {
     const data = v.body(req.body, ['module', 'adminUsername', 'adminPassword']);
     const module = v.moduleName(data.module); if (module === 'sales') v.invalid();

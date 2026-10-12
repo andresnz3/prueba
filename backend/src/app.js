@@ -25,6 +25,7 @@ function createApp({ config, checkDatabase, authentication }) {
   app.use(express.json({ limit: config.jsonLimit, strict: true, inflate: false }));
   app.use('/api', healthRoutes(checkDatabase));
   if (authentication) {
+    app.use('/api', require('./routes/system-admin').systemAdminRoutes(authentication));
     app.use('/api', require('./routes/inventory').inventoryRoutes(authentication,inventory));
     const customers = require('./services/customer-accounts').createCustomerService(authentication);
     const sales = require('./services/sales').createSalesService({ ...authentication, creditSnapshot: customers.creditSnapshot });

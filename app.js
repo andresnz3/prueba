@@ -5,6 +5,7 @@ window.onerror = function(msg, url, lineNo) { console.error("Error detectado:", 
 
 const connectedMode = new URLSearchParams(location.search).get('mode') === 'connected';
 let DEFAULT_BUSINESS_ID = '00000000-0000-0000-0000-000000000000';
+let CONNECTED_EFFECTIVE_BUSINESS_ID = null;
 function createPosDatabase(name) {
 const db = new Dexie(name);
 db.version(9).stores({
@@ -558,7 +559,7 @@ document.getElementById("logoutBtn")?.addEventListener("click", async () => {
     app?.classList.add("hidden"); loginScreen?.classList.remove("hidden"); document.getElementById("loginForm")?.reset(); cart = []; resetearDescuentoVenta(); actualizarCarrito(); unlockedModuleId = null; currentUser = null;
 });
 
-const NAV_MAP = { "navSalesBtn": "salesView", "navInventoryBtn": "inventoryView", "navPurchasesBtn": "purchasesView", "navPayablesBtn": "payablesView", "navClientsBtn": "clientsView", "navSuppliersBtn": "suppliersView", "navHistoryBtn": "historyView", "navCajaBtn": "cajaView", "navGastosBtn": "gastosView", "navReportesBtn": "reportesView", "navDashboardBtn": "dashboardView", "navConfigBtn": "configView" };
+const NAV_MAP = { "navSalesBtn": "salesView", "navInventoryBtn": "inventoryView", "navPurchasesBtn": "purchasesView", "navPayablesBtn": "payablesView", "navClientsBtn": "clientsView", "navSuppliersBtn": "suppliersView", "navHistoryBtn": "historyView", "navCajaBtn": "cajaView", "navGastosBtn": "gastosView", "navReportesBtn": "reportesView", "navDashboardBtn": "dashboardView", "navConfigBtn": "configView", "navSystemAdminBtn": "systemAdminView" };
 
 document.querySelectorAll("nav .nav-btn").forEach(btn => { 
     btn.addEventListener("click", (e) => { 
@@ -586,6 +587,7 @@ function switchView(viewId) {
     return renderPosView(viewId);
 }
 function renderPosView(viewId) {
+    if (viewId === "systemAdminView" && !window.PosConnected?.canAccessSystemAdmin?.()) return false;
     window.PosAutocomplete?.closeAll();
     clearTimeout(salesFocusTimer);
     if (viewId !== "salesView") detenerCamaraVentas();
@@ -2744,15 +2746,19 @@ window.generarExcelDashboard = function() {
 };
 // Puente de estado del POS: no concede permisos en la API.
 window.PosRuntime = Object.freeze({
-    salesInput() { return { businessId: DEFAULT_BUSINESS_ID, userId: currentUser?.id, role: currentUser?.role, items: cart.map(item => ({ productId: String(item.id), quantity: String(item.cantidad) })), priceType: buyerType === 'retail' ? 'RETAIL' : 'WHOLESALE', paymentMethod: paymentMethod.toUpperCase(), clientId: paymentMethod === 'credit' ? (document.getElementById('creditClientSelect')?.value || null) : null, discountPercent: document.querySelector('input[name="descApplies"][value="si"]')?.checked ? document.getElementById('descuentoPct').value : '0', detail: document.getElementById('saleDetailInput').value.trim() }; },
-    setSales(values) { if (!connectedMode || values.some(value => value.businessId !== DEFAULT_BUSINESS_ID)) throw new Error('Negocio incorrecto'); salesHistory = values; actualizarTablaHistorial(); },
-    publishSale(value) { if (!connectedMode || value.businessId !== DEFAULT_BUSINESS_ID) throw new Error('Negocio incorrecto'); const index = salesHistory.findIndex(sale => sale.id === value.id); if (index < 0) salesHistory.push(value); else salesHistory[index] = value; actualizarTablaHistorial(); },
-    setCash(values) { if (!connectedMode || values.some(value => value.businessId !== DEFAULT_BUSINESS_ID)) throw new Error('Negocio incorrecto'); cajaHistorial = values; cajaActual = values.find(value => value.estado === 'abierta') || null; },
+    salesInput() { return { businessId: connectedMode ? CONNECTED_EFFECTIVE_BUSINESS_ID : DEFAULT_BUSINESS_ID, userId: currentUser?.id, role: currentUser?.role, items: cart.map(item => ({ productId: String(item.id), quantity: String(item.cantidad) })), priceType: buyerType === 'retail' ? 'RETAIL' : 'WHOLESALE', paymentMethod: paymentMethod.toUpperCase(), clientId: paymentMethod === 'credit' ? (document.getElementById('creditClientSelect')?.value || null) : null, discountPercent: document.querySelector('input[name="descApplies"][value="si"]')?.checked ? document.getElementById('descuentoPct').value : '0', detail: document.getElementById('saleDetailInput').value.trim() }; },
+    setSales(values) { if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto'); salesHistory = values; actualizarTablaHistorial(); },
+    publishSale(value) { if (!connectedMode || value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID) throw new Error('Negocio incorrecto'); const index = salesHistory.findIndex(sale => sale.id === value.id); if (index < 0) salesHistory.push(value); else salesHistory[index] = value; actualizarTablaHistorial(); },
+    setCash(values) { if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto'); cajaHistorial = values; cajaActual = values.find(value => value.estado === 'abierta') || null; },
     setUser(user) { currentUser = user ? { ...user, displayName: user.fullName } : null; },
     setProducts(values) {
-        if (!connectedMode || values.some(value => value.businessId !== DEFAULT_BUSINESS_ID)) throw new Error('Negocio incorrecto');
+        if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto');
         products = values.map(value => ({ ...value, business_id: value.businessId }));
         actualizarTablaInventario(); actualizarCatalogo();
+    },
+    setEffectiveBusinessId(businessId) {
+        if (!connectedMode || typeof businessId !== 'string' || !/^[1-9]\d{0,19}$/.test(businessId)) throw new Error('Negocio conectado incorrecto');
+        CONNECTED_EFFECTIVE_BUSINESS_ID = businessId;
     },
     openProductEditor: showProductEditor,
     productImage: () => tempImageBase64,

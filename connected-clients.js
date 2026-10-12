@@ -37,7 +37,7 @@
     body.replaceChildren();
     if (!clients.length) { const row = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 7; cell.className = 'text-center'; cell.textContent = 'No hay clientes que coincidan.'; row.append(cell); body.append(row); return; }
     for (const client of clients) {
-      if (client.businessId !== window.PosRuntime.salesInput().businessId) throw new window.PosApiError('INVALID_RESPONSE');
+      if (client.businessId !== window.PosConnected.effectiveBusinessId()) throw new window.PosApiError('INVALID_RESPONSE');
       const row = document.createElement('tr'); row.dataset.clientId = client.id;
       const nameCell = appendCell(row, client.name), clientName = document.createElement('strong');
       clientName.textContent = client.name; nameCell.replaceChildren(clientName);

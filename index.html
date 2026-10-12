@@ -32,7 +32,7 @@
         <header class="topbar">
             <div class="brand"><div class="brand-icon">D</div><div><h2 id="brandNameDisplay">POS Distribuidora</h2><span id="roleBadge">Usuario</span></div></div>
             <nav class="nav-tabs">
-                <button id="navUsersBtn" class="nav-btn hidden">&#128101; Usuarios</button>
+                <button id="navSystemAdminBtn" class="nav-btn hidden" type="button"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 12h4"></path><path d="M10 8h4"></path><path d="M10 16h4"></path><path d="M18 21V5a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16"></path><path d="M2 21h20"></path><path d="M6 21v-3"></path><path d="M18 21v-3"></path></svg>Administración</button>
                 <button id="navSalesBtn" class="nav-btn active">🛒 Venta</button>
                 <button id="navInventoryBtn" class="nav-btn">📦 Productos</button>
                 <button id="navPurchasesBtn" class="nav-btn">📥 Compras</button>
@@ -44,6 +44,7 @@
                 <button id="navGastosBtn" class="nav-btn">🧾 Gastos</button>
                 <button id="navReportesBtn" class="nav-btn">📈 Reportes</button>
                 <button id="navDashboardBtn" class="nav-btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="12" x2="12" y1="20" y2="10"></line><line x1="18" x2="18" y1="20" y2="4"></line><line x1="6" x2="6" y1="20" y2="16"></line></svg>Dashboard</button>
+                <button id="navUsersBtn" class="nav-btn hidden">&#128101; Usuarios</button>
                 <button id="navConfigBtn" class="nav-btn">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: sub; margin-right: 5px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
     Configuración
@@ -57,9 +58,45 @@
         </header>
 
         <main class="main-container">
+            <div id="supportSessionBanner" class="support-session-banner hidden" role="status" aria-live="polite">
+                <p><strong>Administrando negocio:</strong> <span id="supportSessionBusinessName"></span></p>
+                <button id="supportSessionEndBtn" class="btn btn-secondary" type="button">Volver al panel del sistema</button>
+            </div>
             <div id="saleOperationMessage" class="message error hidden" role="alert"></div><button type="button" id="recoverSaleBtn" class="btn btn-secondary hidden"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg> Comprobar operación</button>
             <p id="connectedNotice" class="message hidden" role="status"></p>
             <div id="usersView" class="view-panel hidden"><h2>Usuarios del negocio</h2><p>Solo los administradores pueden gestionar estas cuentas.</p><p id="usersMessage" role="status"></p><button id="refreshUsersBtn" class="btn btn-secondary" type="button">Actualizar lista</button><div class="users-pagination"><button id="previousUsersBtn" class="btn btn-secondary" type="button" disabled>Anterior</button><span>Página <span id="usersPage">1</span></span><button id="nextUsersBtn" class="btn btn-secondary" type="button" disabled>Siguiente</button></div><form id="createUserForm"><div class="user-fields"><div class="form-group"><label for="newUsername">Usuario</label><input id="newUsername" required pattern="[A-Za-z0-9_.-]{3,100}" maxlength="100" autocomplete="off"></div><div class="form-group"><label for="newFullName">Nombre completo</label><input id="newFullName" required maxlength="160" autocomplete="off"></div><div class="form-group"><label for="newUserPassword">Contraseña inicial</label><input id="newUserPassword" type="password" minlength="12" required autocomplete="new-password"></div><div class="form-group"><label for="newUserRole">Rol</label><select id="newUserRole"><option value="VENDEDOR">VENDEDOR</option><option value="ADMIN">ADMIN</option></select></div></div><button class="btn btn-primary" type="submit">Crear usuario</button></form><div class="table-container"><table><thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="usersTableBody"></tbody></table></div><form id="userPasswordForm" class="hidden"><h3 id="passwordUserLabel">Cambiar contraseña</h3><label for="changedUserPassword">Nueva contraseña (mínimo 12 caracteres)</label><input id="changedUserPassword" type="password" required minlength="12" autocomplete="new-password"><button class="btn btn-primary" type="submit">Guardar contraseña</button><button id="cancelPasswordBtn" class="btn btn-secondary" type="button">Cancelar</button></form></div>
+            <div id="systemAdminView" class="view-panel hidden" aria-labelledby="systemAdminTitle">
+                <header class="page-heading system-admin-heading">
+                    <div><p class="system-admin-eyebrow">Panel privado del dueño</p><h1 id="systemAdminTitle"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 12h4"></path><path d="M10 8h4"></path><path d="M10 16h4"></path><path d="M18 21V5a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16"></path><path d="M2 21h20"></path><path d="M6 21v-3"></path><path d="M18 21v-3"></path></svg>Administración del sistema</h1></div>
+                    <button id="systemAdminRefreshBtn" class="btn btn-secondary" type="button">Actualizar</button>
+                </header>
+                <p id="systemAdminMessage" class="message hidden" role="status" aria-live="polite"></p>
+                <div class="system-admin-tabs" role="tablist" aria-label="Secciones de administración">
+                    <button id="systemAdminBusinessesTab" class="btn btn-primary" type="button" role="tab" aria-selected="true" aria-controls="systemAdminBusinessesPanel">Negocios</button>
+                    <button id="systemAdminUsersTab" class="btn btn-secondary" type="button" role="tab" aria-selected="false" aria-controls="systemAdminUsersPanel">Usuarios</button>
+                </div>
+                <section id="systemAdminBusinessesPanel" class="system-admin-panel" role="tabpanel" aria-labelledby="systemAdminBusinessesTab">
+                    <h2>Negocios</h2>
+                    <form id="systemAdminBusinessForm" class="system-admin-form">
+                        <div class="form-group"><label for="systemAdminBusinessName">Nombre del negocio</label><input id="systemAdminBusinessName" maxlength="160" required autocomplete="organization"></div>
+                        <button class="btn btn-primary" type="submit">Crear negocio</button>
+                    </form>
+                    <div class="table-container system-admin-table-wrap"><table><thead><tr><th>ID</th><th>Negocio</th><th>Estado</th><th>Usuarios</th><th>Acciones</th></tr></thead><tbody id="systemAdminBusinessesBody"></tbody></table></div>
+                </section>
+                <section id="systemAdminUsersPanel" class="system-admin-panel hidden" role="tabpanel" aria-labelledby="systemAdminUsersTab" aria-hidden="true">
+                    <h2>Usuarios globales</h2>
+                    <div class="form-group system-admin-business-select"><label for="systemAdminUserBusinessId">Negocio</label><select id="systemAdminUserBusinessId" required></select></div>
+                    <form id="systemAdminUserForm" class="system-admin-form">
+                        <div class="form-group"><label for="systemAdminUsername">Usuario</label><input id="systemAdminUsername" required pattern="[A-Za-z0-9_.-]{3,100}" maxlength="100" autocomplete="off"></div>
+                        <div class="form-group"><label for="systemAdminFullName">Nombre completo</label><input id="systemAdminFullName" required maxlength="160" autocomplete="name"></div>
+                        <div class="form-group"><label for="systemAdminPassword">Contraseña inicial</label><input id="systemAdminPassword" type="password" minlength="12" required autocomplete="new-password"></div>
+                        <div class="form-group"><label for="systemAdminRole">Rol</label><select id="systemAdminRole"><option value="VENDEDOR">Vendedor / cajero (VENDEDOR)</option><option value="ADMIN">Administrador (ADMIN)</option></select></div>
+                        <button class="btn btn-primary" type="submit">Crear usuario</button>
+                    </form>
+                    <p class="system-admin-help">Los nombres de usuario deben ser únicos entre todos los negocios. El rol VENDEDOR necesita autorización del administrador del negocio para acceder a Caja.</p>
+                    <div class="table-container system-admin-table-wrap"><table><thead><tr><th>Usuario</th><th>Nombre</th><th>Negocio</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="systemAdminUsersBody"></tbody></table></div>
+                </section>
+            </div>
             <div id="salesView" class="view-panel">
                 <div class="workspace-layout">
                     <section class="workspace">
@@ -882,6 +919,25 @@
                 <button type="button" id="strictConfirmBtn" class="btn btn-danger">Confirmar</button>
             </div>
         </div>
+    </div>
+
+    <div id="systemAdminDeleteModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="systemAdminDeleteTitle" aria-describedby="systemAdminDeleteMessage">
+        <div class="modal-overlay"></div>
+        <section class="modal-card system-admin-delete-card">
+            <h2 id="systemAdminDeleteTitle" tabindex="-1">Eliminar negocio</h2>
+            <p id="systemAdminDeleteMessage" class="system-admin-delete-message"></p>
+            <form id="systemAdminDeleteForm" novalidate>
+                <div class="form-group">
+                    <label for="systemAdminDeleteInput">Confirmación</label>
+                    <input id="systemAdminDeleteInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ELIMINAR" aria-describedby="systemAdminDeleteError" data-initial-focus>
+                </div>
+                <p id="systemAdminDeleteError" class="message error hidden" role="alert" aria-live="assertive"></p>
+                <div class="modal-actions">
+                    <button id="systemAdminDeleteCancelBtn" type="button" class="btn btn-secondary">Cancelar</button>
+                    <button id="systemAdminDeleteConfirmBtn" type="submit" class="btn btn-danger">Eliminar</button>
+                </div>
+            </form>
+        </section>
     </div>
 
     <div id="customAlertModal" class="modal hidden" style="z-index: 9999;"><div class="modal-overlay"></div><div class="modal-card" style="width: 350px; text-align: center; border-top: 5px solid #0066cc;"><h2 style="color: #0066cc; margin-bottom: 10px; font-size: 1.3rem;">Aviso del Sistema</h2><p id="customAlertMessage" style="margin-bottom: 20px; font-size: 1rem; color: #444; line-height: 1.4;"></p><button type="button" class="btn btn-primary btn-full close-modal-btn">Entendido</button></div></div>

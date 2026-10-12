@@ -321,7 +321,7 @@
     const row = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = columns; cell.className = 'text-center'; cell.textContent = message; row.append(cell); body.replaceChildren(row);
   }
   function renderCentral(overview) {
-    if (!overview || overview.businessId !== state().businessId) throw new window.PosApiError('INVALID_RESPONSE');
+    if (!overview || overview.businessId !== state().businessId) throw new window.PosApiError('CASH_RESPONSE_INVALID');
     salesFlow = overview.salesFlow; renderCheckoutMode();
     el('cajaCentralBox').classList.remove('hidden');
     const scopeLabel = overview.currentCashSessionId ? 'sesión actual' : 'historial general';

@@ -16,6 +16,16 @@ function createAuthRepository(pool, config) {
   async function session(tokenHash) { return (await rows(pool, selectSession + 'AND s.token_hash = ?', [config.absoluteSeconds, tokenHash]))[0]; }
   async function tenant(auth, work) {
     return transaction(pool, async db => {
+      if (auth.support) {
+        const actor = auth.support.actor;
+        const [owner] = await rows(db, selectSession + 'AND s.business_id = ? AND s.id = ? AND s.token_hash = ? FOR UPDATE', [config.absoluteSeconds, actor.business_id, actor.session_id, actor.token_hash]);
+        if (!owner || owner.username !== 'andres' || owner.role !== 'ADMIN' || String(owner.business_id) !== '1') throw httpError(401, 'SUPPORT_OWNER_SESSION_INVALID');
+        try { await lockBusiness(db, auth.business_id); }
+        catch (error) { if (error.publicCode === 'INVALID_SESSION') throw httpError(403, 'SUPPORT_BUSINESS_UNAVAILABLE'); throw error; }
+        const [current] = await rows(db, selectSession + 'AND s.business_id = ? AND s.id = ? AND s.token_hash = ? AND u.role = \'ADMIN\' FOR UPDATE', [config.absoluteSeconds, auth.business_id, auth.session_id, auth.token_hash]);
+        if (!current) throw httpError(401, 'INVALID_SUPPORT_SESSION');
+        return work(db, { ...current, support: { ...auth.support, actor: owner } });
+      }
       await lockBusiness(db, auth.business_id);
       const [current] = await rows(db, selectSession + 'AND s.business_id = ? AND s.id = ? AND s.token_hash = ? FOR UPDATE', [config.absoluteSeconds, auth.business_id, auth.session_id, auth.token_hash]);
       if (!current) throw httpError(401, 'INVALID_SESSION');
@@ -23,7 +33,15 @@ function createAuthRepository(pool, config) {
     });
   }
   async function audit(db, auth, action, entity, entityId, details) {
-    await rows(db, 'INSERT INTO audit_logs (business_id, user_id, action, entity, entity_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))', [auth.business_id, auth.user_id, action, entity, String(entityId), JSON.stringify(details)]);
+    const auditDetails = auth.support ? {
+      ...(details && typeof details === 'object' && !Array.isArray(details) ? details : { value: details }),
+      supportSession: {
+        actor: { userId: String(auth.support.actor.user_id), businessId: String(auth.support.actor.business_id), username: auth.support.actor.username, role: auth.support.actor.role },
+        operatedAs: { userId: String(auth.user_id), businessId: String(auth.business_id), username: auth.username },
+        expiresAt: new Date(auth.support.expiresAt).toISOString()
+      }
+    } : details;
+    await rows(db, 'INSERT INTO audit_logs (business_id, user_id, action, entity, entity_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))', [auth.business_id, auth.user_id, action, entity, String(entityId), JSON.stringify(auditDetails)]);
   }
   async function revokeUser(db, businessId, userId) {
     await rows(db, 'DELETE FROM session_authorizations WHERE business_id = ? AND (granted_by_user_id = ? OR session_id IN (SELECT id FROM sessions WHERE business_id = ? AND user_id = ?))', [businessId, userId, businessId, userId]);

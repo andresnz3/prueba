@@ -15,6 +15,7 @@ function readAuthConfig(env = process.env) {
   if (absoluteSeconds < sessionSeconds) throw new Error('SESSION_MAX_SECONDS debe superar SESSION_TTL_SECONDS');
   return { secret, production, sameSite, sessionSeconds, absoluteSeconds,
     grantSeconds: seconds('AUTHORIZATION_TTL_SECONDS', 300, 30, 900),
+    supportCookieName: production ? '__Host-pos_support_session' : 'pos_support_session',
     rateWindowSeconds: seconds('AUTH_RATE_WINDOW_SECONDS', 900, 60, 3600),
     rateMax: seconds('AUTH_RATE_MAX', 10, 3, 100),
     cookieName: production ? '__Host-pos_session' : 'pos_session',

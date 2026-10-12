@@ -21,6 +21,21 @@ Todas las rutas tienen prefijo /api. IDs BIGINT se envian como cadenas decimales
 | PATCH /users/:id | ADMIN + CSRF; uno o mas de {fullName, role, active} | 200; actualiza cuenta propia del negocio |
 | PUT /users/:id/password | ADMIN + CSRF; {password} | 204; cambia contrasena y revoca sesiones/permisos |
 
+## Panel privado del dueño del sistema
+
+Estas rutas son independientes de la administracion de usuarios de cada negocio. Requieren una sesion autenticada cuyo usuario, leido de MySQL en `req.auth`, sea exactamente `username=andres`, `role=ADMIN` y `business_id=1`. Las lecturas requieren sesion; las escrituras requieren tambien CSRF. Cualquier otra identidad recibe 403 `SYSTEM_ADMIN_REQUIRED`.
+
+| Metodo y ruta | Cuerpo | Funcion |
+| --- | --- | --- |
+| GET /admin/businesses | — | Lista negocios y cantidad de usuarios |
+| POST /admin/businesses | {name} | Crea un negocio activo |
+| PATCH /admin/businesses/:id/status | {status: ACTIVE\|INACTIVE} | Activa o suspende un negocio |
+| GET /admin/businesses/:id/users | — | Lista usuarios del negocio seleccionado |
+| POST /admin/businesses/:id/users | {username, fullName, password, role} | Crea ADMIN o VENDEDOR activo |
+| PATCH /admin/users/:id/status | {active: boolean} | Activa o desactiva un usuario |
+
+La creación desde el panel rechaza usernames ya usados en cualquier negocio, según la resolución global del login. Suspender un negocio o desactivar un usuario revoca sus sesiones y autorizaciones; no se permite suspender el negocio 1 ni desactivar la cuenta temporal `andres`. El último ADMIN activo de cada negocio tampoco se puede desactivar. El esquema actual admite estas operaciones sin migración. No existe un rol `CAJERO` separado: la opción de vendedor/cajero usa `VENDEDOR`, cuyo acceso a Caja sigue dependiendo de la autorización del ADMIN de ese negocio.
+
 Roles exactos: ADMIN y VENDEDOR. ADMIN solo controla su negocio. VENDEDOR accede directamente a sales. Los modulos restringidos son inventory, purchases, payables, clients, suppliers, history, cash, expenses, reports, dashboard, settings. El mapeo futuro de UI es salesView->sales, inventoryView->inventory, purchasesView->purchases, payablesView->payables, clientsView->clients, suppliersView->suppliers, historyView->history, cajaView->cash, gastosView->expenses, reportesView->reports, dashboardView->dashboard, configView->settings. Se usa un administrador identificado por adminUsername porque puede haber varios y cada concesion debe identificar al otorgante. La autorizacion no incluye administracion de usuarios.
 
 El otorgante debe ser ADMIN activo del mismo negocio; se comprueba su hash Argon2id. Se registra el otorgante en session_authorizations y audit_logs. Solo hay un modulo temporal por sesion, durante 300 s por defecto y nunca mas alla del vencimiento de la sesion. Renovar sesion obliga a solicitar de nuevo la autorizacion. Salir con DELETE o navegar usando enter revoca el permiso anterior. Un cambio de contrasena/rol/estado del otorgante elimina sus concesiones. Los permisos legacy con granted_by_user_id NULL no se aceptan. requireModule en middleware/authentication.js queda disponible para proteger futuros endpoints de operaciones; inventory se implementa en esta etapa segun INVENTORY.md; los demas modulos siguen pendientes.

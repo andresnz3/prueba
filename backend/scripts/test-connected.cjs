@@ -25,7 +25,7 @@ async function runBrowserTests({ config, database, playwrightArgs = [] }) {
     const passwordHash = await hashPassword(fixturePassword);
     const business = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Browser fixture A'])).insertId);
     const businessB = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Browser fixture B'])).insertId);
-    for (const [businessId, username, role] of [[business, 'browseradmin', 'ADMIN'], [business, 'browserseller', 'VENDEDOR'], [businessB, 'otheradmin', 'ADMIN']]) await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessId, username, username, passwordHash, role]);
+    for (const [businessId, username, role] of [[business, 'browseradmin', 'ADMIN'], [business, 'andres', 'ADMIN'], [business, 'browserseller', 'VENDEDOR'], [businessB, 'otheradmin', 'ADMIN']]) await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessId, username, username, passwordHash, role]);
     let apiUrl;
     const root = resolve(__dirname, '../..');
     const publicFiles = new Set(['index.html', 'app.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'connected-expenses.js', 'connected-purchases.js', 'connected-reports.js', 'dashboard-period.js', 'period-filters.js', 'connected-dashboard.js', 'local-cash-flow.js']);
