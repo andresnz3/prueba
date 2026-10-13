@@ -78,6 +78,7 @@ function puedeAccederAVista(viewId) {
     if (connectedMode) return window.PosConnected?.canView(viewId) || false;
     if (viewId === "salesView") return true;
     if (!currentUser) return false;
+    if (viewId === "upgradeView") return true;
     if (currentUser.role === "gestor") return true;
     return viewId === unlockedModuleId;
 }
@@ -459,7 +460,7 @@ document.querySelectorAll(".close-modal-btn").forEach(btn => {
     btn.addEventListener("click", (e) => { 
         const modal = e.target.closest(".modal"); 
         if (!modal) return;
-        const modalesLectura = ["customAlertModal", "customConfirmModal", "strictConfirmModal", "ticketModal", "statementModal", "kardexModal", "authModal", "supplierModal", "cierreCajaModal", "detalleCierreCajaModal"];
+        const modalesLectura = ["customAlertModal", "customConfirmModal", "strictConfirmModal", "ticketModal", "statementModal", "kardexModal", "authModal", "supplierModal", "cierreCajaModal", "detalleCierreCajaModal", "migrationRequestModal"];
         if (modalesLectura.includes(modal.id)) {
             modal.classList.add("hidden");
             if (modal.id === "supplierModal") modal.style.zIndex = ""; 
@@ -559,11 +560,93 @@ document.getElementById("logoutBtn")?.addEventListener("click", async () => {
     app?.classList.add("hidden"); loginScreen?.classList.remove("hidden"); document.getElementById("loginForm")?.reset(); cart = []; resetearDescuentoVenta(); actualizarCarrito(); unlockedModuleId = null; currentUser = null;
 });
 
-const NAV_MAP = { "navSalesBtn": "salesView", "navInventoryBtn": "inventoryView", "navPurchasesBtn": "purchasesView", "navPayablesBtn": "payablesView", "navClientsBtn": "clientsView", "navSuppliersBtn": "suppliersView", "navHistoryBtn": "historyView", "navCajaBtn": "cajaView", "navGastosBtn": "gastosView", "navReportesBtn": "reportesView", "navDashboardBtn": "dashboardView", "navConfigBtn": "configView", "navSystemAdminBtn": "systemAdminView" };
+function makeMigrationRequestText(businessName, counts) {
+    return [
+        "Solicitud de migración a modo conectado.",
+        `Negocio: ${businessName}`,
+        `Productos: ${counts.products}`,
+        `Clientes: ${counts.clients}`,
+        `Proveedores: ${counts.suppliers}`,
+        `Ventas: ${counts.sales}`,
+        "Deseo recibir información para migrar mi sistema local al modo conectado."
+    ].join("\n");
+}
+
+async function openMigrationRequest() {
+    if (connectedMode || !localDB) return;
+    const modal = document.getElementById("migrationRequestModal");
+    const status = document.getElementById("migrationRequestStatus");
+    const fallback = document.getElementById("migrationCopyFallback");
+    if (!modal || !status) return;
+
+    const businessName = String(sysConfig.name || "").trim() || "No configurado";
+    const summary = { products: 0, clients: 0, suppliers: 0, sales: 0 };
+    document.getElementById("migrationBusinessName").textContent = businessName;
+    for (const id of ["migrationProductsCount", "migrationClientsCount", "migrationSuppliersCount", "migrationSalesCount"]) {
+        document.getElementById(id).textContent = "…";
+    }
+    document.getElementById("migrationRequestText").value = "";
+    fallback?.classList.add("hidden");
+    status.textContent = "Consultando el resumen local…";
+    modal.classList.remove("hidden");
+
+    let sourceMessage = "Resumen calculado desde los datos locales de este dispositivo.";
+    try {
+        // Dexie count() reads the local tables and does not write or enqueue anything.
+        [summary.products, summary.clients, summary.suppliers, summary.sales] = await Promise.all([
+            localDB.products.count(),
+            localDB.clients.count(),
+            localDB.suppliers.count(),
+            localDB.sales.count()
+        ]);
+    } catch (error) {
+        console.warn("No se pudo actualizar el resumen local de migración:", error);
+        summary.products = products.length;
+        summary.clients = clients.length;
+        summary.suppliers = suppliers.length;
+        summary.sales = salesHistory.length;
+        sourceMessage = "Se muestra el último resumen disponible en memoria local.";
+    }
+
+    const displayCount = value => Number(value || 0).toLocaleString("es-NI");
+    document.getElementById("migrationProductsCount").textContent = displayCount(summary.products);
+    document.getElementById("migrationClientsCount").textContent = displayCount(summary.clients);
+    document.getElementById("migrationSuppliersCount").textContent = displayCount(summary.suppliers);
+    document.getElementById("migrationSalesCount").textContent = displayCount(summary.sales);
+    document.getElementById("migrationRequestText").value = makeMigrationRequestText(businessName, summary);
+    status.textContent = sourceMessage;
+}
+
+document.getElementById("requestMigrationBtn")?.addEventListener("click", openMigrationRequest);
+document.getElementById("requestMigrationFooterBtn")?.addEventListener("click", openMigrationRequest);
+document.getElementById("copyMigrationSummaryBtn")?.addEventListener("click", async () => {
+    if (connectedMode) return;
+    const textArea = document.getElementById("migrationRequestText");
+    const status = document.getElementById("migrationRequestStatus");
+    const fallback = document.getElementById("migrationCopyFallback");
+    if (!textArea?.value || !status) return;
+    try {
+        if (!navigator.clipboard?.writeText) throw new Error("Clipboard API is unavailable");
+        await navigator.clipboard.writeText(textArea.value);
+        fallback?.classList.add("hidden");
+        status.textContent = "Resumen copiado al portapapeles.";
+    } catch {
+        fallback?.classList.remove("hidden");
+        textArea.focus();
+        textArea.select();
+        status.textContent = "No fue posible copiar automáticamente. El resumen está seleccionado para que lo copies manualmente.";
+    }
+});
+
+const navUpgradeBtn = document.getElementById("navUpgradeBtn");
+navUpgradeBtn?.classList.toggle("hidden", connectedMode);
+
+const NAV_MAP = { "navSalesBtn": "salesView", "navInventoryBtn": "inventoryView", "navPurchasesBtn": "purchasesView", "navPayablesBtn": "payablesView", "navClientsBtn": "clientsView", "navSuppliersBtn": "suppliersView", "navHistoryBtn": "historyView", "navCajaBtn": "cajaView", "navGastosBtn": "gastosView", "navReportesBtn": "reportesView", "navDashboardBtn": "dashboardView", "navUpgradeBtn": "upgradeView", "navConfigBtn": "configView", "navSystemAdminBtn": "systemAdminView" };
 
 document.querySelectorAll("nav .nav-btn").forEach(btn => { 
     btn.addEventListener("click", (e) => { 
         const navBtn = e.target.closest('.nav-btn'); if (!navBtn) return; const targetView = NAV_MAP[navBtn.id]; if (!targetView) return;
+        if (targetView === "upgradeView" && connectedMode) return;
         if (connectedMode) { window.PosConnected.navigate(targetView); return; }
         if(puedeAccederAVista(targetView)) { switchView(targetView); } else { pendingAdminView = targetView; document.getElementById("authModal")?.classList.remove("hidden"); setTimeout(() => { if (topOpenModal()?.id === "authModal") document.getElementById("gestorPassword")?.focus(); }, 100); }
     }); 
@@ -583,6 +666,7 @@ document.getElementById("authForm")?.addEventListener("submit", (e) => {
 
 let salesFocusTimer = null;
 function switchView(viewId) {
+    if (connectedMode && viewId === "upgradeView") return false;
     if (connectedMode) return window.PosConnected.navigate(viewId);
     return renderPosView(viewId);
 }

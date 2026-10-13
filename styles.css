@@ -461,6 +461,99 @@ input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
 .invoice-view--ticket-output .invoice-total-box > div { gap: 6px; padding: 3px 0; font-size: 9px !important; }
 .invoice-view--ticket-output .invoice-total-row strong { font-size: 13px; }
 .invoice-view--ticket-output .invoice-note { margin-top: 5px; padding: 5px; }
+/* ============================ MEJORAR A CONECTADO ============================ */
+#upgradeView { background: var(--background); }
+.upgrade-page { width: min(1160px, 100%); margin: 0 auto; padding: 30px clamp(18px, 4vw, 48px) 40px; }
+.upgrade-hero { position: relative; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(240px, .85fr); gap: 24px; align-items: center; overflow: hidden; min-height: 260px; padding: clamp(24px, 4vw, 42px); border: 1px solid #d6e4f5; border-radius: 18px; background: linear-gradient(118deg, #eff6ff 0%, #f8fbff 62%, #edf7ff 100%); box-shadow: var(--shadow-sm); }
+.upgrade-hero-copy { position: relative; z-index: 1; max-width: 620px; }
+.upgrade-eyebrow { display: inline-flex; align-items: center; gap: 7px; color: #1d4ed8; font-size: .74rem; font-weight: 700; letter-spacing: .08em; line-height: 1.35; text-transform: uppercase; }
+.upgrade-hero h1 { max-width: 600px; margin: 10px 0 10px; color: #142b4b; font-size: clamp(1.8rem, 3vw, 2.45rem); font-weight: 750; letter-spacing: -.04em; line-height: 1.12; }
+.upgrade-hero-copy > p { max-width: 570px; margin-bottom: 20px; color: #52657d; font-size: 1rem; line-height: 1.6; }
+.upgrade-cta { min-height: 46px; padding-inline: 19px; box-shadow: 0 6px 14px rgb(37 99 235 / 18%); }
+.upgrade-cta .ic, #copyMigrationSummaryBtn .ic { width: 18px; height: 18px; }
+.upgrade-hero-art { position: relative; width: min(100%, 360px); height: 205px; justify-self: center; }
+.upgrade-device { position: absolute; border: 1px solid #bdd1ea; border-radius: 11px; background: #fff; box-shadow: 0 12px 28px rgb(50 85 128 / 12%); }
+.upgrade-device-desktop { right: 24px; bottom: 16px; width: 245px; height: 154px; padding: 18px 9px 12px; }
+.upgrade-device-desktop::after { position: absolute; right: 77px; bottom: -8px; left: 77px; height: 7px; border: 1px solid #bdd1ea; border-top: 0; border-radius: 0 0 4px 4px; background: #e9f1fb; content: ""; }
+.upgrade-device > span { position: absolute; top: 7px; width: 4px; height: 4px; border-radius: 50%; background: #cbd8e8; }
+.upgrade-device > span:nth-child(1) { left: 10px; }.upgrade-device > span:nth-child(2) { left: 18px; }.upgrade-device > span:nth-child(3) { left: 26px; }
+.upgrade-device-screen { display: flex; height: 100%; align-items: flex-end; gap: 8px; padding: 13px; border-radius: 5px; background: linear-gradient(145deg, #f7faff, #edf4ff); }
+.upgrade-device-screen i { display: block; flex: 1; height: 40%; border-radius: 4px 4px 2px 2px; background: #93b9ee; }
+.upgrade-device-screen i:nth-child(2) { height: 68%; background: #6e9fe3; }.upgrade-device-screen i:nth-child(3) { height: 87%; background: #3976c9; }
+.upgrade-device-tablet { z-index: 1; top: 30px; left: 14px; width: 134px; height: 112px; padding: 15px 7px 8px; border-radius: 10px; transform: rotate(-5deg); }
+.upgrade-device-tablet .upgrade-device-screen { gap: 5px; padding: 9px; }
+.upgrade-device-phone { z-index: 2; top: 28px; right: 5px; width: 67px; height: 120px; padding: 14px 5px 7px; border-radius: 13px; transform: rotate(5deg); }
+.upgrade-device-phone > span { top: 6px; left: 29px; width: 9px; height: 3px; border-radius: 4px; }
+.upgrade-device-phone .upgrade-device-screen { flex-direction: column; align-items: stretch; justify-content: flex-end; gap: 6px; padding: 8px 5px; }
+.upgrade-device-phone .upgrade-device-screen i { width: 100%; height: 13px; flex: none; border-radius: 3px; }
+.upgrade-device-phone .upgrade-device-screen i:nth-child(2) { height: 22px; }
+.upgrade-art-check { position: absolute; z-index: 3; right: 38px; bottom: 6px; display: grid; width: 38px; height: 38px; place-items: center; border: 3px solid #fff; border-radius: 50%; background: #16865b; box-shadow: 0 4px 12px rgb(15 23 42 / 15%); }
+.upgrade-art-check svg { width: 20px; height: 20px; fill: none; stroke: #fff; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.upgrade-section { margin-top: 35px; }
+.upgrade-section-heading { margin-bottom: 18px; }
+.upgrade-section-heading h2 { margin: 7px 0 5px; color: #182b45; font-size: clamp(1.3rem, 2.3vw, 1.65rem); letter-spacing: -.025em; }
+.upgrade-section-heading > p { color: var(--text-muted); font-size: .9rem; }
+.upgrade-benefit-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
+.upgrade-benefit-card { min-width: 0; padding: 18px; border: 1px solid #e0e7f0; border-radius: 13px; background: #fff; box-shadow: var(--shadow-sm); }
+.upgrade-card-icon { display: grid; width: 38px; height: 38px; margin-bottom: 12px; place-items: center; border: 1px solid #dbeafe; border-radius: 10px; background: #eff6ff; color: #2563eb; }
+.upgrade-card-icon .ic { width: 20px; height: 20px; }
+.upgrade-benefit-card h3 { margin-bottom: 6px; color: #1e293b; font-size: .95rem; font-weight: 700; line-height: 1.35; }
+.upgrade-benefit-card > p { min-height: 42px; color: #64748b; font-size: .83rem; line-height: 1.5; }
+.upgrade-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 13px; }
+.upgrade-tags span { padding: 4px 7px; border: 1px solid #e4eaf2; border-radius: 999px; background: #f8fafc; color: #52657d; font-size: .68rem; font-weight: 600; line-height: 1.2; }
+.upgrade-plans-section { margin-top: 39px; }
+.upgrade-plan-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: stretch; }
+.upgrade-plan-card { display: flex; min-width: 0; flex-direction: column; padding: 21px; border: 1px solid #e0e7f0; border-radius: 14px; background: #fff; box-shadow: var(--shadow-sm); }
+.upgrade-plan-label { color: #64748b; font-size: .72rem; font-weight: 700; letter-spacing: .035em; }
+.upgrade-plan-card h3 { margin-top: 5px; color: #172b46; font-size: 1.14rem; }
+.upgrade-plan-price { margin: 8px 0 14px; color: #2563eb; font-size: .92rem; font-weight: 700; }
+.upgrade-plan-card ul { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.upgrade-plan-card li { position: relative; padding-left: 21px; color: #53647a; font-size: .84rem; line-height: 1.4; }
+.upgrade-plan-card li::before { position: absolute; top: 0; left: 0; color: #16865b; font-size: 1rem; font-weight: 800; content: "✓"; }
+.upgrade-footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 30px; padding: 19px 22px; border: 1px solid #d7e5f6; border-radius: 13px; background: #eff6ff; }
+.upgrade-footer h2 { margin-bottom: 3px; color: #173456; font-size: 1rem; }
+.upgrade-footer p { color: #52657d; font-size: .82rem; }
+.migration-request-card { width: min(560px, calc(100vw - 32px)); max-width: 560px; }
+.migration-modal-icon { display: grid; width: 42px; height: 42px; margin-bottom: 12px; place-items: center; border: 1px solid #dbeafe; border-radius: 12px; background: #eff6ff; color: #2563eb; }
+.migration-modal-icon .ic { width: 22px; height: 22px; }
+.migration-request-card h2 { margin-bottom: 8px; }
+.migration-request-copy { margin-bottom: 15px; color: #526175; font-size: .88rem; line-height: 1.55; }
+.migration-request-summary { padding: 14px; border: 1px solid #e0e7f0; border-radius: 10px; background: #f8fafc; }
+.migration-business-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding-bottom: 11px; border-bottom: 1px solid #e2e8f0; }
+.migration-business-row span, .migration-count-grid span { color: #64748b; font-size: .78rem; }
+.migration-business-row strong, .migration-count-grid strong { color: #172b46; font-size: .88rem; overflow-wrap: anywhere; }
+.migration-count-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding-top: 11px; }
+.migration-count-grid > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.migration-count-grid strong { font-size: 1rem; font-variant-numeric: tabular-nums; }
+.migration-no-action { margin-top: 12px; color: #1e5e45; font-size: .82rem; font-weight: 700; }
+.migration-local-note { margin-top: 4px; color: #64748b; font-size: .76rem; line-height: 1.4; }
+.migration-request-status { min-height: 20px; margin-top: 8px; color: #526175; font-size: .78rem; }
+.migration-copy-fallback { margin-top: 8px; }
+.migration-copy-fallback label { display: block; margin-bottom: 5px; color: #334155; font-size: .78rem; font-weight: 700; }
+.migration-copy-fallback textarea { display: block; width: 100%; min-height: 120px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #172b46; font: 13px/1.45 var(--font); resize: vertical; }
+.migration-request-card .modal-actions { margin-top: 15px; }
+@media (max-width: 900px) {
+  .upgrade-benefit-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .upgrade-hero { grid-template-columns: minmax(0, 1fr) 240px; }
+}
+@media (max-width: 640px) {
+  .upgrade-page { padding: 16px 12px 28px; }
+  .upgrade-hero { grid-template-columns: minmax(0, 1fr); gap: 5px; padding: 23px 19px; }
+  .upgrade-hero h1 { font-size: 1.8rem; }
+  .upgrade-hero-copy > p { font-size: .92rem; }
+  .upgrade-hero-art { width: min(100%, 300px); height: 164px; margin-top: 6px; }
+  .upgrade-device-desktop { right: 24px; width: 218px; height: 132px; }
+  .upgrade-device-tablet { top: 27px; left: 11px; width: 116px; height: 96px; }
+  .upgrade-device-phone { top: 22px; right: 1px; width: 58px; height: 103px; }
+  .upgrade-benefit-grid, .upgrade-plan-grid { grid-template-columns: minmax(0, 1fr); }
+  .upgrade-benefit-card > p { min-height: 0; }
+  .upgrade-section { margin-top: 28px; }
+  .upgrade-plans-section { margin-top: 31px; }
+  .upgrade-footer { align-items: stretch; flex-direction: column; padding: 17px; }
+  .upgrade-footer .btn { width: 100%; }
+  .migration-count-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 12px; }
+}
+
 /* ============================ RESPONSIVO ============================ */
 @media (max-width: 1024px) {
   html, body { height: auto; overflow: visible; }

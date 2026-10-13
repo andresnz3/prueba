@@ -45,6 +45,7 @@
                 <button id="navReportesBtn" class="nav-btn">📈 Reportes</button>
                 <button id="navDashboardBtn" class="nav-btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="12" x2="12" y1="20" y2="10"></line><line x1="18" x2="18" y1="20" y2="4"></line><line x1="6" x2="6" y1="20" y2="16"></line></svg>Dashboard</button>
                 <button id="navUsersBtn" class="nav-btn hidden">&#128101; Usuarios</button>
+                <button id="navUpgradeBtn" class="nav-btn hidden" type="button" aria-controls="upgradeView"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path><path d="M9 7h6M9 17h6M9 12h6"></path></svg>Mejorar a conectado</button>
                 <button id="navConfigBtn" class="nav-btn">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: sub; margin-right: 5px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
     Configuración
@@ -65,6 +66,47 @@
             <div id="saleOperationMessage" class="message error hidden" role="alert"></div><button type="button" id="recoverSaleBtn" class="btn btn-secondary hidden"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg> Comprobar operación</button>
             <p id="connectedNotice" class="message hidden" role="status"></p>
             <div id="usersView" class="view-panel hidden"><h2>Usuarios del negocio</h2><p>Solo los administradores pueden gestionar estas cuentas.</p><p id="usersMessage" role="status"></p><button id="refreshUsersBtn" class="btn btn-secondary" type="button">Actualizar lista</button><div class="users-pagination"><button id="previousUsersBtn" class="btn btn-secondary" type="button" disabled>Anterior</button><span>Página <span id="usersPage">1</span></span><button id="nextUsersBtn" class="btn btn-secondary" type="button" disabled>Siguiente</button></div><form id="createUserForm"><div class="user-fields"><div class="form-group"><label for="newUsername">Usuario</label><input id="newUsername" required pattern="[A-Za-z0-9_.-]{3,100}" maxlength="100" autocomplete="off"></div><div class="form-group"><label for="newFullName">Nombre completo</label><input id="newFullName" required maxlength="160" autocomplete="off"></div><div class="form-group"><label for="newUserPassword">Contraseña inicial</label><input id="newUserPassword" type="password" minlength="12" required autocomplete="new-password"></div><div class="form-group"><label for="newUserRole">Rol</label><select id="newUserRole"><option value="VENDEDOR">VENDEDOR</option><option value="ADMIN">ADMIN</option></select></div></div><button class="btn btn-primary" type="submit">Crear usuario</button></form><div class="table-container"><table><thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="usersTableBody"></tbody></table></div><form id="userPasswordForm" class="hidden"><h3 id="passwordUserLabel">Cambiar contraseña</h3><label for="changedUserPassword">Nueva contraseña (mínimo 12 caracteres)</label><input id="changedUserPassword" type="password" required minlength="12" autocomplete="new-password"><button class="btn btn-primary" type="submit">Guardar contraseña</button><button id="cancelPasswordBtn" class="btn btn-secondary" type="button">Cancelar</button></form></div>
+            <div id="upgradeView" class="view-panel hidden">
+                <div class="upgrade-page">
+                    <header class="upgrade-hero">
+                        <div class="upgrade-hero-copy">
+                            <span class="upgrade-eyebrow">Una nueva forma de trabajar</span>
+                            <h1>Mejora tu sistema a modo conectado</h1>
+                            <p>Trabaja desde varios dispositivos, protege tus datos y administra usuarios por negocio.</p>
+                            <button id="requestMigrationBtn" class="btn btn-primary upgrade-cta" type="button"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 20h14"></path></svg>Solicitar migración</button>
+                        </div>
+                        <div class="upgrade-hero-art" aria-hidden="true">
+                            <div class="upgrade-device upgrade-device-desktop"><span></span><span></span><span></span><div class="upgrade-device-screen"><i></i><i></i><i></i></div></div>
+                            <div class="upgrade-device upgrade-device-tablet"><span></span><div class="upgrade-device-screen"><i></i><i></i><i></i></div></div>
+                            <div class="upgrade-device upgrade-device-phone"><span></span><div class="upgrade-device-screen"><i></i><i></i></div></div>
+                            <div class="upgrade-art-check"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg></div>
+                        </div>
+                    </header>
+
+                    <section class="upgrade-section" aria-labelledby="upgradeBenefitsTitle">
+                        <div class="upgrade-section-heading"><span class="upgrade-eyebrow">Más alcance para tu negocio</span><h2 id="upgradeBenefitsTitle">Todo tu negocio, mejor conectado</h2><p>Conoce lo que puedes hacer con una configuración acompañada.</p></div>
+                        <div class="upgrade-benefit-grid">
+                            <article class="upgrade-benefit-card"><span class="upgrade-card-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4M7 8h5"></path></svg></span><h3>Acceso desde varios dispositivos</h3><p>Usa tu sistema desde computadora, celular o tablet.</p><div class="upgrade-tags"><span>Computadora</span><span>Celular</span><span>Tablet</span></div></article>
+                            <article class="upgrade-benefit-card"><span class="upgrade-card-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"></path><path d="m9 12 2 2 4-4"></path></svg></span><h3>Datos respaldados en servidor</h3><p>MySQL en la nube y menos riesgo de pérdida local.</p><div class="upgrade-tags"><span>Respaldo</span><span>MySQL</span></div></article>
+                            <article class="upgrade-benefit-card"><span class="upgrade-card-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M20 8v6M23 11h-6"></path></svg></span><h3>Usuarios por negocio</h3><p>Administra administradores, vendedores y permisos por rol.</p><div class="upgrade-tags"><span>Administrador</span><span>Vendedores</span><span>Roles</span></div></article>
+                            <article class="upgrade-benefit-card"><span class="upgrade-card-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"></path></svg></span><h3>Control desde cualquier lugar</h3><p>Revisa ventas, inventario y reportes estés donde estés.</p><div class="upgrade-tags"><span>Ventas</span><span>Inventario</span><span>Reportes</span></div></article>
+                            <article class="upgrade-benefit-card"><span class="upgrade-card-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"></path><path d="m8 12 2.5 2.5L16 9"></path></svg></span><h3>Migración asistida</h3><p>Revisamos productos, clientes, proveedores, inventario, ventas e historial si aplica.</p><div class="upgrade-tags"><span>Revisión guiada</span><span>Sin cambios automáticos</span></div></article>
+                            <article class="upgrade-benefit-card"><span class="upgrade-card-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 1-3 3H5a3 3 0 0 0 0 6h1a3 3 0 0 1 3 3v1a3 3 0 0 0 6 0v-1a3 3 0 0 1 3-3h1a3 3 0 0 0 0-6h-1a3 3 0 0 1-3-3V5a3 3 0 0 0-3-3Z"></path><path d="M12 10v4M10 12h4"></path></svg></span><h3>Soporte y configuración</h3><p>Dejamos el negocio listo para trabajar con el modo conectado.</p><div class="upgrade-tags"><span>Acompañamiento</span><span>Configuración</span></div></article>
+                        </div>
+                    </section>
+
+                    <section class="upgrade-section upgrade-plans-section" aria-labelledby="upgradePlansTitle">
+                        <div class="upgrade-section-heading"><span class="upgrade-eyebrow">Opciones para cada etapa</span><h2 id="upgradePlansTitle">Elige cómo quieres trabajar</h2><p>Conoce las modalidades disponibles para tu negocio.</p></div>
+                        <div class="upgrade-plan-grid">
+                            <article class="upgrade-plan-card"><span class="upgrade-plan-label">Para empezar conectado</span><h3>Conectado Básico</h3><p class="upgrade-plan-price">Mensualidad</p><ul><li>2 usuarios incluidos</li><li>Acceso desde varios dispositivos</li><li>Respaldo en servidor</li></ul></article>
+                            <article class="upgrade-plan-card"><span class="upgrade-plan-label">Más herramientas para tu equipo</span><h3>Conectado Estándar</h3><p class="upgrade-plan-price">Mensualidad</p><ul><li>5 usuarios incluidos</li><li>Más control para equipos en crecimiento</li><li>Reportes y soporte mensual</li></ul></article>
+                            <article class="upgrade-plan-card"><span class="upgrade-plan-label">Para una operación avanzada</span><h3>Conectado Premium</h3><p class="upgrade-plan-price">Mensualidad</p><ul><li>10 usuarios incluidos</li><li>Migración asistida</li><li>Soporte prioritario</li></ul></article>
+                        </div>
+                    </section>
+
+                    <footer class="upgrade-footer"><div><h2>¿Quieres conocer el siguiente paso?</h2><p>Solicita información y el administrador revisará contigo la migración de tu negocio.</p></div><button id="requestMigrationFooterBtn" class="btn btn-primary" type="button">Solicitar migración</button></footer>
+                </div>
+            </div>
             <div id="systemAdminView" class="view-panel hidden" aria-labelledby="systemAdminTitle">
                 <header class="page-heading system-admin-heading">
                     <div><p class="system-admin-eyebrow">Panel privado del dueño</p><h1 id="systemAdminTitle"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 12h4"></path><path d="M10 8h4"></path><path d="M10 16h4"></path><path d="M18 21V5a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16"></path><path d="M2 21h20"></path><path d="M6 21v-3"></path><path d="M18 21v-3"></path></svg>Administración del sistema</h1></div>
@@ -659,6 +701,29 @@
 
     <!-- MODALES -->
     <div id="authModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Autorización Requerida</h2><form id="authForm" onsubmit="event.preventDefault();"><div class="form-group"><label id="adminUsernameGroup" class="hidden" for="grantAdminUsername">Usuario administrador<input id="grantAdminUsername" autocomplete="off" disabled></label><label for="gestorPassword">Contraseña de gestor</label><input type="password" id="gestorPassword" placeholder="Contraseña de gestor" required style="background:#fff!important; color:#000!important;"></div><div id="authError" class="message error hidden">Contraseña incorrecta.</div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-primary">Autorizar</button></div></form></div></div>
+
+    <div id="migrationRequestModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="migrationRequestTitle">
+        <div class="modal-overlay"></div>
+        <div class="modal-card migration-request-card">
+            <span class="migration-modal-icon"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 20h14"></path></svg></span>
+            <h2 id="migrationRequestTitle" tabindex="-1" data-initial-focus>Solicitar migración a conectado</h2>
+            <p class="migration-request-copy">Para migrar tu negocio al modo conectado, contacta al administrador del sistema. La migración será revisada y ejecutada de forma asistida para evitar pérdida de información.</p>
+            <div class="migration-request-summary" aria-label="Resumen local del negocio">
+                <div class="migration-business-row"><span>Negocio</span><strong id="migrationBusinessName">—</strong></div>
+                <div class="migration-count-grid">
+                    <div><span>Productos</span><strong id="migrationProductsCount">—</strong></div>
+                    <div><span>Clientes</span><strong id="migrationClientsCount">—</strong></div>
+                    <div><span>Proveedores</span><strong id="migrationSuppliersCount">—</strong></div>
+                    <div><span>Ventas</span><strong id="migrationSalesCount">—</strong></div>
+                </div>
+            </div>
+            <p class="migration-no-action">Esta solicitud no realiza cambios automáticamente.</p>
+            <p class="migration-local-note">El resumen se consulta en este dispositivo; esta pantalla no lo envía al servidor.</p>
+            <div id="migrationRequestStatus" class="migration-request-status" role="status" aria-live="polite"></div>
+            <div id="migrationCopyFallback" class="migration-copy-fallback hidden"><label for="migrationRequestText">Copia manualmente este resumen</label><textarea id="migrationRequestText" readonly rows="6"></textarea></div>
+            <div class="modal-actions"><button id="closeMigrationRequestBtn" type="button" class="btn btn-secondary close-modal-btn">Cerrar</button><button id="copyMigrationSummaryBtn" type="button" class="btn btn-primary"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path></svg>Copiar resumen</button></div>
+        </div>
+    </div>
     
     <div id="connectedCheckoutModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="connectedCheckoutTitle">
         <div class="modal-overlay"></div>
