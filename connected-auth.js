@@ -35,13 +35,13 @@
   function syncSystemAdminAccess() {
     const allowed = isSystemAdmin();
     el('navSystemAdminBtn').classList.toggle('hidden', !allowed);
-    if (!allowed) { systemAdminReady = false; el('systemAdminView').classList.add('hidden'); }
+    if (!allowed) { systemAdminReady = false; el('systemAdminView').classList.add('hidden'); window.PosMigrationPreview.reset(); }
     return allowed;
   }
   function canAccessSystemAdmin() { return isSystemAdmin() && systemAdminReady; }
   function canView(view) { return Boolean(identity && (view === 'salesView' || (view === 'systemAdminView' && canAccessSystemAdmin()) || identity.role === 'ADMIN' || (grant?.view === view && grant.until > Date.now()))); }
   function expire(text = 'La sesión venció o fue revocada. Inicia sesión nuevamente.') {
-    generation++; identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminBilling = null; systemAdminSelectedBusinessId = ''; window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
+    generation++; identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminBilling = null; systemAdminSelectedBusinessId = ''; window.PosMigrationPreview.reset(); window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
     clearTimeout(expiryTimer); clearTimeout(grantTimer); clearPasswords();
     document.querySelectorAll('.modal, .view-panel').forEach(node => node.classList.add('hidden'));
     el('app').classList.add('hidden'); el('app').inert = false; el('loginScreen').classList.remove('hidden');
@@ -401,9 +401,9 @@
     return systemAdminUsers;
   }
   async function selectSystemAdminTab(tab) {
-    if (!canAccessSystemAdmin() || !['businesses', 'users', 'billing'].includes(tab)) return;
+    if (!canAccessSystemAdmin() || !['businesses', 'users', 'billing', 'migration'].includes(tab)) return;
     systemAdminTab = tab;
-    const tabs = { businesses: 'systemAdminBusinesses', users: 'systemAdminUsers', billing: 'systemAdminBilling' };
+    const tabs = { businesses: 'systemAdminBusinesses', users: 'systemAdminUsers', billing: 'systemAdminBilling', migration: 'systemAdminMigration' };
     for (const [key, prefix] of Object.entries(tabs)) {
       const selected = key === tab;
       el(prefix + 'Tab').setAttribute('aria-selected', String(selected));
@@ -413,6 +413,10 @@
     clearSystemAdminMessage();
     if (tab === 'users' || tab === 'billing') {
       try { await verify(); if (tab === 'users') await refreshSystemAdminUsers(); else await refreshSystemAdminBilling(); }
+      catch (failure) { error(failure, 'systemAdminMessage'); }
+    }
+    if (tab === 'migration') {
+      try { await verify(); await refreshSystemAdminBusinesses(); if (canAccessSystemAdmin()) window.PosMigrationPreview.show({ canAccess: canAccessSystemAdmin, businesses: systemAdminBusinesses }); }
       catch (failure) { error(failure, 'systemAdminMessage'); }
     }
   }
@@ -529,21 +533,23 @@
     }
   }
   el('navUsersBtn').addEventListener('click', () => navigate('usersView'));
-  const systemAdminTabs = ['businesses', 'users', 'billing'];
+  const systemAdminTabs = ['businesses', 'users', 'billing', 'migration'];
+  const systemAdminTabIds = { businesses: 'Businesses', users: 'Users', billing: 'Billing', migration: 'Migration' };
   for (const tab of systemAdminTabs) {
-    const button = el('systemAdmin' + (tab === 'businesses' ? 'Businesses' : tab === 'users' ? 'Users' : 'Billing') + 'Tab');
+    const button = el('systemAdmin' + systemAdminTabIds[tab] + 'Tab');
     button.addEventListener('keydown', event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       const current = systemAdminTabs.indexOf(tab);
       const next = event.key === 'Home' ? systemAdminTabs[0] : event.key === 'End' ? systemAdminTabs[systemAdminTabs.length - 1] : systemAdminTabs[(current + (event.key === 'ArrowRight' ? 1 : systemAdminTabs.length - 1)) % systemAdminTabs.length];
-      el('systemAdmin' + (next === 'businesses' ? 'Businesses' : next === 'users' ? 'Users' : 'Billing') + 'Tab').focus();
+      el('systemAdmin' + systemAdminTabIds[next] + 'Tab').focus();
       selectSystemAdminTab(next);
     });
   }
   el('systemAdminBusinessesTab').addEventListener('click', () => selectSystemAdminTab('businesses'));
   el('systemAdminUsersTab').addEventListener('click', () => selectSystemAdminTab('users'));
   el('systemAdminBillingTab').addEventListener('click', () => selectSystemAdminTab('billing'));
+  el('systemAdminMigrationTab').addEventListener('click', () => selectSystemAdminTab('migration'));
   el('systemAdminDeleteCancelBtn').addEventListener('click', () => closeSystemAdminDeleteModal());
   el('systemAdminPaymentCancelBtn').addEventListener('click', () => closeSystemAdminPaymentModal());
   el('systemAdminPaymentAmount').addEventListener('input', clearSystemAdminPaymentError);
