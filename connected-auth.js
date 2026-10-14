@@ -416,7 +416,7 @@
       catch (failure) { error(failure, 'systemAdminMessage'); }
     }
     if (tab === 'migration') {
-      try { await verify(); await refreshSystemAdminBusinesses(); if (canAccessSystemAdmin()) window.PosMigrationPreview.show({ canAccess: canAccessSystemAdmin, businesses: systemAdminBusinesses }); }
+      try { await verify(); await refreshSystemAdminBusinesses(); if (canAccessSystemAdmin()) window.PosMigrationPreview.show({ canAccess: canAccessSystemAdmin, businesses: systemAdminBusinesses, migrateBasic: (targetBusinessId, packageValue, confirmSystemBusiness) => api.migrateBasic(targetBusinessId, packageValue, confirmSystemBusiness) }); }
       catch (failure) { error(failure, 'systemAdminMessage'); }
     }
   }

@@ -765,6 +765,27 @@ input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
 .migration-package-review .migration-warnings small { color: inherit; line-height: 1.45; }
 .migration-package-review .migration-warnings .migration-ok { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
 .migration-package-review .migration-warnings .migration-warn { background: #fffbeb; border-color: #fcd34d; color: #713f12; }
+.migration-basic-summary { margin: 16px 0; padding: 16px; border: 1px solid #bfdbfe; border-radius: 12px; background: #fff; }
+.migration-basic-summary h3 { margin: 0 0 10px; color: #172b46; font-size: 1rem; }
+.migration-basic-summary > .system-admin-help { margin: 10px 0 12px; }
+.migration-basic-summary > .btn { min-width: 220px; }
+.migration-basic-result { margin-top: 14px; padding: 14px; border: 1px solid #bbf7d0; border-radius: 10px; background: #f0fdf4; color: #166534; }
+.migration-basic-result h4 { margin: 0 0 10px; font-size: .95rem; }
+.migration-basic-result dl { display: grid; gap: 7px; margin: 0; }
+.migration-basic-result dl > div { display: flex; justify-content: space-between; gap: 12px; }
+.migration-basic-result dt { color: #334155; }
+.migration-basic-result dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+.migration-basic-result ul { margin: 10px 0 0; padding-left: 20px; color: #713f12; }
+.migration-basic-confirm-card { width: min(100%, 560px); max-height: 90vh; overflow-y: auto; border-top: 4px solid #2870bb; }
+.migration-basic-confirm-card h2 { margin: 0 0 10px; color: #172b46; font-size: 1.2rem; }
+.migration-basic-confirm-card > p { color: #475569; line-height: 1.55; }
+.migration-basic-confirm-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
+.migration-basic-confirm-meta > div { min-width: 0; padding: 10px; border-radius: 8px; background: #f8fafc; }
+.migration-basic-confirm-meta dt { margin-bottom: 3px; color: #64748b; font-size: .76rem; }
+.migration-basic-confirm-meta dd { margin: 0; color: #172b46; font-weight: 700; overflow-wrap: anywhere; }
+.migration-system-business-confirm { display: flex; gap: 9px; align-items: flex-start; margin: 12px 0; padding: 11px; border: 1px solid #fcd34d; border-radius: 8px; background: #fffbeb; color: #713f12; font-size: .84rem; line-height: 1.45; }
+.migration-system-business-confirm input { width: auto; height: auto; margin-top: 3px; accent-color: #2563eb; }
+.migration-basic-confirm-card .modal-actions { margin-top: 16px; }
 .migration-preview-controls { align-items: end; }
 .migration-preview-controls .form-group { min-width: 220px; }
 @media (max-width: 520px) {
@@ -776,6 +797,9 @@ input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
   .migration-package-dropzone > span:nth-of-type(2) { flex-basis: calc(100% - 54px); }
   .migration-package-select { margin-left: 52px; }
   .migration-package-meta { grid-template-columns: minmax(0, 1fr); }
+  .migration-basic-confirm-meta { grid-template-columns: minmax(0, 1fr); }
+  .migration-basic-confirm-card .modal-actions { flex-wrap: wrap; }
+  .migration-basic-confirm-card .modal-actions .btn { flex: 1 1 180px; }
 }
 @media (max-width: 600px) {
   #systemAdminView { padding: 16px; }

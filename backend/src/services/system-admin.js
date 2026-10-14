@@ -4,6 +4,8 @@ const { randomToken, hashToken } = require('./tokens');
 const { publicUser } = require('../repositories/auth');
 const { httpError } = require('../middleware/errors');
 const billingValues = require('./system-admin-billing-values');
+const { packageForImport, normalizeName } = require('./basic-migration-values');
+const { randomUUID } = require('node:crypto');
 
 const isSystemAdmin = auth => auth?.username === 'andres' && auth.role === 'ADMIN' && String(auth.business_id) === '1';
 const requireSystemAdmin = auth => { if (!isSystemAdmin(auth)) throw httpError(403, 'SYSTEM_ADMIN_REQUIRED'); };
@@ -130,6 +132,91 @@ function createSystemAdminService(repo) {
         payment: { id: String(result.insertId), amount: validAmount, currency: 'USD', paymentDate: validDate },
         subscription: { businessId: String(businessId), planCode: plan.code, planName: plan.name, nextDueDate }
       };
+    });
+  }
+
+  async function migrateBasic(auth, targetBusinessId, sourcePackage, confirmSystemBusiness) {
+    requireSystemAdmin(auth);
+    if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) ||
+        BigInt(targetBusinessId) > 18446744073709551615n) throw httpError(400, 'INVALID_INPUT');
+    if (String(targetBusinessId) === '1' && confirmSystemBusiness !== true) {
+      throw httpError(409, 'MIGRATION_SYSTEM_BUSINESS_CONFIRMATION_REQUIRED');
+    }
+    const imported = packageForImport(sourcePackage);
+    return repo.transaction(async db => {
+      const [business] = await repo.rows(db, 'SELECT id, name, status FROM businesses WHERE id = ? FOR UPDATE', [targetBusinessId]);
+      if (!business) throw httpError(404, 'BUSINESS_NOT_FOUND');
+      if (business.status !== 'ACTIVE') throw httpError(409, 'MIGRATION_TARGET_INACTIVE');
+
+      const existingProducts = await repo.rows(db, 'SELECT barcode, name FROM products WHERE business_id = ? FOR UPDATE', [targetBusinessId]);
+      const existingClients = await repo.rows(db, 'SELECT name FROM clients WHERE business_id = ? FOR UPDATE', [targetBusinessId]);
+      const existingSuppliers = await repo.rows(db, 'SELECT name FROM suppliers WHERE business_id = ? FOR UPDATE', [targetBusinessId]);
+      const productBarcodes = new Set(existingProducts.map(item => normalizeName(item.barcode)));
+      const productNames = new Set(existingProducts.map(item => normalizeName(item.name)));
+      const clientNames = new Set(existingClients.map(item => normalizeName(item.name)));
+      const supplierNames = new Set(existingSuppliers.map(item => normalizeName(item.name)));
+      const created = { products: 0, clients: 0, suppliers: 0 };
+      const skipped = { products: 0, clients: 0, suppliers: 0 };
+      let createdProductsWithStock = 0;
+
+      for (const product of imported.products) {
+        if (product.deleted) { skipped.products++; continue; }
+        const normalizedName = normalizeName(product.name);
+        const normalizedBarcode = normalizeName(product.barcode);
+        if ((normalizedBarcode && productBarcodes.has(normalizedBarcode)) || (!normalizedBarcode && productNames.has(normalizedName))) {
+          skipped.products++;
+          continue;
+        }
+        const barcode = product.barcode || 'MIG-' + randomUUID();
+        try {
+          await repo.rows(db,
+            'INSERT INTO products (business_id, barcode, name, category, cost, retail_margin, wholesale_margin, retail_price, wholesale_price, stock, min_stock, tax_rate, image, active, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, FALSE)',
+            [targetBusinessId, barcode, product.name, product.category, product.cost, product.marginRetail, product.marginWholesale, product.retailPrice, product.wholesalePrice, product.stock, product.minStock, product.taxRate, product.active]);
+        } catch (failure) {
+          if (failure.code !== 'ER_DUP_ENTRY' || !normalizedBarcode) throw failure;
+          skipped.products++;
+          continue;
+        }
+        created.products++;
+        if (Number(product.stock) > 0) createdProductsWithStock++;
+        if (normalizedBarcode) productBarcodes.add(normalizedBarcode);
+        productNames.add(normalizedName);
+      }
+
+      for (const client of imported.clients) {
+        const name = normalizeName(client.name);
+        if (clientNames.has(name)) { skipped.clients++; continue; }
+        await repo.rows(db, 'INSERT INTO clients (business_id, name, phone, ruc, address, credit_limit, opening_balance, active) VALUES (?, ?, ?, ?, ?, 0.00, 0.00, ?)',
+          [targetBusinessId, client.name, client.phone, client.ruc, client.address, client.active]);
+        created.clients++;
+        clientNames.add(name);
+      }
+
+      for (const supplier of imported.suppliers) {
+        const name = normalizeName(supplier.name);
+        if (supplierNames.has(name)) { skipped.suppliers++; continue; }
+        await repo.rows(db, 'INSERT INTO suppliers (business_id, name, contact, phone, ruc, address, active) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [targetBusinessId, supplier.name, supplier.contact, supplier.phone, supplier.ruc, supplier.address, supplier.active]);
+        created.suppliers++;
+        supplierNames.add(name);
+      }
+
+      const warnings = [];
+      if (imported.deletedProducts) warnings.push('Se omitieron ' + imported.deletedProducts + ' productos marcados como eliminados.');
+      if (imported.productsWithImage) warnings.push('No se importaron las imágenes de ' + imported.productsWithImage + ' productos.');
+      if (createdProductsWithStock) warnings.push('Se importó el stock actual de ' + createdProductsWithStock + ' productos; no se creó historial de movimientos de inventario.');
+      const summary = { created, skipped };
+      const auditDetails = {
+        actor: { userId: String(auth.user_id), username: auth.username, role: auth.role, businessId: String(auth.business_id) },
+        targetBusinessId: String(targetBusinessId),
+        sourceBusinessName: imported.sourceBusinessName,
+        packageExportedAt: imported.exportedAt,
+        summary
+      };
+      await repo.rows(db,
+        'INSERT INTO audit_logs (business_id, user_id, action, entity, entity_id, details, created_at) VALUES (?, NULL, ?, ?, ?, ?, UTC_TIMESTAMP(3))',
+        [targetBusinessId, 'MIGRATION_BASIC_IMPORT', 'businesses', String(targetBusinessId), JSON.stringify(auditDetails)]);
+      return { ok: true, created, skipped, categoriesDetected: imported.categoriesDetected, warnings };
     });
   }
 
@@ -281,7 +368,7 @@ function createSystemAdminService(repo) {
   return {
     isSystemAdmin, listBusinesses, listBilling, setBusinessPlan, listSubscriptionPayments, recordSubscriptionPayment,
     createBusiness, setBusinessStatus, deleteBusiness, listBusinessUsers, createBusinessUser, setUserStatus,
-    startSupportSession, endSupportSession
+    startSupportSession, endSupportSession, migrateBasic
   };
 }
 

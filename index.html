@@ -194,7 +194,7 @@
                         <div class="migration-package-heading">
                             <div>
                                 <h3 id="migrationPackageTitle">1. Cargar paquete de migración .json</h3>
-                                <p class="system-admin-help">El cliente exporta su paquete desde modo local y lo comparte contigo. Selecciona o arrastra el archivo para revisarlo aquí; no se envía al backend.</p>
+                                <p class="system-admin-help">El cliente exporta su paquete desde modo local y lo comparte contigo. La revisión del archivo es local; solo al confirmar se envían al servidor los datos básicos seleccionados.</p>
                             </div>
                         </div>
                         <label id="migrationPackageDropzone" class="migration-package-dropzone" for="migrationPackageFile">
@@ -219,7 +219,28 @@
                     <section class="migration-destination-card migration-destination-primary" aria-labelledby="migrationDestinationTitle">
                         <h3 id="migrationDestinationTitle">4. Destino conectado</h3>
                         <div class="form-group"><label for="migrationBusiness">Seleccionar negocio conectado destino</label><select id="migrationBusiness"></select></div>
-                        <p class="system-admin-help">Elige el negocio donde se revisaría una futura migración. Esta selección no envía ni modifica datos.</p>
+                        <p class="system-admin-help">Elige el negocio que recibirá los datos básicos cuando confirmes la importación.</p>
+                    </section>
+                    <section id="migrationBasicSummary" class="migration-basic-summary hidden" aria-labelledby="migrationBasicSummaryTitle">
+                        <h3 id="migrationBasicSummaryTitle">Resumen para migración básica</h3>
+                        <div class="migration-counts migration-package-counts">
+                            <article><span>Productos</span><strong id="migrationBasicProducts">0</strong></article>
+                            <article><span>Clientes</span><strong id="migrationBasicClients">0</strong></article>
+                            <article><span>Proveedores</span><strong id="migrationBasicSuppliers">0</strong></article>
+                            <article><span>Categorías detectadas</span><strong id="migrationBasicCategories">0</strong></article>
+                        </div>
+                        <p class="system-admin-help">Las categorías se guardan en el campo categoría de cada producto. Se omitirán duplicados; los datos existentes no se reemplazan.</p>
+                        <button id="migrationBasicStartBtn" class="btn btn-primary" type="button" disabled>Migrar datos básicos</button>
+                        <p id="migrationBasicStatus" class="migration-package-status" role="status" aria-live="polite"></p>
+                        <div id="migrationBasicResult" class="migration-basic-result hidden" role="status" aria-live="polite">
+                            <h4>Migración básica completada</h4>
+                            <dl>
+                                <div><dt>Productos creados / omitidos</dt><dd><span id="migrationResultProductsCreated">0</span> / <span id="migrationResultProductsSkipped">0</span></dd></div>
+                                <div><dt>Clientes creados / omitidos</dt><dd><span id="migrationResultClientsCreated">0</span> / <span id="migrationResultClientsSkipped">0</span></dd></div>
+                                <div><dt>Proveedores creados / omitidos</dt><dd><span id="migrationResultSuppliersCreated">0</span> / <span id="migrationResultSuppliersSkipped">0</span></dd></div>
+                            </dl>
+                            <ul id="migrationBasicWarnings"></ul>
+                        </div>
                     </section>
                     <details class="migration-direct-source">
                         <summary>
@@ -262,7 +283,7 @@
                             </div>
                         </div>
                     </details>
-                    <div class="migration-continue"><button id="migrationContinueBtn" class="btn btn-primary" type="button" disabled aria-describedby="migrationContinueNote">Continuar con migración real</button><p id="migrationContinueNote" class="system-admin-help">La migración real permanece deshabilitada en esta fase.</p></div>
+                    <div class="migration-continue"><button id="migrationContinueBtn" class="btn btn-primary" type="button" disabled aria-describedby="migrationContinueNote">Migración completa (fases posteriores)</button><p id="migrationContinueNote" class="system-admin-help">Esta acción permanece deshabilitada. La fase 1 permite importar solo productos, clientes, proveedores y categorías.</p></div>
                 </section>
             </div>
             <div id="salesView" class="view-panel">
@@ -809,6 +830,30 @@
             </div>
 
         </main>
+    </div>
+
+    <div id="migrationBasicConfirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="migrationBasicConfirmTitle" aria-describedby="migrationBasicConfirmDescription">
+        <div class="modal-overlay"></div>
+        <section class="modal-card migration-basic-confirm-card">
+            <h2 id="migrationBasicConfirmTitle" tabindex="-1">Confirmar migración básica</h2>
+            <p id="migrationBasicConfirmDescription">Se migrarán productos, clientes, proveedores y categorías al negocio conectado seleccionado. No se migrarán ventas, compras, caja ni abonos en esta fase.</p>
+            <dl class="migration-basic-confirm-meta">
+                <div><dt>Negocio origen</dt><dd id="migrationConfirmSource">—</dd></div>
+                <div><dt>Negocio destino</dt><dd id="migrationConfirmTarget">—</dd></div>
+                <div><dt>Productos</dt><dd id="migrationConfirmProducts">0</dd></div>
+                <div><dt>Clientes</dt><dd id="migrationConfirmClients">0</dd></div>
+                <div><dt>Proveedores</dt><dd id="migrationConfirmSuppliers">0</dd></div>
+            </dl>
+            <label id="migrationSystemBusinessConfirmWrap" class="migration-system-business-confirm hidden">
+                <input id="migrationSystemBusinessConfirm" type="checkbox">
+                <span>Confirmo explícitamente que deseo importar estos datos al negocio principal del sistema (#1).</span>
+            </label>
+            <p id="migrationBasicConfirmError" class="message error hidden" role="alert" aria-live="assertive"></p>
+            <div class="modal-actions">
+                <button id="migrationBasicCancelBtn" type="button" class="btn btn-secondary">Cancelar</button>
+                <button id="migrationBasicConfirmBtn" type="button" class="btn btn-primary">Confirmar migración básica</button>
+            </div>
+        </section>
     </div>
 
     <!-- MODALES -->

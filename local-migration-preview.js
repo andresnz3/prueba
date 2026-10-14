@@ -1,9 +1,10 @@
 /* global Dexie */
 "use strict";
 /*
- * Previsualización privada de migración local -> conectado.
- * SOLO LECTURA: consulta los object stores existentes de POS_OfflineDB con
- * transacciones readonly. No escribe en Dexie, no llama al backend, no guarda simulaciones.
+ * Revisión del paquete y previsualización opcional del navegador local.
+ * La lectura de Dexie usa transacciones readonly; solo la confirmación de la
+ * fase básica envía productos, clientes y proveedores al backend conectado.
+ * Nunca escribe en Dexie ni guarda la simulación de categorías.
  */
 (() => {
   const LOCAL_DB_NAME = 'POS_OfflineDB';
@@ -16,7 +17,7 @@
   const text = value => String(value ?? '').trim();
   const norm = value => text(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
   const money = value => r2(value).toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const SAFE_MESSAGE = 'La migración real estará disponible en la siguiente fase.';
+  const SAFE_MESSAGE = 'La migración completa permanece deshabilitada; esta fase solo permite importar datos básicos.';
 
   let canAccess = () => false;
   let businesses = [];
@@ -26,6 +27,11 @@
   let report = null;    // conteos y advertencias calculados
   let loading = false;
   let packageReadToken = 0;
+  let packageValue = null;
+  let migrationBusy = false;
+  let migrationTrigger = null;
+  let migrateBasicRequest = null;
+  const completedTargets = new Set();
   // Simulación solo visual: vive en memoria y se descarta al salir o actualizar.
   let sim = { added: [], map: {}, general: false };
   const INVALID_PACKAGE_MESSAGE = 'Este archivo no parece ser un paquete de migración válido.';
@@ -384,11 +390,111 @@
     el('migrationPackageCounts').replaceChildren(...counts.map(([label, count]) => card(label, packageCount(count))));
     renderPackageWarnings(Array.isArray(value.warnings) ? value.warnings : []);
     el('migrationPackageReview').classList.remove('hidden');
+    packageValue = value;
+    const products = value.data.products.filter(item => isRecord(item) && item.deleted !== true);
+    const categories = new Set(products.map(item => norm(item.category ?? item.categoria) || norm('General')));
+    el('migrationBasicProducts').textContent = packageCount(products.length);
+    el('migrationBasicClients').textContent = packageCount(value.data.clients.length);
+    el('migrationBasicSuppliers').textContent = packageCount(value.data.suppliers.length);
+    el('migrationBasicCategories').textContent = packageCount(categories.size);
+    el('migrationBasicSummary').classList.remove('hidden');
+    el('migrationBasicResult').classList.add('hidden');
+    el('migrationBasicStatus').textContent = '';
+    renderBasicMigrationButton();
+  }
+
+  function renderBasicMigrationButton() {
+    const target = destination();
+    const targetId = target ? String(target.id) : '';
+    const button = el('migrationBasicStartBtn');
+    button.disabled = !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || completedTargets.has(targetId);
+    button.textContent = completedTargets.has(targetId) ? 'Migración completada para este destino' : 'Migrar datos básicos';
+  }
+
+  function closeBasicMigrationConfirmation() {
+    const modal = el('migrationBasicConfirmModal');
+    if (migrationBusy) return;
+    modal.classList.add('hidden');
+    if (migrationTrigger?.isConnected) migrationTrigger.focus();
+  }
+
+  function openBasicMigrationConfirmation() {
+    const target = destination();
+    if (!canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || completedTargets.has(String(target.id))) return;
+    migrationTrigger = el('migrationBasicStartBtn');
+    el('migrationConfirmSource').textContent = text(packageValue.business.name) || 'No disponible';
+    el('migrationConfirmTarget').textContent = target.name + ' (#' + target.id + ')';
+    el('migrationConfirmProducts').textContent = el('migrationBasicProducts').textContent;
+    el('migrationConfirmClients').textContent = el('migrationBasicClients').textContent;
+    el('migrationConfirmSuppliers').textContent = el('migrationBasicSuppliers').textContent;
+    const systemBusiness = String(target.id) === '1';
+    el('migrationSystemBusinessConfirmWrap').classList.toggle('hidden', !systemBusiness);
+    el('migrationSystemBusinessConfirm').checked = false;
+    el('migrationBasicConfirmError').classList.add('hidden');
+    el('migrationBasicConfirmError').textContent = '';
+    el('migrationBasicConfirmBtn').disabled = systemBusiness;
+    el('migrationBasicConfirmModal').classList.remove('hidden');
+    el('migrationBasicConfirmTitle').focus();
+  }
+
+  function renderBasicMigrationResult(result) {
+    for (const kind of ['products', 'clients', 'suppliers']) {
+      const label = kind[0].toUpperCase() + kind.slice(1);
+      el('migrationResult' + label + 'Created').textContent = packageCount(result.created[kind]);
+      el('migrationResult' + label + 'Skipped').textContent = packageCount(result.skipped[kind]);
+    }
+    const warnings = el('migrationBasicWarnings');
+    warnings.replaceChildren(...(result.warnings.length
+      ? result.warnings.map(warning => node('li', '', warning))
+      : [node('li', '', 'No hubo advertencias adicionales.')]));
+    el('migrationBasicResult').classList.remove('hidden');
+    el('migrationBasicStatus').textContent = 'Migración básica completada.';
+    el('migrationBasicStatus').dataset.state = 'valid';
+  }
+
+  async function confirmBasicMigration() {
+    const target = destination();
+    const confirmSystemBusiness = String(target?.id) === '1' && el('migrationSystemBusinessConfirm').checked;
+    if (migrationBusy || !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || !migrateBasicRequest || (String(target.id) === '1' && !confirmSystemBusiness)) return;
+    const requestToken = packageReadToken;
+    migrationBusy = true;
+    el('migrationBasicStartBtn').disabled = true;
+    el('migrationBasicConfirmBtn').disabled = true;
+    el('migrationBasicCancelBtn').disabled = true;
+    const status = el('migrationBasicStatus');
+    status.dataset.state = '';
+    status.textContent = 'Migrando productos, clientes y proveedores…';
+    el('migrationBasicConfirmError').classList.add('hidden');
+    try {
+      const result = await migrateBasicRequest(String(target.id), packageValue, confirmSystemBusiness);
+      if (!canAccess() || requestToken !== packageReadToken) return;
+      completedTargets.add(String(target.id));
+      renderBasicMigrationResult(result);
+      el('migrationBasicConfirmModal').classList.add('hidden');
+    } catch (failure) {
+      if (!canAccess() || requestToken !== packageReadToken) return;
+      status.dataset.state = 'invalid';
+      status.textContent = failure?.message || 'No se pudo completar la migración básica.';
+      const errorBox = el('migrationBasicConfirmError');
+      errorBox.textContent = status.textContent;
+      errorBox.classList.remove('hidden');
+    } finally {
+      migrationBusy = false;
+      el('migrationBasicCancelBtn').disabled = false;
+      renderBasicMigrationButton();
+      if (el('migrationBasicConfirmModal').classList.contains('hidden') && migrationTrigger?.isConnected) migrationTrigger.focus();
+    }
   }
 
   async function readPackage(file) {
+    if (!canAccess() || migrationBusy || !el('migrationBasicConfirmModal').classList.contains('hidden')) return;
     const token = ++packageReadToken;
-    if (!canAccess()) return;
+    packageValue = null;
+    completedTargets.clear();
+    el('migrationBasicSummary').classList.add('hidden');
+    el('migrationBasicResult').classList.add('hidden');
+    el('migrationBasicStatus').textContent = '';
+    renderBasicMigrationButton();
     el('migrationPackageReview').classList.add('hidden');
     el('migrationPackageStatus').textContent = '';
     let value;
@@ -397,13 +503,20 @@
       value = JSON.parse(await file.text());
     } catch {
       if (token !== packageReadToken) return;
+      packageValue = null;
+      el('migrationBasicSummary').classList.add('hidden');
+      renderBasicMigrationButton();
       el('migrationPackageStatus').dataset.state = 'invalid';
       el('migrationPackageStatus').textContent = INVALID_PACKAGE_MESSAGE;
       return;
     }
     if (token !== packageReadToken) return;
     if (!isRecord(value) || value.type !== 'pos_local_migration_package' || value.version !== 1 ||
-        !isRecord(value.data) || !isRecord(value.summary) || !isRecord(value.business)) {
+        !isRecord(value.data) || !Array.isArray(value.data.products) || !Array.isArray(value.data.clients) ||
+        !Array.isArray(value.data.suppliers) || !isRecord(value.summary) || !isRecord(value.business)) {
+      packageValue = null;
+      el('migrationBasicSummary').classList.add('hidden');
+      renderBasicMigrationButton();
       el('migrationPackageStatus').dataset.state = 'invalid';
       el('migrationPackageStatus').textContent = INVALID_PACKAGE_MESSAGE;
       return;
@@ -420,6 +533,31 @@
       const [file] = input.files || [];
       if (file) readPackage(file);
       input.value = '';
+    });
+    el('migrationBusiness').addEventListener('change', () => {
+      el('migrationBasicResult').classList.add('hidden');
+      el('migrationBasicStatus').textContent = '';
+      renderBasicMigrationButton();
+    });
+    el('migrationBasicStartBtn').addEventListener('click', openBasicMigrationConfirmation);
+    el('migrationBasicCancelBtn').addEventListener('click', closeBasicMigrationConfirmation);
+    el('migrationBasicConfirmBtn').addEventListener('click', confirmBasicMigration);
+    el('migrationSystemBusinessConfirm').addEventListener('change', event => {
+      el('migrationBasicConfirmBtn').disabled = !event.currentTarget.checked || migrationBusy;
+    });
+    el('migrationBasicConfirmModal').addEventListener('click', event => {
+      if (event.target.classList.contains('modal-overlay')) closeBasicMigrationConfirmation();
+    });
+    document.addEventListener('keydown', event => {
+      const modal = el('migrationBasicConfirmModal');
+      if (modal.classList.contains('hidden')) return;
+      if (event.key === 'Escape') { closeBasicMigrationConfirmation(); return; }
+      if (event.key === 'Tab') {
+        const controls = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled)')].filter(control => control.getClientRects().length);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
     });
     dropzone.addEventListener('dragover', event => {
       event.preventDefault();
@@ -469,6 +607,7 @@
 
   function show(options) {
     canAccess = options.canAccess; businesses = options.businesses || [];
+    migrateBasicRequest = options.migrateBasic;
     if (!canAccess()) return;
     localIdentity = readLocalIdentity();
     renderLocalIdentity(localIdentity, localScope);
@@ -476,16 +615,22 @@
     select.replaceChildren(new Option('Selecciona un negocio conectado', ''), ...businesses.map(item => new Option(item.name + ' (#' + item.id + ')' + (item.status === 'ACTIVE' ? '' : ' · inactivo'), item.id)));
     select.value = businesses.some(item => String(item.id) === previous) ? previous : '';
     updateContinue();
+    renderBasicMigrationButton();
   }
 
   function reset() {
     data = null; report = null; localIdentity = null; localScope = null; sim = { added: [], map: {}, general: false };
     packageReadToken++;
+    packageValue = null; migrationBusy = false; migrateBasicRequest = null; completedTargets.clear();
     el('migrationResult')?.classList.add('hidden');
     el('migrationOriginCounts')?.replaceChildren(card('Productos', '—'), card('Clientes', '—'), card('Ventas', '—'));
     el('migrationSourceNote')?.classList.remove('is-legacy');
     el('migrationPackageFile').value = '';
     el('migrationPackageReview').classList.add('hidden');
+    el('migrationBasicSummary').classList.add('hidden');
+    el('migrationBasicResult').classList.add('hidden');
+    el('migrationBasicStatus').textContent = '';
+    el('migrationBasicConfirmModal').classList.add('hidden');
     el('migrationPackageStatus').dataset.state = '';
     el('migrationPackageStatus').textContent = 'Aún no se ha seleccionado un paquete.';
   }
@@ -495,7 +640,7 @@
     setupPackageReader();
     el('migrationRefreshBtn').addEventListener('click', refresh);
     el('migrationType').addEventListener('change', () => { if (report && canAccess()) renderReport(); });
-    el('migrationBusiness').addEventListener('change', () => { if (report && canAccess()) { const status = el('migrationStatus'); status.textContent = 'Destino seleccionado solo para previsualizar' + (destination() ? ': ' + destination().name + ' (#' + destination().id + ')' : '') + '. No se envía nada al backend.'; status.classList.remove('hidden'); } });
+    el('migrationBusiness').addEventListener('change', () => { if (report && canAccess()) { const status = el('migrationStatus'); status.textContent = 'Destino seleccionado solo para la lectura técnica; los datos básicos solo se envían al confirmar su migración.'; status.classList.remove('hidden'); } });
     el('migrationContinueBtn').addEventListener('click', event => { event.preventDefault(); el('migrationContinueNote').textContent = SAFE_MESSAGE; });
     el('migrationAddForm').addEventListener('submit', event => {
       event.preventDefault(); if (!report || !canAccess()) return;

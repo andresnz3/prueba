@@ -25,6 +25,14 @@ function systemAdminRoutes({ repo, config }) {
     }
     return allowed ? next() : next(httpError(403, 'SYSTEM_ADMIN_REQUIRED'));
   });
+  router.use('/system-admin', middleware.authenticateOwner, (req, res, next) =>
+    service.isSystemAdmin(req.auth) ? next() : next(httpError(403, 'SYSTEM_ADMIN_REQUIRED')));
+  router.post('/system-admin/migration/basic', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['targetBusinessId', 'package', 'confirmSystemBusiness'], ['targetBusinessId', 'package']);
+    if (data.confirmSystemBusiness !== undefined && typeof data.confirmSystemBusiness !== 'boolean') v.invalid();
+    const result = await service.migrateBasic(req.auth, v.id(data.targetBusinessId), data.package, data.confirmSystemBusiness === true);
+    res.status(201).json(result);
+  });
   router.get('/admin/businesses', async (req, res) => {
     if (Object.keys(req.query).length) v.invalid();
     res.json({ businesses: await service.listBusinesses(req.auth) });

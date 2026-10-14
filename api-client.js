@@ -80,6 +80,9 @@
     LAST_ACTIVE_ADMIN: 'Debe permanecer al menos un administrador activo.',
     USERNAME_EXISTS: 'Ese nombre de usuario ya está en uso en otro registro.',
     SYSTEM_ADMIN_REQUIRED: 'Solo el administrador del sistema puede acceder a esta sección.',
+    MIGRATION_PACKAGE_INVALID: 'El paquete no contiene los datos básicos válidos para esta migración.',
+    MIGRATION_TARGET_INACTIVE: 'El negocio conectado destino no está activo.',
+    MIGRATION_SYSTEM_BUSINESS_CONFIRMATION_REQUIRED: 'Confirma explícitamente que deseas importar al negocio del sistema.',
     SUPPORT_TARGET_INVALID: 'Selecciona un negocio de cliente para iniciar la sesión de soporte.',
     SUPPORT_BUSINESS_UNAVAILABLE: 'El negocio está suspendido o no disponible para soporte.',
     SUPPORT_ADMIN_REQUIRED: 'El negocio necesita un administrador activo antes de iniciar soporte.',
@@ -484,6 +487,42 @@
         if (!/^[1-9]\d{0,19}$/.test(item.id || '') || typeof item.name !== 'string' || !item.name.trim() || !['ACTIVE', 'INACTIVE'].includes(item.status) || !Number.isSafeInteger(item.userCount) || item.userCount < 0) throw new ApiError('INVALID_RESPONSE');
         return item;
       });
+    }
+    async migrateBasic(targetBusinessId, packageValue, confirmSystemBusiness = false) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) ||
+          !packageValue || packageValue.type !== 'pos_local_migration_package' || packageValue.version !== 1 ||
+          !packageValue.data || !Array.isArray(packageValue.data.products) ||
+          !Array.isArray(packageValue.data.clients) || !Array.isArray(packageValue.data.suppliers) ||
+          (targetBusinessId === '1' && confirmSystemBusiness !== true)) throw new ApiError('INVALID_INPUT');
+      const fields = (records, allowed) => records.map(record => {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+        return Object.fromEntries(allowed.filter(key => Object.hasOwn(record, key)).map(key => [key, record[key]]));
+      });
+      const safePackage = {
+        type: packageValue.type,
+        version: packageValue.version,
+        exportedAt: packageValue.exportedAt,
+        business: { name: packageValue.business?.name },
+        data: {
+          products: fields(packageValue.data.products, ['barcode', 'codigo', 'code', 'name', 'nombre', 'category', 'categoria', 'cost', 'marginRetail', 'retailMargin', 'retail_margin', 'marginWholesale', 'wholesaleMargin', 'wholesale_margin', 'retailPrice', 'retail_price', 'retail', 'wholesalePrice', 'wholesale_price', 'wholesale', 'stock', 'minStock', 'min_stock', 'taxRate', 'tax_rate', 'active', 'deleted']).map((product, index) => ({
+            ...product,
+            ...(packageValue.data.products[index]?.image ? { image: 'omitted' } : {})
+          })),
+          clients: fields(packageValue.data.clients, ['name', 'nombre', 'phone', 'ruc', 'address', 'active']),
+          suppliers: fields(packageValue.data.suppliers, ['name', 'nombre', 'contact', 'phone', 'ruc', 'address', 'active'])
+        }
+      };
+      const value = await this.#write('/system-admin/migration/basic', 'POST', {
+        targetBusinessId,
+        package: safePackage,
+        confirmSystemBusiness
+      });
+      const validCounts = counts => counts && ['products', 'clients', 'suppliers'].every(key => Number.isSafeInteger(counts[key]) && counts[key] >= 0);
+      if (value?.ok !== true || !validCounts(value.created) || !validCounts(value.skipped) ||
+          !Number.isSafeInteger(value.categoriesDetected) || value.categoriesDetected < 0 ||
+          !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
+      return value;
     }
     async createAdminBusiness(name) {
       this.#requireSystemAdmin();

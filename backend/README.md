@@ -61,3 +61,11 @@ La integracion opcional de autenticacion esta descrita en ../FRONTEND_AUTH.md. M
 Implementados en MySQL, con permisos inventory, CSRF, transacciones, movimientos y revisiones para ediciones concurrentes. Ver [INVENTORY.md](INVENTORY.md) para el contrato y [PHASE52.md](../PHASE52.md) para los archivos, pruebas y bloqueos temporales. No hay nuevas variables de entorno, dependencias ni migraciones SQL.
 
 Fotografias conectadas: ver PRODUCT_IMAGES.md para carga binaria, almacenamiento privado, permisos, configuracion y pruebas. No requiere migracion SQL.
+
+## Fase 1 de migracion basica
+
+`POST /api/system-admin/migration/basic` recibe `targetBusinessId` y un paquete local versión 1. Requiere sesión autenticada del usuario `andres`, rol `ADMIN`, negocio `1` y CSRF válido. Para elegir el negocio `1` como destino se exige `confirmSystemBusiness: true`. El destino debe existir y estar activo.
+
+La importación es transaccional y solo crea productos, clientes y proveedores; las categorías se conservan en el campo `products.category`. Los duplicados de producto se identifican por código de barras o, si no hay código, por nombre normalizado; clientes y proveedores por nombre normalizado. Los datos existentes no se actualizan. Ventas, compras, caja, movimientos de inventario y abonos del paquete no se importan ni se guardan. El stock del producto sí se toma como saldo actual, sin crear historial de movimientos; las imágenes se omiten. El resultado y advertencias quedan en el resumen y audit_logs del negocio destino.
+
+Pruebas unitarias aisladas: `npm.cmd test --prefix backend`; no requieren MySQL. La importación real requiere confirmación en la interfaz y no se ejecutó durante el desarrollo de esta fase.

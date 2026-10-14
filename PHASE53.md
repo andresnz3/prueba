@@ -287,3 +287,11 @@ Validación completada: ESLint 0 errores/advertencias; backend 57/57; MySQL aisl
 ## Continuación: resumen previo y detalles del cierre (4 de octubre de 2026)
 
 Se implementa la revisión del corte antes de confirmar, conteo obligatorio, diferencia automática y Detalles de solo lectura en ambos modos y flujos de venta. No requiere migración nueva ni se aplicó ninguna en la base principal. Informe, límites, archivos, cambios justificados de expectativas y validación: [CASH_CLOSE_SUMMARY.md](CASH_CLOSE_SUMMARY.md). No se avanza a compras conectadas; se conserva el trabajo previo del workspace. Skill utilizada: .agents/skills/emil-design-eng/SKILL.md.
+
+## Fase 1 de importación de paquete local (13 de octubre de 2026)
+
+Administración del sistema permite confirmar una importación básica desde un paquete JSON: productos, clientes y proveedores; la categoría se guarda en cada producto. Solo esos campos permitidos del paquete se envían al endpoint y el servidor ignora ventas, compras, caja, movimientos de inventario y abonos. Los datos existentes no se actualizan; los duplicados se omiten. El stock importado representa el saldo actual y no genera movimientos; las imágenes se omiten.
+
+El endpoint `POST /api/system-admin/migration/basic` valida sesión de `andres` como `ADMIN` del negocio `1`, CSRF, paquete y negocio destino activo. Importar al negocio `1` requiere confirmación separada en el modal y una señal explícita validada también por el backend. Altas y auditoría `MIGRATION_BASIC_IMPORT` se ejecutan en una transacción; auditoría registra usuario actor en detalles, negocio destino, negocio origen, fecha exportada y conteos. No se crea tabla de categorías ni se toca el esquema.
+
+Se añadieron pruebas unitarias aisladas para validación del paquete, permisos, confirmación del negocio 1, duplicados, auditoría, destino y rollback. No se ejecutó el endpoint contra MySQL, no se importaron datos, no se aplicaron migraciones de esquema ni se cambió ninguna cuenta. Validación registrada al cerrar la tarea: ESLint, build público, pruebas unitarias del backend y `git diff --check`; el estado exacto de la suite aparece en la entrega de la tarea.
