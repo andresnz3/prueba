@@ -80,7 +80,9 @@
     LAST_ACTIVE_ADMIN: 'Debe permanecer al menos un administrador activo.',
     USERNAME_EXISTS: 'Ese nombre de usuario ya está en uso en otro registro.',
     SYSTEM_ADMIN_REQUIRED: 'Solo el administrador del sistema puede acceder a esta sección.',
-    MIGRATION_PACKAGE_INVALID: 'El paquete no contiene los datos básicos válidos para esta migración.',
+    MIGRATION_PACKAGE_INVALID: 'El paquete no contiene los datos válidos para esta migración.',
+    MIGRATION_BASIC_REQUIRED: 'Primero completa la migración básica de productos para este negocio.',
+    MIGRATION_INVENTORY_SCHEMA_REQUIRED: 'La base conectada requiere la migración de inventario inicial antes de usar esta función.',
     MIGRATION_TARGET_INACTIVE: 'El negocio conectado destino no está activo.',
     MIGRATION_SYSTEM_BUSINESS_CONFIRMATION_REQUIRED: 'Confirma explícitamente que deseas importar al negocio del sistema.',
     SUPPORT_TARGET_INVALID: 'Selecciona un negocio de cliente para iniciar la sesión de soporte.',
@@ -521,6 +523,50 @@
       const validCounts = counts => counts && ['products', 'clients', 'suppliers'].every(key => Number.isSafeInteger(counts[key]) && counts[key] >= 0);
       if (value?.ok !== true || !validCounts(value.created) || !validCounts(value.skipped) ||
           !Number.isSafeInteger(value.categoriesDetected) || value.categoriesDetected < 0 ||
+          !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    #safeInventoryMigrationPackage(packageValue) {
+      if (!packageValue || packageValue.type !== 'pos_local_migration_package' || packageValue.version !== 1 ||
+          !packageValue.business || typeof packageValue.business !== 'object' || Array.isArray(packageValue.business) ||
+          !packageValue.data || !Array.isArray(packageValue.data.products) || packageValue.data.products.length > 50000 ||
+          (packageValue.data.inventoryMovements !== undefined && (!Array.isArray(packageValue.data.inventoryMovements) || packageValue.data.inventoryMovements.length > 50000))) throw new ApiError('INVALID_INPUT');
+      const fields = (records, allowed) => records.map(record => {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+        return Object.fromEntries(allowed.filter(key => Object.hasOwn(record, key)).map(key => [key, record[key]]));
+      });
+      return {
+        type: packageValue.type,
+        version: packageValue.version,
+        exportedAt: packageValue.exportedAt,
+        business: { name: packageValue.business.name },
+        data: {
+          products: fields(packageValue.data.products, ['barcode', 'codigo', 'code', 'name', 'nombre', 'cost', 'stock', 'active', 'deleted']),
+          clients: [],
+          suppliers: [],
+          // El historial del paquete nunca se envía ni se copia; solo se usa el saldo del producto.
+          inventoryMovements: []
+        }
+      };
+    }
+    async previewInventoryMigration(targetBusinessId, packageValue) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safeInventoryMigrationPackage(packageValue);
+      const value = await this.#write('/system-admin/migration/inventory/preview', 'POST', { targetBusinessId, package: safePackage });
+      const counts = value?.products;
+      if (value?.ok !== true || typeof value.eligible !== 'boolean' ||
+          !counts || !['productsWithStock', 'productsWithoutStock', 'productsToSkip', 'inventoryMovementsToCreate'].every(key => Number.isSafeInteger(counts[key]) && counts[key] >= 0) ||
+          !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async migrateInventory(targetBusinessId, packageValue) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safeInventoryMigrationPackage(packageValue);
+      const value = await this.#write('/system-admin/migration/inventory', 'POST', { targetBusinessId, package: safePackage });
+      const validCounts = counts => counts && Number.isSafeInteger(counts.inventoryMovements) && counts.inventoryMovements >= 0;
+      if (value?.ok !== true || !validCounts(value.created) || !validCounts(value.skipped) ||
           !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
       return value;
     }

@@ -31,7 +31,14 @@
   let migrationBusy = false;
   let migrationTrigger = null;
   let migrateBasicRequest = null;
+  let previewInventoryRequest = null;
+  let migrateInventoryRequest = null;
+  let inventoryPreviewToken = 0;
+  let inventoryPreview = null;
+  let inventoryBusy = false;
+  let inventoryTrigger = null;
   const completedTargets = new Set();
+  const completedInventoryTargets = new Set();
   // Simulación solo visual: vive en memoria y se descarta al salir o actualizar.
   let sim = { added: [], map: {}, general: false };
   const INVALID_PACKAGE_MESSAGE = 'Este archivo no parece ser un paquete de migración válido.';
@@ -401,14 +408,145 @@
     el('migrationBasicResult').classList.add('hidden');
     el('migrationBasicStatus').textContent = '';
     renderBasicMigrationButton();
+    el('migrationInventoryStatus').textContent = '';
+    el('migrationInventoryResult').classList.add('hidden');
+    void updateInventoryPreview();
   }
 
   function renderBasicMigrationButton() {
     const target = destination();
     const targetId = target ? String(target.id) : '';
     const button = el('migrationBasicStartBtn');
-    button.disabled = !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || completedTargets.has(targetId);
+    button.disabled = !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || inventoryBusy || completedTargets.has(targetId);
     button.textContent = completedTargets.has(targetId) ? 'Migración completada para este destino' : 'Migrar datos básicos';
+  }
+
+  function renderInventoryMigrationButton() {
+    const button = el('migrationInventoryStartBtn');
+    const target = destination();
+    const targetId = target ? String(target.id) : '';
+    const visible = Boolean(canAccess() && packageValue && target && target.status === 'ACTIVE' && inventoryPreview?.eligible);
+    el('migrationInventorySummary').classList.toggle('hidden', !visible);
+    button.disabled = !visible || migrationBusy || inventoryBusy || completedInventoryTargets.has(targetId);
+    button.textContent = completedInventoryTargets.has(targetId) ? 'Inventario inicial completado para este destino' : 'Migrar inventario inicial';
+  }
+
+  function renderInventoryMigrationResult(result) {
+    el('migrationInventoryCreated').textContent = packageCount(result.created.inventoryMovements);
+    el('migrationInventorySkipped').textContent = packageCount(result.skipped.inventoryMovements);
+    const warnings = el('migrationInventoryWarnings');
+    warnings.replaceChildren(...(result.warnings.length
+      ? result.warnings.map(warning => node('li', '', warning))
+      : [node('li', '', 'No hubo advertencias adicionales.')]));
+    el('migrationInventoryResult').classList.remove('hidden');
+    el('migrationInventoryStatus').textContent = 'Migración de inventario completada.';
+    el('migrationInventoryStatus').dataset.state = 'valid';
+  }
+
+  async function updateInventoryPreview() {
+    const token = ++inventoryPreviewToken;
+    const requestToken = packageReadToken;
+    const target = destination();
+    inventoryPreview = null;
+    el('migrationInventorySummary').classList.add('hidden');
+    const gateStatus = el('migrationInventoryGateStatus');
+    gateStatus.classList.add('hidden');
+    gateStatus.textContent = '';
+    if (!canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || inventoryBusy || !previewInventoryRequest) return;
+    const status = el('migrationInventoryStatus');
+    status.dataset.state = '';
+    status.textContent = 'Verificando migración básica y productos del destino…';
+    gateStatus.textContent = 'Verificando si la migración básica está lista…';
+    gateStatus.classList.remove('hidden');
+    try {
+      const preview = await previewInventoryRequest(String(target.id), packageValue);
+      if (token !== inventoryPreviewToken || requestToken !== packageReadToken || !canAccess() || target.id !== destination()?.id) return;
+      if (!preview.eligible) {
+        status.textContent = '';
+        gateStatus.textContent = preview.warnings.join(' ');
+        renderInventoryMigrationButton();
+        return;
+      }
+      gateStatus.classList.add('hidden');
+      inventoryPreview = preview;
+      el('migrationInventoryWithStock').textContent = packageCount(preview.products.productsWithStock);
+      el('migrationInventoryWithoutStock').textContent = packageCount(preview.products.productsWithoutStock);
+      el('migrationInventoryToSkip').textContent = packageCount(preview.products.productsToSkip);
+      el('migrationInventoryResult').classList.add('hidden');
+      status.textContent = preview.warnings.join(' ');
+      renderInventoryMigrationButton();
+    } catch (failure) {
+      if (token !== inventoryPreviewToken || requestToken !== packageReadToken || !canAccess()) return;
+      gateStatus.dataset.state = 'invalid';
+      gateStatus.textContent = failure?.message || 'No se pudo revisar el inventario destino.';
+      gateStatus.classList.remove('hidden');
+      renderInventoryMigrationButton();
+    }
+  }
+
+  function closeInventoryMigrationConfirmation() {
+    const modal = el('migrationInventoryConfirmModal');
+    if (inventoryBusy) return;
+    modal.classList.add('hidden');
+    if (inventoryTrigger?.isConnected) inventoryTrigger.focus();
+  }
+
+  function openInventoryMigrationConfirmation() {
+    const target = destination();
+    if (!canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || inventoryBusy || !inventoryPreview?.eligible) return;
+    inventoryTrigger = el('migrationInventoryStartBtn');
+    el('migrationInventoryConfirmSource').textContent = text(packageValue.business.name) || 'No disponible';
+    el('migrationInventoryConfirmTarget').textContent = target.name + ' (#' + target.id + ')';
+    el('migrationInventoryConfirmWithStock').textContent = packageCount(inventoryPreview.products.productsWithStock);
+    el('migrationInventoryConfirmWithoutStock').textContent = packageCount(inventoryPreview.products.productsWithoutStock);
+    el('migrationInventoryConfirmToSkip').textContent = packageCount(inventoryPreview.products.productsToSkip);
+    const warnings = el('migrationInventoryConfirmWarnings');
+    warnings.replaceChildren(...(inventoryPreview.warnings.length
+      ? inventoryPreview.warnings.map(warning => node('li', 'migration-warn', warning))
+      : [node('li', 'migration-ok', 'No se detectaron productos que deban omitirse.') ]));
+    el('migrationInventoryConfirmError').classList.add('hidden');
+    el('migrationInventoryConfirmError').textContent = '';
+    el('migrationInventoryConfirmModal').classList.remove('hidden');
+    el('migrationInventoryConfirmTitle').focus();
+  }
+
+  async function confirmInventoryMigration() {
+    const target = destination();
+    if (migrationBusy || inventoryBusy || !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || !inventoryPreview?.eligible || !migrateInventoryRequest) return;
+    const requestToken = packageReadToken;
+    inventoryBusy = true;
+    const modal = el('migrationInventoryConfirmModal');
+    const errorBox = el('migrationInventoryConfirmError');
+    const status = el('migrationInventoryStatus');
+    el('migrationInventoryStartBtn').disabled = true;
+    el('migrationInventoryConfirmBtn').disabled = true;
+    el('migrationInventoryCancelBtn').disabled = true;
+    modal.querySelector('.modal-card').setAttribute('aria-busy', 'true');
+    status.dataset.state = '';
+    status.textContent = 'Creando movimientos iniciales de inventario…';
+    errorBox.classList.add('hidden');
+    try {
+      const result = await migrateInventoryRequest(String(target.id), packageValue);
+      if (!canAccess() || requestToken !== packageReadToken) return;
+      completedInventoryTargets.add(String(target.id));
+      renderInventoryMigrationResult(result);
+      modal.classList.add('hidden');
+    } catch (failure) {
+      if (!canAccess() || requestToken !== packageReadToken) return;
+      status.dataset.state = 'invalid';
+      status.textContent = failure?.message || 'No se pudo completar la migración de inventario.';
+      errorBox.textContent = status.textContent;
+      errorBox.classList.remove('hidden');
+    } finally {
+      inventoryBusy = false;
+      modal.querySelector('.modal-card').setAttribute('aria-busy', 'false');
+      el('migrationInventoryCancelBtn').disabled = false;
+      el('migrationInventoryConfirmBtn').disabled = false;
+      renderBasicMigrationButton();
+      renderInventoryMigrationButton();
+      if (modal.classList.contains('hidden') && inventoryTrigger?.isConnected) inventoryTrigger.focus();
+      if (completedInventoryTargets.has(String(target.id))) await updateInventoryPreview();
+    }
   }
 
   function closeBasicMigrationConfirmation() {
@@ -420,7 +558,7 @@
 
   function openBasicMigrationConfirmation() {
     const target = destination();
-    if (!canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || completedTargets.has(String(target.id))) return;
+    if (!canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || inventoryBusy || completedTargets.has(String(target.id))) return;
     migrationTrigger = el('migrationBasicStartBtn');
     el('migrationConfirmSource').textContent = text(packageValue.business.name) || 'No disponible';
     el('migrationConfirmTarget').textContent = target.name + ' (#' + target.id + ')';
@@ -455,7 +593,7 @@
   async function confirmBasicMigration() {
     const target = destination();
     const confirmSystemBusiness = String(target?.id) === '1' && el('migrationSystemBusinessConfirm').checked;
-    if (migrationBusy || !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || !migrateBasicRequest || (String(target.id) === '1' && !confirmSystemBusiness)) return;
+    if (migrationBusy || inventoryBusy || !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || !migrateBasicRequest || (String(target.id) === '1' && !confirmSystemBusiness)) return;
     const requestToken = packageReadToken;
     migrationBusy = true;
     el('migrationBasicStartBtn').disabled = true;
@@ -483,17 +621,26 @@
       el('migrationBasicCancelBtn').disabled = false;
       renderBasicMigrationButton();
       if (el('migrationBasicConfirmModal').classList.contains('hidden') && migrationTrigger?.isConnected) migrationTrigger.focus();
+      if (completedTargets.has(String(target.id))) await updateInventoryPreview();
     }
   }
 
   async function readPackage(file) {
-    if (!canAccess() || migrationBusy || !el('migrationBasicConfirmModal').classList.contains('hidden')) return;
+    if (!canAccess() || migrationBusy || inventoryBusy || !el('migrationBasicConfirmModal').classList.contains('hidden') || !el('migrationInventoryConfirmModal').classList.contains('hidden')) return;
     const token = ++packageReadToken;
     packageValue = null;
     completedTargets.clear();
     el('migrationBasicSummary').classList.add('hidden');
     el('migrationBasicResult').classList.add('hidden');
     el('migrationBasicStatus').textContent = '';
+    inventoryPreviewToken++;
+    inventoryPreview = null;
+    completedInventoryTargets.clear();
+    el('migrationInventorySummary').classList.add('hidden');
+    el('migrationInventoryResult').classList.add('hidden');
+    el('migrationInventoryStatus').textContent = '';
+    el('migrationInventoryGateStatus').classList.add('hidden');
+    el('migrationInventoryGateStatus').textContent = '';
     renderBasicMigrationButton();
     el('migrationPackageReview').classList.add('hidden');
     el('migrationPackageStatus').textContent = '';
@@ -538,6 +685,7 @@
       el('migrationBasicResult').classList.add('hidden');
       el('migrationBasicStatus').textContent = '';
       renderBasicMigrationButton();
+      void updateInventoryPreview();
     });
     el('migrationBasicStartBtn').addEventListener('click', openBasicMigrationConfirmation);
     el('migrationBasicCancelBtn').addEventListener('click', closeBasicMigrationConfirmation);
@@ -548,10 +696,27 @@
     el('migrationBasicConfirmModal').addEventListener('click', event => {
       if (event.target.classList.contains('modal-overlay')) closeBasicMigrationConfirmation();
     });
+    el('migrationInventoryStartBtn').addEventListener('click', openInventoryMigrationConfirmation);
+    el('migrationInventoryCancelBtn').addEventListener('click', closeInventoryMigrationConfirmation);
+    el('migrationInventoryConfirmBtn').addEventListener('click', confirmInventoryMigration);
+    el('migrationInventoryConfirmModal').addEventListener('click', event => {
+      if (event.target.classList.contains('modal-overlay')) closeInventoryMigrationConfirmation();
+    });
     document.addEventListener('keydown', event => {
       const modal = el('migrationBasicConfirmModal');
       if (modal.classList.contains('hidden')) return;
       if (event.key === 'Escape') { closeBasicMigrationConfirmation(); return; }
+      if (event.key === 'Tab') {
+        const controls = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled)')].filter(control => control.getClientRects().length);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    });
+    document.addEventListener('keydown', event => {
+      const modal = el('migrationInventoryConfirmModal');
+      if (modal.classList.contains('hidden')) return;
+      if (event.key === 'Escape') { closeInventoryMigrationConfirmation(); return; }
       if (event.key === 'Tab') {
         const controls = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled)')].filter(control => control.getClientRects().length);
         const first = controls[0], last = controls[controls.length - 1];
@@ -608,6 +773,8 @@
   function show(options) {
     canAccess = options.canAccess; businesses = options.businesses || [];
     migrateBasicRequest = options.migrateBasic;
+    previewInventoryRequest = options.previewInventory;
+    migrateInventoryRequest = options.migrateInventory;
     if (!canAccess()) return;
     localIdentity = readLocalIdentity();
     renderLocalIdentity(localIdentity, localScope);
@@ -616,12 +783,14 @@
     select.value = businesses.some(item => String(item.id) === previous) ? previous : '';
     updateContinue();
     renderBasicMigrationButton();
+    void updateInventoryPreview();
   }
 
   function reset() {
     data = null; report = null; localIdentity = null; localScope = null; sim = { added: [], map: {}, general: false };
     packageReadToken++;
-    packageValue = null; migrationBusy = false; migrateBasicRequest = null; completedTargets.clear();
+    inventoryPreviewToken++;
+    packageValue = null; migrationBusy = false; inventoryBusy = false; migrateBasicRequest = null; previewInventoryRequest = null; migrateInventoryRequest = null; inventoryPreview = null; completedTargets.clear(); completedInventoryTargets.clear();
     el('migrationResult')?.classList.add('hidden');
     el('migrationOriginCounts')?.replaceChildren(card('Productos', '—'), card('Clientes', '—'), card('Ventas', '—'));
     el('migrationSourceNote')?.classList.remove('is-legacy');
@@ -631,6 +800,12 @@
     el('migrationBasicResult').classList.add('hidden');
     el('migrationBasicStatus').textContent = '';
     el('migrationBasicConfirmModal').classList.add('hidden');
+    el('migrationInventorySummary')?.classList.add('hidden');
+    el('migrationInventoryResult')?.classList.add('hidden');
+    el('migrationInventoryStatus').textContent = '';
+    el('migrationInventoryGateStatus')?.classList.add('hidden');
+    el('migrationInventoryGateStatus').textContent = '';
+    el('migrationInventoryConfirmModal').classList.add('hidden');
     el('migrationPackageStatus').dataset.state = '';
     el('migrationPackageStatus').textContent = 'Aún no se ha seleccionado un paquete.';
   }
@@ -640,7 +815,7 @@
     setupPackageReader();
     el('migrationRefreshBtn').addEventListener('click', refresh);
     el('migrationType').addEventListener('change', () => { if (report && canAccess()) renderReport(); });
-    el('migrationBusiness').addEventListener('change', () => { if (report && canAccess()) { const status = el('migrationStatus'); status.textContent = 'Destino seleccionado solo para la lectura técnica; los datos básicos solo se envían al confirmar su migración.'; status.classList.remove('hidden'); } });
+    el('migrationBusiness').addEventListener('change', () => { void updateInventoryPreview(); if (report && canAccess()) { const status = el('migrationStatus'); status.textContent = 'Destino seleccionado solo para la lectura técnica; los datos básicos solo se envían al confirmar su migración.'; status.classList.remove('hidden'); } });
     el('migrationContinueBtn').addEventListener('click', event => { event.preventDefault(); el('migrationContinueNote').textContent = SAFE_MESSAGE; });
     el('migrationAddForm').addEventListener('submit', event => {
       event.preventDefault(); if (!report || !canAccess()) return;

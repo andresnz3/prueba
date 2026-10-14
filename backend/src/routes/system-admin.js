@@ -33,6 +33,14 @@ function systemAdminRoutes({ repo, config }) {
     const result = await service.migrateBasic(req.auth, v.id(data.targetBusinessId), data.package, data.confirmSystemBusiness === true);
     res.status(201).json(result);
   });
+  router.post('/system-admin/migration/inventory/preview', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['targetBusinessId', 'package']);
+    res.json(await service.previewInventoryMigration(req.auth, v.id(data.targetBusinessId), data.package));
+  });
+  router.post('/system-admin/migration/inventory', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['targetBusinessId', 'package']);
+    res.status(201).json(await service.migrateInventory(req.auth, v.id(data.targetBusinessId), data.package));
+  });
   router.get('/admin/businesses', async (req, res) => {
     if (Object.keys(req.query).length) v.invalid();
     res.json({ businesses: await service.listBusinesses(req.auth) });

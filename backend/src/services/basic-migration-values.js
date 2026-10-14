@@ -114,4 +114,10 @@ function packageForImport(value) {
   };
 }
 
-module.exports = { packageForImport, normalizeName };
+function packageForInventoryImport(value) {
+  const imported = packageForImport(value);
+  if (!Array.isArray(value.data.inventoryMovements) || value.data.inventoryMovements.length > MAX_RECORDS_PER_TYPE) invalidPackage();
+  return imported;
+}
+
+module.exports = { packageForImport, packageForInventoryImport, normalizeName };

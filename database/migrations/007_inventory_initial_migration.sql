@@ -1,0 +1,12 @@
+ALTER TABLE inventory_movements
+  MODIFY COLUMN type ENUM(
+    'PURCHASE',
+    'SALE',
+    'WASTE',
+    'ADJUSTMENT',
+    'SALE_CANCEL',
+    'PURCHASE_CANCEL',
+    'INITIAL',
+    'MANUAL_EDIT',
+    'MIGRACION_INICIAL'
+  ) NOT NULL;

@@ -242,6 +242,23 @@
                             <ul id="migrationBasicWarnings"></ul>
                         </div>
                     </section>
+                    <section id="migrationInventorySummary" class="migration-basic-summary hidden" aria-labelledby="migrationInventorySummaryTitle">
+                        <h3 id="migrationInventorySummaryTitle">Inventario inicial / Kardex básico</h3>
+                        <div class="migration-counts migration-package-counts">
+                            <article><span>Productos con stock</span><strong id="migrationInventoryWithStock">0</strong></article>
+                            <article><span>Productos sin stock</span><strong id="migrationInventoryWithoutStock">0</strong></article>
+                            <article><span>Productos que se omitirían</span><strong id="migrationInventoryToSkip">0</strong></article>
+                        </div>
+                        <p class="system-admin-help">Se registrará el saldo local como inventario inicial. El Kardex histórico del paquete no se copiará y los productos con historial en destino se omitirán.</p>
+                        <button id="migrationInventoryStartBtn" class="btn btn-primary" type="button" disabled>Migrar inventario inicial</button>
+                        <p id="migrationInventoryStatus" class="migration-package-status" role="status" aria-live="polite"></p>
+                        <div id="migrationInventoryResult" class="migration-basic-result hidden" role="status" aria-live="polite">
+                            <h4>Migración de inventario completada</h4>
+                            <dl><div><dt>Movimientos iniciales creados / omitidos</dt><dd><span id="migrationInventoryCreated">0</span> / <span id="migrationInventorySkipped">0</span></dd></div></dl>
+                            <ul id="migrationInventoryWarnings"></ul>
+                        </div>
+                    </section>
+                    <p id="migrationInventoryGateStatus" class="migration-package-status hidden" role="status" aria-live="polite"></p>
                     <details class="migration-direct-source">
                         <summary>
                             <strong>Lectura directa del navegador actual</strong>
@@ -858,6 +875,27 @@
 
     <!-- MODALES -->
     <div id="authModal" class="modal hidden"><div class="modal-overlay"></div><div class="modal-card"><h2>Autorización Requerida</h2><form id="authForm" onsubmit="event.preventDefault();"><div class="form-group"><label id="adminUsernameGroup" class="hidden" for="grantAdminUsername">Usuario administrador<input id="grantAdminUsername" autocomplete="off" disabled></label><label for="gestorPassword">Contraseña de gestor</label><input type="password" id="gestorPassword" placeholder="Contraseña de gestor" required style="background:#fff!important; color:#000!important;"></div><div id="authError" class="message error hidden">Contraseña incorrecta.</div><div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button type="submit" class="btn btn-primary">Autorizar</button></div></form></div></div>
+
+    <div id="migrationInventoryConfirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="migrationInventoryConfirmTitle" aria-describedby="migrationInventoryConfirmDescription">
+        <div class="modal-overlay"></div>
+        <section class="modal-card migration-basic-confirm-card" aria-busy="false">
+            <h2 id="migrationInventoryConfirmTitle" tabindex="-1" data-initial-focus>Confirmar migración de inventario</h2>
+            <p id="migrationInventoryConfirmDescription">Se crearán movimientos iniciales de inventario para los productos del paquete. No se migrarán ventas, compras, caja ni abonos.</p>
+            <dl class="migration-basic-confirm-meta">
+                <div><dt>Negocio origen</dt><dd id="migrationInventoryConfirmSource">—</dd></div>
+                <div><dt>Negocio destino</dt><dd id="migrationInventoryConfirmTarget">—</dd></div>
+                <div><dt>Productos con stock</dt><dd id="migrationInventoryConfirmWithStock">0</dd></div>
+                <div><dt>Productos sin stock</dt><dd id="migrationInventoryConfirmWithoutStock">0</dd></div>
+                <div><dt>Productos que se omitirían</dt><dd id="migrationInventoryConfirmToSkip">0</dd></div>
+            </dl>
+            <ul id="migrationInventoryConfirmWarnings" class="migration-warnings"></ul>
+            <p id="migrationInventoryConfirmError" class="message error hidden" role="alert" aria-live="assertive"></p>
+            <div class="modal-actions">
+                <button id="migrationInventoryCancelBtn" type="button" class="btn btn-secondary">Cancelar</button>
+                <button id="migrationInventoryConfirmBtn" type="button" class="btn btn-primary">Confirmar migración de inventario</button>
+            </div>
+        </section>
+    </div>
 
     <div id="migrationRequestModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="migrationRequestTitle">
         <div class="modal-overlay"></div>
