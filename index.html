@@ -83,6 +83,42 @@
                         </div>
                     </header>
 
+                    <section class="upgrade-section migration-export-section" aria-labelledby="migrationExportTitle">
+                        <div class="upgrade-section-heading">
+                            <span class="upgrade-eyebrow">Preparar tus datos</span>
+                            <h2 id="migrationExportTitle">Exportar datos para migración</h2>
+                            <p>Este archivo sirve para que el administrador pueda revisar y migrar tus datos al modo conectado. No se enviará nada automáticamente.</p>
+                        </div>
+                        <div class="migration-export-steps">
+                            <section class="migration-export-step" aria-labelledby="migrationExportStepOne">
+                                <div class="migration-export-step-heading"><span aria-hidden="true">1</span><h3 id="migrationExportStepOne">Paso 1: Revisar datos</h3></div>
+                                <p>Lee los datos locales y prepara un resumen para que puedas revisarlo antes de descargar.</p>
+                                <button id="migrationExportGenerateBtn" class="btn btn-primary" type="button">Generar paquete de migración</button>
+                            </section>
+                            <section class="migration-export-step" aria-labelledby="migrationExportStepTwo">
+                                <div class="migration-export-step-heading"><span aria-hidden="true">2</span><h3 id="migrationExportStepTwo">Paso 2: Descargar archivo</h3></div>
+                                <p>La descarga se habilita después de revisar los datos.</p>
+                                <button id="migrationExportDownloadBtn" class="btn btn-secondary" type="button" disabled aria-describedby="migrationExportDownloadHelp">Descargar paquete .json</button>
+                                <small id="migrationExportDownloadHelp">Primero genera y revisa el resumen.</small>
+                                <small>Las fotos de productos pueden hacer que el archivo sea más pesado.</small>
+                            </section>
+                            <section class="migration-export-step" aria-labelledby="migrationExportStepThree">
+                                <div class="migration-export-step-heading"><span aria-hidden="true">3</span><h3 id="migrationExportStepThree">Paso 3: Enviar archivo al administrador</h3></div>
+                                <p>Cuando lo descargues, envíalo manualmente al administrador autorizado.</p>
+                                <p class="migration-export-security">Este archivo contiene datos del negocio. Envíalo solo al administrador autorizado.</p>
+                            </section>
+                        </div>
+                        <p id="migrationExportStatus" class="migration-export-status" role="status" aria-live="polite"></p>
+                        <section id="migrationExportReview" class="migration-export-review hidden" aria-labelledby="migrationExportReviewTitle" aria-live="polite">
+                            <h3 id="migrationExportReviewTitle">Resumen antes de descargar</h3>
+                            <div id="migrationExportCounts" class="migration-export-counts"></div>
+                            <h4>Advertencias para revisar</h4>
+                            <ul id="migrationExportWarnings" class="migration-export-warnings"></ul>
+                            <p id="migrationExportScope" class="migration-export-scope"></p>
+                            <p id="migrationExportFilename" class="migration-export-filename" aria-live="polite"></p>
+                        </section>
+                    </section>
+
                     <section class="upgrade-section" aria-labelledby="upgradeBenefitsTitle">
                         <div class="upgrade-section-heading"><span class="upgrade-eyebrow">Más alcance para tu negocio</span><h2 id="upgradeBenefitsTitle">Todo tu negocio, mejor conectado</h2><p>Conoce lo que puedes hacer con una configuración acompañada.</p></div>
                         <div class="upgrade-benefit-grid">
@@ -1118,6 +1154,7 @@
     <script src="connected-dashboard.js"></script>
     <script src="local-cash-flow.js"></script>
     <script src="local-migration-preview.js"></script>
+    <script src="local-migration-export.js"></script>
     <script src="connected-auth.js"></script>
     <script src="icons.js"></script>
 </body>
