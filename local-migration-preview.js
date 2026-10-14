@@ -25,8 +25,11 @@
   let data = null;      // copia en memoria de los datos locales (solo lectura)
   let report = null;    // conteos y advertencias calculados
   let loading = false;
+  let packageReadToken = 0;
   // Simulación solo visual: vive en memoria y se descarta al salir o actualizar.
   let sim = { added: [], map: {}, general: false };
+  const INVALID_PACKAGE_MESSAGE = 'Este archivo no parece ser un paquete de migración válido.';
+  const VALID_PACKAGE_MESSAGE = 'Paquete válido. Listo para revisión.';
 
   function node(tag, className, content) {
     const item = document.createElement(tag);
@@ -323,6 +326,116 @@
 
   function destination() { return businesses.find(item => String(item.id) === el('migrationBusiness').value); }
 
+  function isRecord(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
+
+  function packageCount(value) {
+    const count = Number(value);
+    return Number.isFinite(count) && count >= 0 ? count.toLocaleString('es-NI') : '0';
+  }
+
+  function packageDate(value) {
+    const date = new Date(value);
+    return value && Number.isFinite(date.getTime()) ? date.toLocaleString('es-NI') : 'No disponible';
+  }
+
+  function renderPackageWarnings(warnings) {
+    const list = el('migrationPackageWarnings');
+    list.replaceChildren();
+    let warningCount = 0;
+    for (const warning of warnings) {
+      if (!isRecord(warning)) {
+        warningCount++;
+        list.append(node('li', 'migration-warn', String(warning)));
+        continue;
+      }
+      const count = Number(warning.count);
+      const hasCount = Number.isFinite(count) && count >= 0;
+      const hasProblems = !hasCount || count > 0;
+      const row = node('li', hasProblems ? 'migration-warn' : 'migration-ok');
+      const heading = node('span');
+      const label = text(warning.label || warning.code) || 'Advertencia';
+      heading.textContent = label + (hasProblems ? ' · ' + (hasCount ? packageCount(count) : 'Revisar') : ' · Sin problemas');
+      row.append(heading);
+      if (hasProblems) {
+        warningCount++;
+        if (text(warning.detail)) row.append(node('small', '', text(warning.detail)));
+      }
+      list.append(row);
+    }
+    const summary = el('migrationPackageWarningSummary');
+    summary.classList.toggle('has-warnings', warningCount > 0);
+    summary.classList.toggle('no-warnings', warningCount === 0);
+    summary.textContent = warningCount
+      ? 'Paquete válido. Se encontraron ' + warningCount.toLocaleString('es-NI') + ' advertencia' + (warningCount === 1 ? '' : 's') + ' para revisar.'
+      : 'Paquete válido. No se encontraron advertencias.';
+  }
+
+  function showPackage(value) {
+    const summary = value.summary;
+    const dataPackage = value.data;
+    const counts = [
+      ['Productos', summary.products], ['Clientes', summary.clients], ['Proveedores', summary.suppliers],
+      ['Ventas', summary.sales], ['Compras', summary.purchases], ['Caja', summary.cashSessions],
+      ['Inventario', summary.inventoryMovements], ['Abonos', summary.abonos],
+      ['Categorías', Array.isArray(dataPackage.categories) ? dataPackage.categories.length : 0]
+    ];
+    el('migrationPackageBusiness').textContent = text(value.business.name) || 'No disponible';
+    el('migrationPackageDate').textContent = packageDate(value.exportedAt);
+    el('migrationPackageCounts').replaceChildren(...counts.map(([label, count]) => card(label, packageCount(count))));
+    renderPackageWarnings(Array.isArray(value.warnings) ? value.warnings : []);
+    el('migrationPackageReview').classList.remove('hidden');
+  }
+
+  async function readPackage(file) {
+    const token = ++packageReadToken;
+    if (!canAccess()) return;
+    el('migrationPackageReview').classList.add('hidden');
+    el('migrationPackageStatus').textContent = '';
+    let value;
+    try {
+      if (!file || !/\.json$/i.test(file.name)) throw new Error('Invalid package file');
+      value = JSON.parse(await file.text());
+    } catch {
+      if (token !== packageReadToken) return;
+      el('migrationPackageStatus').dataset.state = 'invalid';
+      el('migrationPackageStatus').textContent = INVALID_PACKAGE_MESSAGE;
+      return;
+    }
+    if (token !== packageReadToken) return;
+    if (!isRecord(value) || value.type !== 'pos_local_migration_package' || value.version !== 1 ||
+        !isRecord(value.data) || !isRecord(value.summary) || !isRecord(value.business)) {
+      el('migrationPackageStatus').dataset.state = 'invalid';
+      el('migrationPackageStatus').textContent = INVALID_PACKAGE_MESSAGE;
+      return;
+    }
+    showPackage(value);
+    el('migrationPackageStatus').dataset.state = 'valid';
+    el('migrationPackageStatus').textContent = VALID_PACKAGE_MESSAGE;
+  }
+
+  function setupPackageReader() {
+    const input = el('migrationPackageFile');
+    const dropzone = el('migrationPackageDropzone');
+    input.addEventListener('change', () => {
+      const [file] = input.files || [];
+      if (file) readPackage(file);
+      input.value = '';
+    });
+    dropzone.addEventListener('dragover', event => {
+      event.preventDefault();
+      dropzone.classList.add('is-dragging');
+    });
+    dropzone.addEventListener('dragleave', event => {
+      if (!dropzone.contains(event.relatedTarget)) dropzone.classList.remove('is-dragging');
+    });
+    dropzone.addEventListener('drop', event => {
+      event.preventDefault();
+      dropzone.classList.remove('is-dragging');
+      const [file] = event.dataTransfer?.files || [];
+      readPackage(file);
+    });
+  }
+
   function updateContinue() {
     const button = el('migrationContinueBtn');
     button.disabled = true;
@@ -363,18 +476,23 @@
     select.replaceChildren(new Option('Selecciona un negocio conectado', ''), ...businesses.map(item => new Option(item.name + ' (#' + item.id + ')' + (item.status === 'ACTIVE' ? '' : ' · inactivo'), item.id)));
     select.value = businesses.some(item => String(item.id) === previous) ? previous : '';
     updateContinue();
-    if (!report) refresh();
   }
 
   function reset() {
     data = null; report = null; localIdentity = null; localScope = null; sim = { added: [], map: {}, general: false };
+    packageReadToken++;
     el('migrationResult')?.classList.add('hidden');
     el('migrationOriginCounts')?.replaceChildren(card('Productos', '—'), card('Clientes', '—'), card('Ventas', '—'));
     el('migrationSourceNote')?.classList.remove('is-legacy');
+    el('migrationPackageFile').value = '';
+    el('migrationPackageReview').classList.add('hidden');
+    el('migrationPackageStatus').dataset.state = '';
+    el('migrationPackageStatus').textContent = 'Aún no se ha seleccionado un paquete.';
   }
 
   function init() {
     if (!el('migrationRefreshBtn')) return;
+    setupPackageReader();
     el('migrationRefreshBtn').addEventListener('click', refresh);
     el('migrationType').addEventListener('change', () => { if (report && canAccess()) renderReport(); });
     el('migrationBusiness').addEventListener('change', () => { if (report && canAccess()) { const status = el('migrationStatus'); status.textContent = 'Destino seleccionado solo para previsualizar' + (destination() ? ': ' + destination().name + ' (#' + destination().id + ')' : '') + '. No se envía nada al backend.'; status.classList.remove('hidden'); } });

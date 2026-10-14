@@ -190,10 +190,44 @@
                     <div class="table-container system-admin-table-wrap system-admin-billing-table-wrap"><table><thead><tr><th>Negocio</th><th>Plan actual</th><th>Estado de pago</th><th>Próximo vencimiento</th><th>Último pago</th><th>Acciones</th></tr></thead><tbody id="systemAdminBillingBody"></tbody></table></div>
                 </section>
                 <section id="systemAdminMigrationPanel" class="system-admin-panel hidden" role="tabpanel" aria-labelledby="systemAdminMigrationTab" aria-hidden="true">
-                    <div class="system-admin-billing-heading"><div><h2>Migración local</h2><p class="system-admin-help">Previsualización de solo lectura. No migra, no envía datos al backend y no modifica la base local.</p></div></div>
-                    <div class="migration-source-destination">
+                    <section class="migration-package-review" aria-labelledby="migrationPackageTitle">
+                        <div class="migration-package-heading">
+                            <div>
+                                <h3 id="migrationPackageTitle">1. Cargar paquete de migración .json</h3>
+                                <p class="system-admin-help">El cliente exporta su paquete desde modo local y lo comparte contigo. Selecciona o arrastra el archivo para revisarlo aquí; no se envía al backend.</p>
+                            </div>
+                        </div>
+                        <label id="migrationPackageDropzone" class="migration-package-dropzone" for="migrationPackageFile">
+                            <input id="migrationPackageFile" class="visually-hidden" type="file" accept=".json,application/json" aria-describedby="migrationPackageStatus">
+                            <span class="migration-package-drop-icon" aria-hidden="true">JSON</span>
+                            <span><strong>Arrastra el paquete aquí</strong><small>o selecciona un archivo .json desde tu dispositivo</small></span>
+                            <span class="btn btn-secondary migration-package-select">Seleccionar archivo</span>
+                        </label>
+                        <p id="migrationPackageStatus" class="migration-package-status" role="status" aria-live="polite">Aún no se ha seleccionado un paquete.</p>
+                        <div id="migrationPackageReview" class="hidden">
+                            <h4 class="migration-subtitle">2. Resumen del paquete</h4>
+                            <dl class="migration-package-meta">
+                                <div><dt>Negocio origen</dt><dd id="migrationPackageBusiness">—</dd></div>
+                                <div><dt>Fecha de exportación</dt><dd id="migrationPackageDate">—</dd></div>
+                            </dl>
+                            <div id="migrationPackageCounts" class="migration-counts migration-package-counts"></div>
+                            <h4 class="migration-subtitle">3. Validaciones y advertencias</h4>
+                            <p id="migrationPackageWarningSummary" class="migration-package-warning-summary" role="status" aria-live="polite"></p>
+                            <ul id="migrationPackageWarnings" class="migration-warnings"></ul>
+                        </div>
+                    </section>
+                    <section class="migration-destination-card migration-destination-primary" aria-labelledby="migrationDestinationTitle">
+                        <h3 id="migrationDestinationTitle">4. Destino conectado</h3>
+                        <div class="form-group"><label for="migrationBusiness">Seleccionar negocio conectado destino</label><select id="migrationBusiness"></select></div>
+                        <p class="system-admin-help">Elige el negocio donde se revisaría una futura migración. Esta selección no envía ni modifica datos.</p>
+                    </section>
+                    <details class="migration-direct-source">
+                        <summary>
+                            <strong>Lectura directa del navegador actual</strong>
+                            <span>Uso técnico opcional. El flujo recomendado es cargar el paquete .json enviado por el cliente.</span>
+                        </summary>
                         <section class="migration-source-card" aria-labelledby="migrationSourceTitle">
-                            <h3 id="migrationSourceTitle">Origen local</h3>
+                            <h3 id="migrationSourceTitle">Origen local · POS_OfflineDB</h3>
                             <dl class="migration-source-meta">
                                 <div><dt>Negocio local</dt><dd id="migrationLocalBusinessName">POS DISTRIBUIDORA</dd></div>
                                 <div><dt>Base local</dt><dd>POS_OfflineDB</dd></div>
@@ -203,37 +237,32 @@
                             <div id="migrationOriginCounts" class="migration-origin-counts" aria-live="polite"></div>
                             <p id="migrationSourceNote" class="migration-source-note" role="status" aria-live="polite"></p>
                         </section>
-                        <section class="migration-destination-card" aria-labelledby="migrationDestinationTitle">
-                            <h3 id="migrationDestinationTitle">Destino conectado</h3>
-                            <div class="form-group"><label for="migrationBusiness">Seleccionar negocio conectado destino</label><select id="migrationBusiness"></select></div>
-                            <p class="system-admin-help">La selección solo identifica el destino de esta previsualización.</p>
-                        </section>
-                    </div>
-                    <div class="system-admin-form migration-preview-controls">
-                        <div class="form-group"><label for="migrationType">Tipo de migración</label><select id="migrationType"><option value="basic">Básica</option><option value="full">Completa</option></select></div>
-                        <button id="migrationRefreshBtn" class="btn btn-secondary" type="button">Actualizar previsualización</button>
-                    </div>
-                    <p id="migrationStatus" class="message hidden" role="status" aria-live="polite"></p>
-                    <div id="migrationResult" class="hidden">
-                        <p id="migrationScope" class="system-admin-help"></p>
-                        <h3 class="migration-subtitle">Otros datos locales detectados</h3>
-                        <div id="migrationCounts" class="migration-counts"></div>
-                        <h3 class="migration-subtitle">Advertencias</h3>
-                        <ul id="migrationWarnings" class="migration-warnings"></ul>
-                        <h3 class="migration-subtitle">Categorías</h3>
-                        <p class="system-admin-help">Los cambios de categorías son una simulación visual. No se guarda nada en esta fase.</p>
-                        <p id="migrationSimNotice" class="message hidden" role="status" aria-live="polite"></p>
-                        <p id="migrationNoCategory" class="system-admin-help"></p>
-                        <div class="table-container system-admin-table-wrap"><table><thead><tr><th>Categoría (simulada)</th><th>Productos</th><th>Origen</th></tr></thead><tbody id="migrationCategoriesBody"></tbody></table></div>
-                        <div id="migrationDuplicates" class="migration-duplicates"></div>
-                        <div class="migration-sim-tools">
-                            <form id="migrationAddForm" class="system-admin-form"><div class="form-group"><label for="migrationAddName">Agregar categoría</label><input id="migrationAddName" maxlength="80" autocomplete="off"></div><button class="btn btn-secondary" type="submit">Simular agregar</button></form>
-                            <form id="migrationRenameForm" class="system-admin-form"><div class="form-group"><label for="migrationRenameFrom">Renombrar categoría</label><select id="migrationRenameFrom"></select></div><div class="form-group"><label for="migrationRenameTo">Nuevo nombre</label><input id="migrationRenameTo" maxlength="80" autocomplete="off"></div><button class="btn btn-secondary" type="submit">Simular renombrar</button></form>
-                            <form id="migrationMergeForm" class="system-admin-form"><div class="form-group"><label for="migrationMergeFrom">Fusionar categorías</label><select id="migrationMergeFrom"></select></div><div class="form-group"><label for="migrationMergeTo">Destino de la fusión</label><select id="migrationMergeTo"></select></div><button class="btn btn-secondary" type="submit">Simular fusionar</button></form>
-                            <div class="system-admin-form"><button id="migrationAssignGeneralBtn" class="btn btn-secondary" type="button">Simular asignar «General» a productos sin categoría</button><button id="migrationResetSimBtn" class="btn btn-secondary" type="button">Descartar simulación</button></div>
+                        <div class="system-admin-form migration-preview-controls">
+                            <div class="form-group"><label for="migrationType">Tipo de migración</label><select id="migrationType"><option value="basic">Básica</option><option value="full">Completa</option></select></div>
+                            <button id="migrationRefreshBtn" class="btn btn-secondary" type="button">Leer POS_OfflineDB de este navegador</button>
                         </div>
-                    </div>
-                    <div class="migration-continue"><button id="migrationContinueBtn" class="btn btn-primary" type="button" disabled aria-describedby="migrationContinueNote">Continuar con migración</button><p id="migrationContinueNote" class="system-admin-help">La migración real estará disponible en la siguiente fase.</p></div>
+                        <p id="migrationStatus" class="message hidden" role="status" aria-live="polite"></p>
+                        <div id="migrationResult" class="hidden">
+                            <p id="migrationScope" class="system-admin-help"></p>
+                            <h3 class="migration-subtitle">Otros datos locales detectados</h3>
+                            <div id="migrationCounts" class="migration-counts"></div>
+                            <h3 class="migration-subtitle">Advertencias</h3>
+                            <ul id="migrationWarnings" class="migration-warnings"></ul>
+                            <h3 class="migration-subtitle">Categorías</h3>
+                            <p class="system-admin-help">Los cambios de categorías son una simulación visual. No se guarda nada en esta fase.</p>
+                            <p id="migrationSimNotice" class="message hidden" role="status" aria-live="polite"></p>
+                            <p id="migrationNoCategory" class="system-admin-help"></p>
+                            <div class="table-container system-admin-table-wrap"><table><thead><tr><th>Categoría (simulada)</th><th>Productos</th><th>Origen</th></tr></thead><tbody id="migrationCategoriesBody"></tbody></table></div>
+                            <div id="migrationDuplicates" class="migration-duplicates"></div>
+                            <div class="migration-sim-tools">
+                                <form id="migrationAddForm" class="system-admin-form"><div class="form-group"><label for="migrationAddName">Agregar categoría</label><input id="migrationAddName" maxlength="80" autocomplete="off"></div><button class="btn btn-secondary" type="submit">Simular agregar</button></form>
+                                <form id="migrationRenameForm" class="system-admin-form"><div class="form-group"><label for="migrationRenameFrom">Renombrar categoría</label><select id="migrationRenameFrom"></select></div><div class="form-group"><label for="migrationRenameTo">Nuevo nombre</label><input id="migrationRenameTo" maxlength="80" autocomplete="off"></div><button class="btn btn-secondary" type="submit">Simular renombrar</button></form>
+                                <form id="migrationMergeForm" class="system-admin-form"><div class="form-group"><label for="migrationMergeFrom">Fusionar categorías</label><select id="migrationMergeFrom"></select></div><div class="form-group"><label for="migrationMergeTo">Destino de la fusión</label><select id="migrationMergeTo"></select></div><button class="btn btn-secondary" type="submit">Simular fusionar</button></form>
+                                <div class="system-admin-form"><button id="migrationAssignGeneralBtn" class="btn btn-secondary" type="button">Simular asignar «General» a productos sin categoría</button><button id="migrationResetSimBtn" class="btn btn-secondary" type="button">Descartar simulación</button></div>
+                            </div>
+                        </div>
+                    </details>
+                    <div class="migration-continue"><button id="migrationContinueBtn" class="btn btn-primary" type="button" disabled aria-describedby="migrationContinueNote">Continuar con migración real</button><p id="migrationContinueNote" class="system-admin-help">La migración real permanece deshabilitada en esta fase.</p></div>
                 </section>
             </div>
             <div id="salesView" class="view-panel">
