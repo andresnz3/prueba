@@ -570,6 +570,95 @@
           !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
       return value;
     }
+    #safeSalesMigrationPackage(packageValue) {
+      if (!packageValue || packageValue.type !== 'pos_local_migration_package' || packageValue.version !== 1 ||
+          !packageValue.business || typeof packageValue.business !== 'object' || Array.isArray(packageValue.business) ||
+          !packageValue.data || !Array.isArray(packageValue.data.products) || packageValue.data.products.length > 50000 ||
+          !Array.isArray(packageValue.data.clients) || packageValue.data.clients.length > 50000 ||
+          !Array.isArray(packageValue.data.sales) || packageValue.data.sales.length > 50000) throw new ApiError('INVALID_INPUT');
+      const fields = (records, allowed) => records.map(record => {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+        return Object.fromEntries(allowed.filter(key => Object.hasOwn(record, key)).map(key => [key, record[key]]));
+      });
+      const productFields = ['id', 'productId', 'productoId', 'product_id', 'barcode', 'codigo', 'code', 'name', 'nombre', 'cost', 'taxRate', 'tax_rate', 'tax'];
+      const clientFields = ['id', 'clientId', 'clienteId', 'client_id', 'name', 'nombre'];
+      const saleFields = ['id', 'saleId', 'ventaId', 'sale_id', 'venta_id', 'numero', 'createdAt', 'created_at', 'fechaTS', 'fecha', 'date', 'timestamp',
+        'clientId', 'clienteId', 'client_id', 'cliente_id', 'clientName', 'clienteNombre', 'nombreCliente', 'customerName',
+        'subtotal', 'subTotal', 'base', 'discount', 'descuento', 'discountAmount', 'descuentoMonto', 'discountPercent', 'descuentoPorcentaje', 'porcentajeDescuento', 'descuentoPct',
+        'tax', 'impuesto', 'total', 'grandTotal', 'totalVenta', 'montoTotal', 'importeTotal', 'paymentMethod', 'metodoPago', 'metodo', 'payment_method',
+        'medioPago', 'saleType', 'tipoVenta', 'sale_type', 'tipo', 'status', 'estado', 'saleStatus', 'priceType', 'tipoPrecio', 'sale_price_type', 'tarifa', 'anulada',
+        'detail', 'nota', 'note', 'invoiceNumber', 'numeroFactura', 'factura', 'invoice', 'comprobante',
+        'cancelledAt', 'fechaAnulacion', 'cancelDate', 'cancelReason', 'motivoAnulacion', 'dueAt', 'fechaVencimiento', 'vencimiento', 'vencimientoTS'];
+      const itemFields = ['id', 'productId', 'productoId', 'product_id', 'producto_id', 'barcode', 'codigo', 'code', 'productName', 'nombreProducto',
+        'name', 'nombre', 'descripcion', 'quantity', 'cantidad', 'qty', 'unitPrice', 'precioUnitario', 'price', 'precio', 'precioVenta',
+        'retailPrice', 'wholesalePrice', 'tarifa', 'precio1', 'precio2', 'total', 'importe', 'monto', 'subtotal', 'subTotal', 'discount', 'descuento', 'discountAmount', 'descuentoMonto', 'discountPercent', 'descuentoPct', 'tax', 'impuesto',
+        'costAtSale', 'cost', 'costo', 'taxRate', 'tax_rate', 'impuestoPorcentaje'];
+      const sales = packageValue.data.sales.map(sale => {
+        if (!sale || typeof sale !== 'object' || Array.isArray(sale)) return sale;
+        const safe = Object.fromEntries(saleFields.filter(key => Object.hasOwn(sale, key)).map(key => [key, sale[key]]));
+        for (const key of ['items', 'detalleProductos', 'detalles', 'products', 'lineItems']) {
+          if (!Object.hasOwn(sale, key)) continue;
+          safe[key] = Array.isArray(sale[key]) ? sale[key].map(item => {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+            const clean = Object.fromEntries(itemFields.filter(field => Object.hasOwn(item, field)).map(field => [field, item[field]]));
+            for (const productKey of ['product', 'producto']) {
+              const product = item[productKey];
+              if (product && typeof product === 'object' && !Array.isArray(product)) {
+                clean[productKey] = Object.fromEntries(['id', 'productId', 'barcode', 'codigo', 'code', 'name', 'nombre', 'retailPrice', 'wholesalePrice', 'tarifa']
+                  .filter(field => Object.hasOwn(product, field)).map(field => [field, product[field]]));
+              } else if (typeof product === 'string') clean[productKey] = product;
+            }
+            return clean;
+          }) : sale[key];
+        }
+        for (const key of ['client', 'cliente', 'customer']) {
+          const client = sale[key];
+          if (typeof client === 'string') safe[key] = client;
+          else if (client && typeof client === 'object' && !Array.isArray(client)) {
+            safe[key] = Object.fromEntries(['id', 'clientId', 'clienteId', 'name', 'nombre']
+              .filter(field => Object.hasOwn(client, field)).map(field => [field, client[field]]));
+          }
+        }
+        return safe;
+      });
+      const sourceBusinessId = ['localBusinessId', 'businessId', 'business_id', 'id', 'negocioId']
+        .find(key => Object.hasOwn(packageValue.business, key));
+      return {
+        type: packageValue.type,
+        version: packageValue.version,
+        exportedAt: packageValue.exportedAt,
+        business: { name: packageValue.business.name, ...(sourceBusinessId ? { id: packageValue.business[sourceBusinessId] } : {}) },
+        data: {
+          products: fields(packageValue.data.products, productFields),
+          clients: fields(packageValue.data.clients, clientFields),
+          suppliers: [],
+          sales,
+          inventoryMovements: []
+        }
+      };
+    }
+    async previewSalesMigration(targetBusinessId, packageValue) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safeSalesMigrationPackage(packageValue);
+      const value = await this.#write('/system-admin/migration/sales/preview', 'POST', { targetBusinessId, package: safePackage });
+      const counts = value?.sales, gates = value?.gates;
+      if (value?.ok !== true || typeof value.eligible !== 'boolean' ||
+          !counts || !['detected', 'couldMigrate', 'toSkip'].every(key => Number.isSafeInteger(counts[key]) && counts[key] >= 0) ||
+          !gates || !['basic', 'inventory', 'schema', 'targetUser'].every(key => typeof gates[key] === 'boolean') ||
+          !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async migrateSales(targetBusinessId, packageValue) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safeSalesMigrationPackage(packageValue);
+      const value = await this.#write('/system-admin/migration/sales', 'POST', { targetBusinessId, package: safePackage });
+      const validCounts = counts => counts && Number.isSafeInteger(counts.sales) && counts.sales >= 0;
+      if (value?.ok !== true || !validCounts(value.created) || !validCounts(value.skipped) ||
+          !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
     async createAdminBusiness(name) {
       this.#requireSystemAdmin();
       const value = await this.#write('/admin/businesses', 'POST', { name });

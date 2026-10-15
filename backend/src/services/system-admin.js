@@ -6,6 +6,7 @@ const { httpError } = require('../middleware/errors');
 const billingValues = require('./system-admin-billing-values');
 const { packageForImport, normalizeName } = require('./basic-migration-values');
 const { createSystemAdminInventoryMigration } = require('./system-admin-inventory-migration');
+const { createSystemAdminSalesMigration } = require('./system-admin-sales-migration');
 const { randomUUID } = require('node:crypto');
 
 const isSystemAdmin = auth => auth?.username === 'andres' && auth.role === 'ADMIN' && String(auth.business_id) === '1';
@@ -27,6 +28,7 @@ const planByCode = new Map(PLAN_CATALOG.map(plan => [plan.code, plan]));
 
 function createSystemAdminService(repo) {
   const inventoryMigration = createSystemAdminInventoryMigration({ repo, requireSystemAdmin });
+  const salesMigration = createSystemAdminSalesMigration({ repo, requireSystemAdmin });
   async function assertBillingTables() {
     const rows = await repo.rows(repo.pool, 'SELECT TABLE_NAME AS tableName FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?, ?)', ['business_subscriptions', 'business_subscription_payments']);
     if (rows.length !== 2) throw httpError(503, 'SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED');
@@ -372,7 +374,9 @@ function createSystemAdminService(repo) {
     createBusiness, setBusinessStatus, deleteBusiness, listBusinessUsers, createBusinessUser, setUserStatus,
     startSupportSession, endSupportSession, migrateBasic,
     previewInventoryMigration: inventoryMigration.preview,
-    migrateInventory: inventoryMigration.migrate
+    migrateInventory: inventoryMigration.migrate,
+    previewSalesMigration: salesMigration.preview,
+    migrateSales: salesMigration.migrate
   };
 }
 

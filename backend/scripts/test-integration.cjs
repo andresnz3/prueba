@@ -32,12 +32,14 @@ async function main() {
     for (const sql of systemAdminBillingMigration.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
     const inventoryInitialMigration = readFileSync(resolve(__dirname, '../../database/migrations/007_inventory_initial_migration.sql'), 'utf8');
     for (const sql of inventoryInitialMigration.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
+    const localSalesMigration = readFileSync(resolve(__dirname, '../../database/migrations/008_local_sales_migration.sql'), 'utf8');
+    for (const sql of localSalesMigration.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
     console.log('Integracion: base temporal ' + name);
     if (process.argv[2] === '--browser') {
       process.exitCode = await runBrowserTests({ config, database: name, playwrightArgs: process.argv.slice(3) });
       return;
     }
-    const child = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/integration/auth.test.cjs', 'tests/integration/inventory.test.cjs', 'tests/integration/system-admin-inventory-migration.test.cjs', 'tests/integration/product-images.test.cjs', 'tests/integration/sales.test.cjs', 'tests/integration/invoice-sequence.test.cjs', 'tests/integration/customers.test.cjs', 'tests/integration/expenses.test.cjs', 'tests/integration/procurement.test.cjs', 'tests/integration/reports.test.cjs', 'tests/integration/system-admin-billing.test.cjs'], { cwd: resolve(__dirname, '..'), stdio: 'inherit', windowsHide: true, env: { ...process.env, NODE_ENV: 'test', POS_INTEGRATION_DATABASE: name } });
+    const child = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/integration/auth.test.cjs', 'tests/integration/inventory.test.cjs', 'tests/integration/system-admin-inventory-migration.test.cjs', 'tests/integration/system-admin-sales-migration.test.cjs', 'tests/integration/product-images.test.cjs', 'tests/integration/sales.test.cjs', 'tests/integration/invoice-sequence.test.cjs', 'tests/integration/customers.test.cjs', 'tests/integration/expenses.test.cjs', 'tests/integration/procurement.test.cjs', 'tests/integration/reports.test.cjs', 'tests/integration/system-admin-billing.test.cjs'], { cwd: resolve(__dirname, '..'), stdio: 'inherit', windowsHide: true, env: { ...process.env, NODE_ENV: 'test', POS_INTEGRATION_DATABASE: name } });
     process.exitCode = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('exit', code => resolveExit(code ?? 1)); });
   } finally {
     if (created) { await connection.query('DROP DATABASE \x60' + name + '\x60'); console.log('Base temporal eliminada'); }

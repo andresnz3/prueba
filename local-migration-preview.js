@@ -37,8 +37,15 @@
   let inventoryPreview = null;
   let inventoryBusy = false;
   let inventoryTrigger = null;
+  let previewSalesRequest = null;
+  let migrateSalesRequest = null;
+  let salesPreviewToken = 0;
+  let salesPreview = null;
+  let salesBusy = false;
+  let salesTrigger = null;
   const completedTargets = new Set();
   const completedInventoryTargets = new Set();
+  const completedSalesTargets = new Set();
   // Simulación solo visual: vive en memoria y se descarta al salir o actualizar.
   let sim = { added: [], map: {}, general: false };
   const INVALID_PACKAGE_MESSAGE = 'Este archivo no parece ser un paquete de migración válido.';
@@ -411,13 +418,16 @@
     el('migrationInventoryStatus').textContent = '';
     el('migrationInventoryResult').classList.add('hidden');
     void updateInventoryPreview();
+    el('migrationSalesStatus').textContent = '';
+    el('migrationSalesResult').classList.add('hidden');
+    void updateSalesPreview();
   }
 
   function renderBasicMigrationButton() {
     const target = destination();
     const targetId = target ? String(target.id) : '';
     const button = el('migrationBasicStartBtn');
-    button.disabled = !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || inventoryBusy || completedTargets.has(targetId);
+    button.disabled = !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || inventoryBusy || salesBusy || completedTargets.has(targetId);
     button.textContent = completedTargets.has(targetId) ? 'Migración completada para este destino' : 'Migrar datos básicos';
   }
 
@@ -427,7 +437,7 @@
     const targetId = target ? String(target.id) : '';
     const visible = Boolean(canAccess() && packageValue && target && target.status === 'ACTIVE' && inventoryPreview?.eligible);
     el('migrationInventorySummary').classList.toggle('hidden', !visible);
-    button.disabled = !visible || migrationBusy || inventoryBusy || completedInventoryTargets.has(targetId);
+    button.disabled = !visible || migrationBusy || inventoryBusy || salesBusy || completedInventoryTargets.has(targetId);
     button.textContent = completedInventoryTargets.has(targetId) ? 'Inventario inicial completado para este destino' : 'Migrar inventario inicial';
   }
 
@@ -545,7 +555,141 @@
       renderBasicMigrationButton();
       renderInventoryMigrationButton();
       if (modal.classList.contains('hidden') && inventoryTrigger?.isConnected) inventoryTrigger.focus();
-      if (completedInventoryTargets.has(String(target.id))) await updateInventoryPreview();
+      if (completedInventoryTargets.has(String(target.id))) {
+        await updateInventoryPreview();
+        await updateSalesPreview();
+      }
+    }
+  }
+
+  function renderSalesMigrationButton() {
+    const button = el('migrationSalesStartBtn');
+    const target = destination();
+    const targetId = target ? String(target.id) : '';
+    const visible = Boolean(canAccess() && packageValue && target && target.status === 'ACTIVE' && salesPreview?.eligible);
+    el('migrationSalesSummary').classList.toggle('hidden', !visible);
+    button.disabled = !visible || migrationBusy || inventoryBusy || salesBusy || completedSalesTargets.has(targetId);
+    button.textContent = completedSalesTargets.has(targetId) ? 'Ventas históricas completadas para este destino' : 'Migrar ventas históricas';
+  }
+
+  function renderSalesMigrationResult(result) {
+    el('migrationSalesCreated').textContent = packageCount(result.created.sales);
+    el('migrationSalesSkipped').textContent = packageCount(result.skipped.sales);
+    const warnings = el('migrationSalesWarnings');
+    warnings.replaceChildren(...(result.warnings.length
+      ? result.warnings.map(warning => node('li', '', warning))
+      : [node('li', '', 'No hubo advertencias adicionales.')]));
+    el('migrationSalesResult').classList.remove('hidden');
+    el('migrationSalesStatus').textContent = 'Migración de ventas históricas completada.';
+    el('migrationSalesStatus').dataset.state = 'valid';
+  }
+
+  async function updateSalesPreview() {
+    const token = ++salesPreviewToken;
+    const requestToken = packageReadToken;
+    const target = destination();
+    salesPreview = null;
+    el('migrationSalesSummary').classList.add('hidden');
+    renderSalesMigrationButton();
+    const gateStatus = el('migrationSalesGateStatus');
+    gateStatus.classList.add('hidden');
+    gateStatus.textContent = '';
+    if (!canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || inventoryBusy || salesBusy || !previewSalesRequest) return;
+    const status = el('migrationSalesStatus');
+    status.dataset.state = '';
+    status.textContent = 'Verificando migración básica, inventario inicial y ventas…';
+    gateStatus.textContent = 'Verificando las fases previas y los productos/clientes de destino…';
+    gateStatus.classList.remove('hidden');
+    try {
+      const preview = await previewSalesRequest(String(target.id), packageValue);
+      if (token !== salesPreviewToken || requestToken !== packageReadToken || !canAccess() || String(target.id) !== String(destination()?.id)) return;
+      if (!preview.eligible) {
+        status.textContent = '';
+        gateStatus.textContent = preview.warnings.join(' ');
+        renderSalesMigrationButton();
+        return;
+      }
+      gateStatus.classList.add('hidden');
+      salesPreview = preview;
+      el('migrationSalesDetected').textContent = packageCount(preview.sales.detected);
+      el('migrationSalesCanMigrate').textContent = packageCount(preview.sales.couldMigrate);
+      el('migrationSalesToSkip').textContent = packageCount(preview.sales.toSkip);
+      status.textContent = preview.warnings.join(' ');
+      renderSalesMigrationButton();
+    } catch (failure) {
+      if (token !== salesPreviewToken || requestToken !== packageReadToken || !canAccess()) return;
+      gateStatus.dataset.state = 'invalid';
+      gateStatus.textContent = failure?.message || 'No se pudieron revisar las ventas del paquete.';
+      gateStatus.classList.remove('hidden');
+      renderSalesMigrationButton();
+    }
+  }
+
+  function closeSalesMigrationConfirmation() {
+    const modal = el('migrationSalesConfirmModal');
+    if (salesBusy) return;
+    modal.classList.add('hidden');
+    if (salesTrigger?.isConnected) salesTrigger.focus();
+  }
+
+  function openSalesMigrationConfirmation() {
+    const target = destination();
+    if (!canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || migrationBusy || inventoryBusy || salesBusy || !salesPreview?.eligible) return;
+    salesTrigger = el('migrationSalesStartBtn');
+    el('migrationSalesConfirmSource').textContent = text(packageValue.business.name) || 'No disponible';
+    el('migrationSalesConfirmTarget').textContent = target.name + ' (#' + target.id + ')';
+    el('migrationSalesConfirmDetected').textContent = packageCount(salesPreview.sales.detected);
+    el('migrationSalesConfirmCanMigrate').textContent = packageCount(salesPreview.sales.couldMigrate);
+    el('migrationSalesConfirmToSkip').textContent = packageCount(salesPreview.sales.toSkip);
+    const warnings = el('migrationSalesConfirmWarnings');
+    warnings.replaceChildren(...(salesPreview.warnings.length
+      ? salesPreview.warnings.map(warning => node('li', 'migration-warn', warning))
+      : [node('li', 'migration-ok', 'No se detectaron ventas que deban omitirse.')]));
+    el('migrationSalesConfirmError').classList.add('hidden');
+    el('migrationSalesConfirmError').textContent = '';
+    el('migrationSalesConfirmModal').classList.remove('hidden');
+    el('migrationSalesConfirmTitle').focus();
+  }
+
+  async function confirmSalesMigration() {
+    const target = destination();
+    if (migrationBusy || inventoryBusy || salesBusy || !canAccess() || !packageValue || !target || target.status !== 'ACTIVE' || !salesPreview?.eligible || !migrateSalesRequest) return;
+    const requestToken = packageReadToken;
+    salesBusy = true;
+    const modal = el('migrationSalesConfirmModal');
+    const errorBox = el('migrationSalesConfirmError');
+    const status = el('migrationSalesStatus');
+    el('migrationSalesStartBtn').disabled = true;
+    el('migrationSalesConfirmBtn').disabled = true;
+    el('migrationSalesCancelBtn').disabled = true;
+    modal.querySelector('.modal-card').setAttribute('aria-busy', 'true');
+    status.dataset.state = '';
+    status.textContent = 'Registrando ventas históricas…';
+    errorBox.classList.add('hidden');
+    let completed = false;
+    try {
+      const result = await migrateSalesRequest(String(target.id), packageValue);
+      if (!canAccess() || requestToken !== packageReadToken) return;
+      completedSalesTargets.add(String(target.id));
+      renderSalesMigrationResult(result);
+      modal.classList.add('hidden');
+      completed = true;
+    } catch (failure) {
+      if (!canAccess() || requestToken !== packageReadToken) return;
+      status.dataset.state = 'invalid';
+      status.textContent = failure?.message || 'No se pudo completar la migración de ventas.';
+      errorBox.textContent = status.textContent;
+      errorBox.classList.remove('hidden');
+    } finally {
+      salesBusy = false;
+      modal.querySelector('.modal-card').setAttribute('aria-busy', 'false');
+      el('migrationSalesCancelBtn').disabled = false;
+      el('migrationSalesConfirmBtn').disabled = false;
+      renderBasicMigrationButton();
+      renderInventoryMigrationButton();
+      renderSalesMigrationButton();
+      if (modal.classList.contains('hidden') && salesTrigger?.isConnected) salesTrigger.focus();
+      if (completed) await updateSalesPreview();
     }
   }
 
@@ -621,12 +765,15 @@
       el('migrationBasicCancelBtn').disabled = false;
       renderBasicMigrationButton();
       if (el('migrationBasicConfirmModal').classList.contains('hidden') && migrationTrigger?.isConnected) migrationTrigger.focus();
-      if (completedTargets.has(String(target.id))) await updateInventoryPreview();
+      if (completedTargets.has(String(target.id))) {
+        await updateInventoryPreview();
+        await updateSalesPreview();
+      }
     }
   }
 
   async function readPackage(file) {
-    if (!canAccess() || migrationBusy || inventoryBusy || !el('migrationBasicConfirmModal').classList.contains('hidden') || !el('migrationInventoryConfirmModal').classList.contains('hidden')) return;
+    if (!canAccess() || migrationBusy || inventoryBusy || salesBusy || !el('migrationBasicConfirmModal').classList.contains('hidden') || !el('migrationInventoryConfirmModal').classList.contains('hidden') || !el('migrationSalesConfirmModal').classList.contains('hidden')) return;
     const token = ++packageReadToken;
     packageValue = null;
     completedTargets.clear();
@@ -641,7 +788,16 @@
     el('migrationInventoryStatus').textContent = '';
     el('migrationInventoryGateStatus').classList.add('hidden');
     el('migrationInventoryGateStatus').textContent = '';
+    salesPreviewToken++;
+    salesPreview = null;
+    completedSalesTargets.clear();
+    el('migrationSalesSummary').classList.add('hidden');
+    el('migrationSalesResult').classList.add('hidden');
+    el('migrationSalesStatus').textContent = '';
+    el('migrationSalesGateStatus').classList.add('hidden');
+    el('migrationSalesGateStatus').textContent = '';
     renderBasicMigrationButton();
+    renderSalesMigrationButton();
     el('migrationPackageReview').classList.add('hidden');
     el('migrationPackageStatus').textContent = '';
     let value;
@@ -686,6 +842,7 @@
       el('migrationBasicStatus').textContent = '';
       renderBasicMigrationButton();
       void updateInventoryPreview();
+      void updateSalesPreview();
     });
     el('migrationBasicStartBtn').addEventListener('click', openBasicMigrationConfirmation);
     el('migrationBasicCancelBtn').addEventListener('click', closeBasicMigrationConfirmation);
@@ -701,6 +858,12 @@
     el('migrationInventoryConfirmBtn').addEventListener('click', confirmInventoryMigration);
     el('migrationInventoryConfirmModal').addEventListener('click', event => {
       if (event.target.classList.contains('modal-overlay')) closeInventoryMigrationConfirmation();
+    });
+    el('migrationSalesStartBtn').addEventListener('click', openSalesMigrationConfirmation);
+    el('migrationSalesCancelBtn').addEventListener('click', closeSalesMigrationConfirmation);
+    el('migrationSalesConfirmBtn').addEventListener('click', confirmSalesMigration);
+    el('migrationSalesConfirmModal').addEventListener('click', event => {
+      if (event.target.classList.contains('modal-overlay')) closeSalesMigrationConfirmation();
     });
     document.addEventListener('keydown', event => {
       const modal = el('migrationBasicConfirmModal');
@@ -719,6 +882,17 @@
       if (event.key === 'Escape') { closeInventoryMigrationConfirmation(); return; }
       if (event.key === 'Tab') {
         const controls = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled)')].filter(control => control.getClientRects().length);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    });
+    document.addEventListener('keydown', event => {
+      const modal = el('migrationSalesConfirmModal');
+      if (modal.classList.contains('hidden')) return;
+      if (event.key === 'Escape') { closeSalesMigrationConfirmation(); return; }
+      if (event.key === 'Tab') {
+        const controls = [...modal.querySelectorAll('button:not(:disabled)')].filter(control => control.getClientRects().length);
         const first = controls[0], last = controls[controls.length - 1];
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -775,6 +949,8 @@
     migrateBasicRequest = options.migrateBasic;
     previewInventoryRequest = options.previewInventory;
     migrateInventoryRequest = options.migrateInventory;
+    previewSalesRequest = options.previewSales;
+    migrateSalesRequest = options.migrateSales;
     if (!canAccess()) return;
     localIdentity = readLocalIdentity();
     renderLocalIdentity(localIdentity, localScope);
@@ -784,13 +960,15 @@
     updateContinue();
     renderBasicMigrationButton();
     void updateInventoryPreview();
+    void updateSalesPreview();
   }
 
   function reset() {
     data = null; report = null; localIdentity = null; localScope = null; sim = { added: [], map: {}, general: false };
     packageReadToken++;
     inventoryPreviewToken++;
-    packageValue = null; migrationBusy = false; inventoryBusy = false; migrateBasicRequest = null; previewInventoryRequest = null; migrateInventoryRequest = null; inventoryPreview = null; completedTargets.clear(); completedInventoryTargets.clear();
+    salesPreviewToken++;
+    packageValue = null; migrationBusy = false; inventoryBusy = false; salesBusy = false; migrateBasicRequest = null; previewInventoryRequest = null; migrateInventoryRequest = null; previewSalesRequest = null; migrateSalesRequest = null; inventoryPreview = null; salesPreview = null; completedTargets.clear(); completedInventoryTargets.clear(); completedSalesTargets.clear();
     el('migrationResult')?.classList.add('hidden');
     el('migrationOriginCounts')?.replaceChildren(card('Productos', '—'), card('Clientes', '—'), card('Ventas', '—'));
     el('migrationSourceNote')?.classList.remove('is-legacy');
@@ -806,6 +984,12 @@
     el('migrationInventoryGateStatus')?.classList.add('hidden');
     el('migrationInventoryGateStatus').textContent = '';
     el('migrationInventoryConfirmModal').classList.add('hidden');
+    el('migrationSalesSummary')?.classList.add('hidden');
+    el('migrationSalesResult')?.classList.add('hidden');
+    el('migrationSalesStatus').textContent = '';
+    el('migrationSalesGateStatus')?.classList.add('hidden');
+    el('migrationSalesGateStatus').textContent = '';
+    el('migrationSalesConfirmModal').classList.add('hidden');
     el('migrationPackageStatus').dataset.state = '';
     el('migrationPackageStatus').textContent = 'Aún no se ha seleccionado un paquete.';
   }

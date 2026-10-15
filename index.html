@@ -258,7 +258,24 @@
                             <ul id="migrationInventoryWarnings"></ul>
                         </div>
                     </section>
+                    <section id="migrationSalesSummary" class="migration-basic-summary hidden" aria-labelledby="migrationSalesSummaryTitle">
+                        <h3 id="migrationSalesSummaryTitle">Ventas históricas</h3>
+                        <div class="migration-counts migration-package-counts">
+                            <article><span>Ventas detectadas</span><strong id="migrationSalesDetected">0</strong></article>
+                            <article><span>Se podrían migrar</span><strong id="migrationSalesCanMigrate">0</strong></article>
+                            <article><span>Se omitirían</span><strong id="migrationSalesToSkip">0</strong></article>
+                        </div>
+                        <p class="system-admin-help">Se registrarán para consulta. No se modificará inventario, caja ni abonos.</p>
+                        <button id="migrationSalesStartBtn" class="btn btn-primary" type="button" disabled>Migrar ventas históricas</button>
+                        <p id="migrationSalesStatus" class="migration-package-status" role="status" aria-live="polite"></p>
+                        <div id="migrationSalesResult" class="migration-basic-result hidden" role="status" aria-live="polite">
+                            <h4>Migración de ventas completada</h4>
+                            <dl><div><dt>Ventas creadas</dt><dd id="migrationSalesCreated">0</dd></div><div><dt>Ventas omitidas</dt><dd id="migrationSalesSkipped">0</dd></div></dl>
+                            <ul id="migrationSalesWarnings"></ul>
+                        </div>
+                    </section>
                     <p id="migrationInventoryGateStatus" class="migration-package-status hidden" role="status" aria-live="polite"></p>
+                    <p id="migrationSalesGateStatus" class="migration-package-status hidden" role="status" aria-live="polite"></p>
                     <details class="migration-direct-source">
                         <summary>
                             <strong>Lectura directa del navegador actual</strong>
@@ -893,6 +910,27 @@
             <div class="modal-actions">
                 <button id="migrationInventoryCancelBtn" type="button" class="btn btn-secondary">Cancelar</button>
                 <button id="migrationInventoryConfirmBtn" type="button" class="btn btn-primary">Confirmar migración de inventario</button>
+            </div>
+        </section>
+    </div>
+
+    <div id="migrationSalesConfirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="migrationSalesConfirmTitle" aria-describedby="migrationSalesConfirmDescription">
+        <div class="modal-overlay"></div>
+        <section class="modal-card migration-basic-confirm-card" aria-busy="false">
+            <h2 id="migrationSalesConfirmTitle" tabindex="-1" data-initial-focus>Confirmar migración de ventas históricas</h2>
+            <p id="migrationSalesConfirmDescription">Se registrarán ventas históricas del paquete. No se modificará inventario, caja ni abonos.</p>
+            <dl class="migration-basic-confirm-meta">
+                <div><dt>Negocio origen</dt><dd id="migrationSalesConfirmSource">—</dd></div>
+                <div><dt>Negocio destino</dt><dd id="migrationSalesConfirmTarget">—</dd></div>
+                <div><dt>Ventas detectadas</dt><dd id="migrationSalesConfirmDetected">0</dd></div>
+                <div><dt>Se podrían migrar</dt><dd id="migrationSalesConfirmCanMigrate">0</dd></div>
+                <div><dt>Se omitirían</dt><dd id="migrationSalesConfirmToSkip">0</dd></div>
+            </dl>
+            <ul id="migrationSalesConfirmWarnings" class="migration-warnings"></ul>
+            <p id="migrationSalesConfirmError" class="message error hidden" role="alert" aria-live="assertive"></p>
+            <div class="modal-actions">
+                <button id="migrationSalesCancelBtn" type="button" class="btn btn-secondary">Cancelar</button>
+                <button id="migrationSalesConfirmBtn" type="button" class="btn btn-primary">Confirmar migración de ventas</button>
             </div>
         </section>
     </div>

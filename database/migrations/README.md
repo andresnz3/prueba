@@ -1,3 +1,7 @@
+# Migracion 008: referencias de ventas historicas locales
+
+Crea migration_sales_references para guardar el negocio origen, la referencia de venta local (o su huella cuando no exista ID) y la venta conectada creada. Las claves unicas por negocio hacen idempotente la importacion y la FK conserva la correspondencia con sales. No modifica schema.sql ni aplica cambios automaticamente a la base principal. La importacion requiere 002, 003 y 008 existentes; las pruebas automatizadas aplican 008 solo a una base aleatoria pos_auth_test_* y la eliminan. Para usarla en una base real, revisar y aplicar este archivo SQL manualmente despues de autorizacion explicita.
+
 # Migracion 001: otorgante de autorizaciones
 
 schema.sql no se modifica. Su session_authorizations identifica sesion/modulo/vencimiento pero no al administrador que proporciono la contrasena. Se agrega granted_by_user_id BIGINT UNSIGNED y FK (business_id, granted_by_user_id) -> users(business_id, id), con RESTRICT, usando la clave compuesta existente. No se crean tablas.
