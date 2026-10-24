@@ -82,7 +82,7 @@ async function crearCliente(page, name) {
   await page.locator("#clientForm button[type='submit']").click();
   const row = page.locator("#clientsTableBody tr").filter({ hasText: name });
   await expect(row).toBeVisible();
-  return (await row.locator("td").first().innerText()).split("\n")[0];
+  return await row.getAttribute("data-client-id");
 }
 
 async function crearProveedor(page, name) {
@@ -315,7 +315,7 @@ test("Reportes calcula todas las métricas de operaciones conocidas y excluye an
   await page.locator("#cajaMovimientoMonto").fill("4.25");
   await page.locator("#registrarEntradaBtn").click();
   await page.locator("#cerrarCajaBtn").click();
-  await page.locator("#cajaEfectivoRealInput").fill("116.90");
+  await page.locator("#cajaEfectivoRealInput").fill("96.90");
   await page.locator("#confirmCierreCajaBtn").click();
   await cerrarAlerta(page);
 
@@ -362,7 +362,7 @@ test("Reportes calcula todas las métricas de operaciones conocidas y excluye an
   await page.locator('.rep-subtab[data-target="repCajaBox"]').click();
   await expect(page.locator("#repCajaBody tr")).toHaveCount(1);
   await expect(page.locator("#repCajaBody")).toContainText("andres");
-  await expect(page.locator("#repCajaBody")).toContainText("C$116.90");
+  await expect(page.locator("#repCajaBody")).toContainText("C$96.90");
   await expect(page.locator("#repCajaBody")).toContainText("C$0.00");
 
   await page.locator('.rep-subtab[data-target="repGastosBox"]').click();
@@ -721,7 +721,8 @@ test("Clientes y CxP ocultan IDs internos en tabla y Excel, y conservan acciones
   expect(JSON.stringify(clientSheet)).not.toContain(technicalClientId);
 
   await page.locator("#navPayablesBtn").click();
-  await expect(page.locator("#payablesView thead tr:first-child th")).toHaveText(["Proveedor", "Teléfono", "Próx. Vencimiento", "Deuda Actual", "Acciones"]);
+  await page.locator('[data-period-filter="payables"] [data-period-preset="all"]').click();
+  await expect(page.locator("#payablesView .local-procurement-content thead tr:first-child th")).toHaveText(["Proveedor", "Teléfono", "Próx. Vencimiento", "Deuda Actual", "Acciones"]);
   const payableRow = page.locator("#payablesTableBody tr").filter({ hasText: "Proveedor sin ID visible" });
   await expect(payableRow).toBeVisible();
   await expect(payableRow.locator("td")).toHaveCount(5);

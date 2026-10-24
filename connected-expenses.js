@@ -92,11 +92,7 @@
     const button = el('formRegistrarGasto')?.querySelector('button[type="submit"]');
     busy = true; if (button) button.disabled = true; render();
     try {
-      await window.PosConnected.inventoryOperation(client => client.createExpense({ operationKey: window.crypto.randomUUID(), category, description, receiptReference, amount, paymentMethod }));
-      el('formRegistrarGasto').reset();
-      status('Gasto registrado.');
-      await load('gastosView');
-      document.dispatchEvent(new Event('connected:report-data-changed'));
+      await window.PosSales.performFinancial('EXPENSE', { category, description, receiptReference, amount, paymentMethod }, async (client, input) => ({ kind: 'EXPENSE', expense: await client.createExpense(input) }));
     } catch (failure) {
       status(failure.message || 'No se pudo registrar el gasto conectado.', true);
       if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
@@ -108,10 +104,7 @@
     if (!expense || expense.status === 'VOID') return;
     window.showAnularRegistro('Anular Gasto', `${expense.category} — ${expense.description} — Monto: ${money(expense.amount)}.`, async reason => {
       try {
-        await window.PosConnected.inventoryOperation(client => client.cancelExpense(expense.id, { operationKey: window.crypto.randomUUID(), reason }));
-        status('Gasto anulado.');
-        await load('gastosView');
-        document.dispatchEvent(new Event('connected:report-data-changed'));
+        await window.PosSales.performFinancial('CANCEL_EXPENSE', { reason }, async (client, input) => ({ kind: 'EXPENSE', expense: await client.cancelExpense(expense.id, input) }));
       } catch (failure) {
         status(failure.message || 'No se pudo anular el gasto conectado.', true);
         if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
@@ -122,5 +115,11 @@
   function page(delta) { offset = Math.max(0, Math.min(Math.max(0, count - 1), offset + delta * 100)); render(); }
   function applyPeriod() { offset = 0; render(); }
   document.addEventListener('pos:period-changed', event => { if (event.detail?.id === 'expenses') applyPeriod(); });
-  window.PosExpenses = Object.freeze({ load, render, create, cancel, page, applyPeriod });
+  async function operationCompleted(result, recovered = false) {
+    if (result.expense.status !== 'VOID') el('formRegistrarGasto').reset();
+    const message = result.expense.status === 'VOID' ? 'Gasto anulado.' : 'Gasto registrado.';
+    if (!el('gastosView').classList.contains('hidden')) await load('gastosView');
+    status(message); if (recovered) window.showAlert(message);
+  }
+  window.PosExpenses = Object.freeze({ operationCompleted, load, render, create, cancel, page, applyPeriod });
 })();

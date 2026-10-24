@@ -12,4 +12,13 @@ function password(value, creating = false) { if (typeof value !== 'string' || !v
 function id(value) { if (typeof value !== 'string' || !/^[1-9]\d{0,19}$/.test(value) || BigInt(value) > 18446744073709551615n) invalid(); return value; }
 function role(value) { if (!['ADMIN', 'VENDEDOR'].includes(value)) invalid(); return value; }
 function moduleName(value) { if (!MODULES.includes(value)) invalid(); return value; }
-module.exports = { MODULES, invalid, body, text, username, password, id, role, moduleName };
+function newUser(value) {
+  const data = body(value, ['username', 'fullName', 'password', 'role'], []);
+  const result = {};
+  for (const [field, validate] of Object.entries({ username, fullName: value => text(value, 160), password: value => password(value, true), role })) {
+    try { result[field] = validate(data[field]); }
+    catch (error) { error.field = field; throw error; }
+  }
+  return result;
+}
+module.exports = { MODULES, invalid, body, text, username, password, id, role, moduleName, newUser };

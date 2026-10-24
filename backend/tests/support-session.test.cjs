@@ -80,6 +80,7 @@ test('tenant transactions keep support audit scoped to the target and record And
       statements.push({ sql, values });
       if (sql.startsWith('SELECT s.id AS session_id')) return [[String(values[1]) === '1' ? owner : target], []];
       if (sql.startsWith('SELECT id, status FROM businesses')) return [[{ id: '2', status: 'ACTIVE' }], []];
+      if (sql.startsWith('SELECT COUNT(*) AS present FROM INFORMATION_SCHEMA.TABLES')) return [[{ present: 0 }], []];
       if (sql.startsWith('SELECT u.id AS user_id')) return [[target], []];
       if (sql.startsWith('INSERT INTO audit_logs')) return [{ affectedRows: 1 }, []];
       throw new Error('Unexpected SQL in support-session test');

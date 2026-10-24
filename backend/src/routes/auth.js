@@ -49,7 +49,7 @@ function authRoutes({ repo, auth, users, config }) {
     if (Object.keys(req.query).some(k => !['limit', 'offset'].includes(k))) v.invalid();
     const limit = req.query.limit ?? '50', offset = req.query.offset ?? '0';
     if (!/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > 100 || !/^\d{1,7}$/.test(offset)) v.invalid();
-    res.json({ users: await users.list(req.auth, Number(limit), Number(offset)) });
+    res.json({ users: await users.list(req.auth, Number(limit), Number(offset)), capacity: await users.capacity(req.auth) });
   });
   router.use(m.csrf);
   router.post('/auth/logout', async (req, res) => {

@@ -56,14 +56,40 @@ function createProcurementService({ repo, auth, config }) {
   const purchaseNumber = id => 'COMP-' + String(id).padStart(6, '0');
   const supplierInvoiceNumber = row => String(row.invoice_number || '') === purchaseNumber(row.id) ? '' : String(row.invoice_number || '');
   const purchaseReference = row => purchaseNumber(row.id) + (supplierInvoiceNumber(row) ? ' · Factura proveedor ' + supplierInvoiceNumber(row) : '');
+  async function hasColumn(db, tableName, columnName) {
+    const [column] = await repo.rows(db, 'SELECT 1 AS present FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?', [tableName, columnName]);
+    return Boolean(column);
+  }
+  async function supplierQuery(db) {
+    const hasHistoricalFlag = await hasColumn(db, 'purchases', 'is_historical');
+    const hasHistoricalPayments = await hasColumn(db, 'supplier_payments', 'is_historical');
+    const currentOnly = hasHistoricalFlag ? ' AND p.is_historical=FALSE' : '';
+    const paymentsCurrentOnly = hasHistoricalFlag ? ' AND paid_purchase.is_historical=FALSE' : '';
+    const pendingCurrentOnly = hasHistoricalFlag ? ' AND pending_purchase.is_historical=FALSE' : '';
+    const historicalPurchaseOnly = hasHistoricalFlag ? ' AND p.is_historical=TRUE' : ' AND 1=0';
+    const historicalPaymentOnly = hasHistoricalPayments ? ' AND sp.is_historical=TRUE' : ' AND 1=0';
+    return `SELECT s.*,
+      (SELECT COALESCE(SUM(p.total),0.00) FROM purchases p WHERE p.business_id=s.business_id AND p.supplier_id=s.id AND p.status='COMPLETED') AS total_purchased,
+      (SELECT COUNT(*) FROM purchases p WHERE p.business_id=s.business_id AND p.supplier_id=s.id AND p.status='COMPLETED') AS purchase_count,
+      (SELECT COALESCE(SUM(p.total),0.00) FROM purchases p WHERE p.business_id=s.business_id AND p.supplier_id=s.id AND p.purchase_type='CREDIT' AND p.status='COMPLETED'${currentOnly}) -
+      (SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp JOIN purchases paid_purchase ON paid_purchase.business_id=sp.business_id AND paid_purchase.id=sp.purchase_id WHERE sp.business_id=s.business_id AND sp.supplier_id=s.id AND paid_purchase.purchase_type='CREDIT'${paymentsCurrentOnly} AND sp.status='POSTED') AS debt,
+      (SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp JOIN purchases pending_purchase ON pending_purchase.business_id=sp.business_id AND pending_purchase.id=sp.purchase_id WHERE sp.business_id=s.business_id AND sp.supplier_id=s.id AND pending_purchase.purchase_type='CREDIT'${pendingCurrentOnly} AND sp.status='PENDING') AS pending_payments,
+      (SELECT COALESCE(SUM(p.total),0.00) FROM purchases p WHERE p.business_id=s.business_id AND p.supplier_id=s.id AND p.purchase_type='CREDIT' AND p.status='COMPLETED'${historicalPurchaseOnly}) -
+      (SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp JOIN purchases paid_purchase ON paid_purchase.business_id=sp.business_id AND paid_purchase.id=sp.purchase_id WHERE sp.business_id=s.business_id AND sp.supplier_id=s.id AND paid_purchase.purchase_type='CREDIT'${historicalPurchaseOnly.replaceAll('p.is_historical', 'paid_purchase.is_historical')}${historicalPaymentOnly} AND sp.status IN ('POSTED','PENDING')) AS historical_debt,
+      (SELECT MIN(p.due_at) FROM purchases p WHERE p.business_id=s.business_id AND p.supplier_id=s.id AND p.purchase_type='CREDIT' AND p.status='COMPLETED'${currentOnly} AND p.due_at IS NOT NULL AND p.total > (SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='POSTED')) AS next_due_at
+      FROM suppliers s`;
+  }
   function publicSupplier(row) {
-    return { id: String(row.id), businessId: String(row.business_id), name: row.name, contact: row.contact || '', phone: row.phone || '', ruc: row.ruc || '', address: row.address || '', active: Boolean(row.active), totalPurchased: money(row.total_purchased), purchaseCount: Number(row.purchase_count || 0), debt: money(row.debt), pendingPayments: money(row.pending_payments), nextDueAt: row.next_due_at || null, createdAt: row.created_at, updatedAt: row.updated_at };
+    return { id: String(row.id), businessId: String(row.business_id), name: row.name, contact: row.contact || '', phone: row.phone || '', ruc: row.ruc || '', address: row.address || '', active: Boolean(row.active), totalPurchased: money(row.total_purchased), purchaseCount: Number(row.purchase_count || 0), debt: money(row.debt), historicalDebt: money(row.historical_debt), pendingPayments: money(row.pending_payments), nextDueAt: row.next_due_at || null, createdAt: row.created_at, updatedAt: row.updated_at };
   }
   function publicPurchase(row) {
-    const balance = units(row.total) - units(row.paid || '0.00');
+    const historical = Boolean(row.is_historical);
+    const paid = row.purchase_type === 'CASH' && row.status === 'COMPLETED' ? units(row.total) : units(row.paid || '0.00');
     const pending = units(row.pending || '0.00');
-    const status = row.status === 'CANCELLED' ? 'CANCELLED' : pending > 0n ? 'PENDING_CONFIRMATION' : balance <= 0n ? 'PAID' : units(row.paid || '0.00') > 0n ? 'PARTIAL' : row.due_at && new Date(row.due_at).getTime() < Date.now() ? 'OVERDUE' : row.purchase_type === 'CREDIT' ? 'OPEN' : 'PAID';
-    return { id: String(row.id), businessId: String(row.business_id), supplierId: row.supplier_id === null ? null : String(row.supplier_id), supplierName: row.supplier_name, supplierPhone: row.supplier_phone || '', purchaseNumber: purchaseNumber(row.id), supplierInvoiceNumber: supplierInvoiceNumber(row), invoiceNumber: row.invoice_number, purchaseType: row.purchase_type, subtotal: row.subtotal, tax: row.tax, total: row.total, paid: fixed(units(row.paid || '0.00'), 2), pendingPayments: fixed(pending, 2), balance: fixed(balance > 0n ? balance : 0n, 2), dueAt: row.due_at, status, createdAt: row.created_at, itemCount: Number(row.item_count || 0) };
+    const balance = row.purchase_type === 'CREDIT' && row.status !== 'CANCELLED' ? units(row.total) - paid : 0n;
+    const availableBalance = historical ? 0n : balance > pending ? balance - pending : 0n;
+    const status = row.status === 'CANCELLED' ? 'CANCELLED' : historical ? 'HISTORICAL' : pending > 0n ? 'PENDING_CONFIRMATION' : balance <= 0n ? 'PAID' : units(row.paid || '0.00') > 0n ? 'PARTIAL' : row.due_at && new Date(row.due_at).getTime() < Date.now() ? 'OVERDUE' : row.purchase_type === 'CREDIT' ? 'OPEN' : 'PAID';
+    return { id: String(row.id), businessId: String(row.business_id), supplierId: row.supplier_id === null ? null : String(row.supplier_id), supplierName: row.supplier_name, supplierPhone: row.supplier_phone || '', purchaseNumber: purchaseNumber(row.id), supplierInvoiceNumber: supplierInvoiceNumber(row), invoiceNumber: row.invoice_number, purchaseType: row.purchase_type, subtotal: row.subtotal, discount: row.discount || '0.00', tax: row.tax, total: row.total, notes: row.notes || null, paid: fixed(paid, 2), pendingPayments: fixed(pending, 2), balance: fixed(balance > 0n ? balance : 0n, 2), availableBalance: fixed(availableBalance, 2), dueAt: row.due_at, status, purchaseStatus: row.status, isHistorical: historical, createdAt: row.created_at, itemCount: Number(row.item_count || 0) };
   }
   const purchaseSelect = `SELECT p.*, s.phone AS supplier_phone,
     (SELECT COUNT(*) FROM purchase_items i WHERE i.business_id=p.business_id AND i.purchase_id=p.id) AS item_count,
@@ -73,25 +99,19 @@ function createProcurementService({ repo, auth, config }) {
   async function getPurchase(db, current, id) {
     const [row] = await repo.rows(db, purchaseSelect + ' WHERE p.business_id = ? AND p.id = ?', [current.business_id, id]);
     if (!row) throw httpError(404, 'PURCHASE_NOT_FOUND');
-    const items = await repo.rows(db, 'SELECT product_id, product_name, quantity, unit_cost, subtotal, total FROM purchase_items WHERE business_id = ? AND purchase_id = ? ORDER BY id', [current.business_id, id]);
-    const payments = await repo.rows(db, 'SELECT id, amount, payment_method, status, created_at FROM supplier_payments WHERE business_id = ? AND purchase_id = ? ORDER BY id', [current.business_id, id]);
-    return { ...publicPurchase(row), cancelReason: row.cancel_reason, cancelledAt: row.cancelled_at, items: items.map(item => ({ productId: String(item.product_id), name: item.product_name, quantity: item.quantity, unitCost: item.unit_cost, subtotal: item.subtotal, total: item.total })), payments: payments.map(item => ({ id: String(item.id), amount: item.amount, paymentMethod: item.payment_method, status: item.status, createdAt: item.created_at })) };
+    const hasItemHistoryColumns = await hasColumn(db, 'purchase_items', 'discount') && await hasColumn(db, 'purchase_items', 'tax');
+    const itemHistoryFields = hasItemHistoryColumns ? 'discount, tax' : '0.00 AS discount, 0.00 AS tax';
+    const items = await repo.rows(db, 'SELECT product_id, product_name, quantity, unit_cost, subtotal, ' + itemHistoryFields + ', total FROM purchase_items WHERE business_id = ? AND purchase_id = ? ORDER BY id', [current.business_id, id]);
+    const payments = await repo.rows(db, 'SELECT * FROM supplier_payments WHERE business_id = ? AND purchase_id = ? ORDER BY created_at,id', [current.business_id, id]);
+    return { ...publicPurchase(row), cancelReason: row.cancel_reason, cancelledAt: row.cancelled_at, sourceActor: row.source_actor || null, sourceCancelledBy: row.source_cancelled_by || null, items: items.map(item => ({ productId: String(item.product_id), name: item.product_name, quantity: item.quantity, unitCost: item.unit_cost, subtotal: item.subtotal, discount: item.discount, tax: item.tax, total: item.total })), payments: payments.map(item => ({ id: String(item.id), amount: item.amount, paymentMethod: item.payment_method, status: item.status, createdAt: item.created_at, isHistorical: Boolean(item.is_historical), sourceActor: item.source_actor || null, sourceCancelledBy: item.source_cancelled_by || null })) };
   }
-  const suppliersBase = `SELECT s.*,
-    (SELECT COALESCE(SUM(p.total),0.00) FROM purchases p WHERE p.business_id=s.business_id AND p.supplier_id=s.id AND p.status='COMPLETED') AS total_purchased,
-    (SELECT COUNT(*) FROM purchases p WHERE p.business_id=s.business_id AND p.supplier_id=s.id AND p.status='COMPLETED') AS purchase_count,
-    (SELECT COALESCE(SUM(p.total),0.00) FROM purchases p WHERE p.business_id=s.business_id AND p.supplier_id=s.id AND p.purchase_type='CREDIT' AND p.status='COMPLETED') -
-    (SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp JOIN purchases paid_purchase ON paid_purchase.business_id=sp.business_id AND paid_purchase.id=sp.purchase_id WHERE sp.business_id=s.business_id AND sp.supplier_id=s.id AND paid_purchase.purchase_type='CREDIT' AND sp.status='POSTED') AS debt,
-    (SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp JOIN purchases pending_purchase ON pending_purchase.business_id=sp.business_id AND pending_purchase.id=sp.purchase_id WHERE sp.business_id=s.business_id AND sp.supplier_id=s.id AND pending_purchase.purchase_type='CREDIT' AND sp.status='PENDING') AS pending_payments,
-    (SELECT MIN(p.due_at) FROM purchases p WHERE p.business_id=s.business_id AND p.supplier_id=s.id AND p.purchase_type='CREDIT' AND p.status='COMPLETED' AND p.due_at IS NOT NULL AND p.total > (SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='POSTED')) AS next_due_at
-    FROM suppliers s`;
   const listSuppliers = (session, options, module = 'suppliers') => work(session, module, async (db, current) => {
     const query = options.q ? textSearch(options.q) : null;
-    const rows = await repo.rows(db, suppliersBase + ' WHERE s.business_id = ? AND (? IS NULL OR s.name LIKE ? OR COALESCE(s.contact,\'\') LIKE ? OR COALESCE(s.phone,\'\') LIKE ? OR COALESCE(s.ruc,\'\') LIKE ?) ORDER BY s.active DESC, s.name, s.id LIMIT ? OFFSET ?', [current.business_id, query, query, query, query, query, options.limit, options.offset]);
+    const rows = await repo.rows(db, await supplierQuery(db) + ' WHERE s.business_id = ? AND (? IS NULL OR s.name LIKE ? OR COALESCE(s.contact,\'\') LIKE ? OR COALESCE(s.phone,\'\') LIKE ? OR COALESCE(s.ruc,\'\') LIKE ?) ORDER BY s.active DESC, s.name, s.id LIMIT ? OFFSET ?', [current.business_id, query, query, query, query, query, options.limit, options.offset]);
     return rows.map(publicSupplier);
   });
   const getSupplier = (session, id) => work(session, 'suppliers', async (db, current) => {
-    const [row] = await repo.rows(db, suppliersBase + ' WHERE s.business_id = ? AND s.id = ?', [current.business_id, id]);
+    const [row] = await repo.rows(db, await supplierQuery(db) + ' WHERE s.business_id = ? AND s.id = ?', [current.business_id, id]);
     if (!row) throw httpError(404, 'SUPPLIER_NOT_FOUND');
     return publicSupplier(row);
   });
@@ -100,7 +120,7 @@ function createProcurementService({ repo, auth, config }) {
     const [duplicate] = await repo.rows(db, 'SELECT id FROM suppliers WHERE business_id = ? AND LOWER(name) = LOWER(?) LIMIT 1 FOR UPDATE', [current.business_id, data.name]);
     if (duplicate) throw httpError(409, 'SUPPLIER_DUPLICATE');
     const result = await repo.rows(db, 'INSERT INTO suppliers (business_id, name, contact, phone, ruc, address, active) VALUES (?, ?, ?, ?, ?, ?, TRUE)', [current.business_id, data.name, data.contact, data.phone, data.ruc, data.address]);
-    const [row] = await repo.rows(db, suppliersBase + ' WHERE s.business_id = ? AND s.id = ?', [current.business_id, String(result.insertId)]);
+    const [row] = await repo.rows(db, await supplierQuery(db) + ' WHERE s.business_id = ? AND s.id = ?', [current.business_id, String(result.insertId)]);
     await repo.audit(db, current, 'CREATE_SUPPLIER', 'suppliers', result.insertId, { name: data.name });
     return { supplier: publicSupplier(row) };
   });
@@ -113,7 +133,7 @@ function createProcurementService({ repo, auth, config }) {
     }
     const fields = Object.keys(data), columns = { name: 'name', contact: 'contact', phone: 'phone', ruc: 'ruc', address: 'address' };
     await repo.rows(db, 'UPDATE suppliers SET ' + fields.map(field => columns[field] + ' = ?').join(', ') + ' WHERE business_id = ? AND id = ?', [...fields.map(field => data[field]), current.business_id, id]);
-    const [updated] = await repo.rows(db, suppliersBase + ' WHERE s.business_id = ? AND s.id = ?', [current.business_id, id]);
+    const [updated] = await repo.rows(db, await supplierQuery(db) + ' WHERE s.business_id = ? AND s.id = ?', [current.business_id, id]);
     await repo.audit(db, current, 'UPDATE_SUPPLIER', 'suppliers', id, { fields });
     return { supplier: publicSupplier(updated) };
   });
@@ -121,7 +141,7 @@ function createProcurementService({ repo, auth, config }) {
     const [row] = await repo.rows(db, 'SELECT id FROM suppliers WHERE business_id = ? AND id = ? FOR UPDATE', [current.business_id, id]);
     if (!row) throw httpError(404, 'SUPPLIER_NOT_FOUND');
     await repo.rows(db, 'UPDATE suppliers SET active = ? WHERE business_id = ? AND id = ?', [active, current.business_id, id]);
-    const [updated] = await repo.rows(db, suppliersBase + ' WHERE s.business_id = ? AND s.id = ?', [current.business_id, id]);
+    const [updated] = await repo.rows(db, await supplierQuery(db) + ' WHERE s.business_id = ? AND s.id = ?', [current.business_id, id]);
     await repo.audit(db, current, active ? 'ACTIVATE_SUPPLIER' : 'DEACTIVATE_SUPPLIER', 'suppliers', id, {});
     return publicSupplier(updated);
   });
@@ -150,48 +170,53 @@ function createProcurementService({ repo, auth, config }) {
   const getPurchaseForView = (session, id) => work(session, 'purchases', async (db, current) => getPurchase(db, current, id));
   const getPayableForView = (session, id) => work(session, 'payables', async (db, current) => {
     const purchase = await getPurchase(db, current, id);
-    if (purchase.purchaseType !== 'CREDIT') throw httpError(404, 'PAYABLE_NOT_FOUND');
+    if (purchase.purchaseType !== 'CREDIT' || purchase.isHistorical) throw httpError(404, 'PAYABLE_NOT_FOUND');
     return purchase;
   });
   const listPayables = (session, options) => work(session, 'payables', async (db, current) => {
     const search = options.q ? textSearch(options.q) : null;
-    const rows = await repo.rows(db, purchaseSelect + " WHERE p.business_id=? AND p.purchase_type='CREDIT' AND p.status='COMPLETED' AND p.total > (SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='POSTED') AND (? IS NULL OR p.invoice_number LIKE ? OR CONCAT('COMP-',LPAD(p.id,6,'0')) LIKE ? OR p.supplier_name LIKE ? OR COALESCE(s.phone,'') LIKE ?) ORDER BY (p.due_at IS NULL) ASC,p.due_at ASC,p.created_at DESC,p.id DESC LIMIT ? OFFSET ?", [current.business_id, search, search, search, search, search, options.limit, options.offset]);
+    const historicalFilter = await hasColumn(db, 'purchases', 'is_historical') ? ' AND p.is_historical=FALSE' : '';
+    const rows = await repo.rows(db, purchaseSelect + " WHERE p.business_id=? AND p.purchase_type='CREDIT' AND p.status='COMPLETED'" + historicalFilter + " AND p.total > (SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='POSTED') AND (? IS NULL OR p.invoice_number LIKE ? OR CONCAT('COMP-',LPAD(p.id,6,'0')) LIKE ? OR p.supplier_name LIKE ? OR COALESCE(s.phone,'') LIKE ?) ORDER BY (p.due_at IS NULL) ASC,p.due_at ASC,p.created_at DESC,p.id DESC LIMIT ? OFFSET ?", [current.business_id, search, search, search, search, search, options.limit, options.offset]);
     return rows.map(publicPurchase);
   });
   const statement = (session, id, options) => work(session, 'suppliers', async (db, current) => {
-    const [supplier] = await repo.rows(db, suppliersBase + ' WHERE s.business_id=? AND s.id=?', [current.business_id, id]);
+    const [supplier] = await repo.rows(db, await supplierQuery(db) + ' WHERE s.business_id=? AND s.id=?', [current.business_id, id]);
     if (!supplier) throw httpError(404, 'SUPPLIER_NOT_FOUND');
     const purchases = await repo.rows(db, purchaseSelect + ' WHERE p.business_id=? AND p.supplier_id=? ORDER BY p.created_at,p.id LIMIT ? OFFSET ?', [current.business_id, id, options.limit, options.offset]);
-    const payments = await repo.rows(db, 'SELECT sp.id,sp.purchase_id,sp.amount,sp.payment_method,sp.status,sp.created_at,p.id AS purchase_id_ref,p.invoice_number FROM supplier_payments sp LEFT JOIN purchases p ON p.business_id=sp.business_id AND p.id=sp.purchase_id WHERE sp.business_id=? AND sp.supplier_id=? ORDER BY sp.created_at,sp.id LIMIT ? OFFSET ?', [current.business_id, id, options.limit, options.offset]);
+    const payments = await repo.rows(db, 'SELECT sp.*,z.full_name AS cancelled_by_name,p.id AS purchase_id_ref,p.invoice_number FROM supplier_payments sp LEFT JOIN purchases p ON p.business_id=sp.business_id AND p.id=sp.purchase_id LEFT JOIN users z ON z.business_id=sp.business_id AND z.id=sp.cancelled_by WHERE sp.business_id=? AND sp.supplier_id=? ORDER BY sp.created_at,sp.id LIMIT ? OFFSET ?', [current.business_id, id, options.limit, options.offset]);
     const ledger = [
       ...purchases.map(row => {
+        const historical = Boolean(row.is_historical);
         const total = units(row.total || '0.00');
-        const paidConfirmed = units(row.paid || '0.00');
-        const pendingPayments = units(row.pending || '0.00');
-        const balance = total > paidConfirmed ? total - paidConfirmed : 0n;
-        const availableBalance = balance > pendingPayments ? balance - pendingPayments : 0n;
+        const paidConfirmed = row.purchase_type === 'CASH' && row.status === 'COMPLETED' ? total : units(row.paid || '0.00');
+        const pendingPayments = historical ? 0n : units(row.pending || '0.00');
+        const isCredit = row.purchase_type === 'CREDIT' && row.status !== 'CANCELLED';
+        const balance = !historical && isCredit && total > paidConfirmed ? total - paidConfirmed : 0n;
+        const availableBalance = !historical && balance > pendingPayments ? balance - pendingPayments : 0n;
         return {
           date: row.created_at,
           kind: 'PURCHASE',
           reference: purchaseReference(row),
           supplierInvoiceNumber: supplierInvoiceNumber(row) || null,
-          description: row.status === 'CANCELLED' ? 'Factura de compra anulada' : row.purchase_type === 'CREDIT' ? 'Factura de compra a crédito' : 'Factura de compra al contado',
-          charge: row.status === 'CANCELLED' ? '0.00' : row.total,
+          description: historical ? row.status === 'CANCELLED' ? 'Compra histórica anulada' : isCredit ? 'Cuenta por pagar histórica' : 'Compra histórica al contado' : row.status === 'CANCELLED' ? 'Factura de compra anulada' : row.purchase_type === 'CREDIT' ? 'Factura de compra a crédito' : 'Factura de compra al contado',
+          charge: !historical && isCredit ? row.total : '0.00',
           paid: '0.00',
           status: row.status,
           purchaseId: String(row.id),
           purchaseType: row.purchase_type,
+          isHistorical: historical,
           total: fixed(total, 2),
           paidConfirmed: fixed(paidConfirmed, 2),
           pendingPayments: fixed(pendingPayments, 2),
           balance: fixed(balance, 2),
           availableBalance: fixed(availableBalance, 2),
-          canPay: row.purchase_type === 'CREDIT' && row.status !== 'CANCELLED' && balance > 0n && availableBalance > 0n
+          canPay: !historical && isCredit && balance > 0n && availableBalance > 0n
         };
       }),
       ...payments.map(row => {
         const supplierInvoice = row.purchase_id_ref === null ? '' : supplierInvoiceNumber({ id: row.purchase_id_ref, invoice_number: row.invoice_number });
-        return { date: row.created_at, kind: 'PAYMENT', reference: row.purchase_id_ref === null ? 'Pago a proveedor' : 'Pago ' + purchaseNumber(row.purchase_id_ref) + (supplierInvoice ? ' · Factura proveedor ' + supplierInvoice : ''), supplierInvoiceNumber: supplierInvoice || null, description: row.payment_method, charge: '0.00', paid: row.status === 'POSTED' ? row.amount : '0.00', pending: row.status === 'PENDING' ? row.amount : '0.00', status: row.status, purchaseId: row.purchase_id === null ? null : String(row.purchase_id) };
+        const historical = Boolean(row.is_historical);
+        return { date: row.created_at, kind: 'PAYMENT', paymentId: String(row.id), paymentMethod: row.payment_method, cancelReason: row.cancel_reason, cancelledAt: row.cancelled_at, cancelledByName: row.source_cancelled_by || row.cancelled_by_name, sourceActor: row.source_actor || null, isHistorical: historical, reference: row.purchase_id_ref === null ? 'Pago a proveedor' : 'Pago ' + purchaseNumber(row.purchase_id_ref) + (supplierInvoice ? ' · Factura proveedor ' + supplierInvoice : ''), supplierInvoiceNumber: supplierInvoice || null, description: row.payment_method, charge: '0.00', paid: !historical && row.status === 'POSTED' ? row.amount : '0.00', pending: !historical && row.status === 'PENDING' ? row.amount : '0.00', status: row.status, purchaseId: row.purchase_id === null ? null : String(row.purchase_id) };
       })
     ].sort((a, b) => new Date(a.date) - new Date(b.date));
     let balance = 0n;
@@ -269,6 +294,7 @@ function createProcurementService({ repo, auth, config }) {
   const cancelPurchase = (session, id, data) => work(session, 'purchases', (db, current) => once(db, current, 'CANCEL_PURCHASE', { purchaseId: id, ...data }, async () => {
     const [purchase] = await repo.rows(db, 'SELECT * FROM purchases WHERE business_id=? AND id=? FOR UPDATE', [current.business_id, id]);
     if (!purchase) throw httpError(404, 'PURCHASE_NOT_FOUND');
+    if (purchase.is_historical) throw httpError(409, 'HISTORICAL_PURCHASE_READ_ONLY');
     if (purchase.status !== 'COMPLETED') throw httpError(409, 'PURCHASE_CANCELLED');
     const items = await repo.rows(db, 'SELECT i.*,p.stock,p.name AS current_name FROM purchase_items i JOIN products p ON p.business_id=i.business_id AND p.id=i.product_id WHERE i.business_id=? AND i.purchase_id=? ORDER BY i.product_id FOR UPDATE', [current.business_id, id]);
     for (const item of items) if (units(item.stock) < units(item.quantity)) throw httpError(409, 'PURCHASE_CANCEL_STOCK_INSUFFICIENT');
@@ -303,7 +329,7 @@ function createProcurementService({ repo, auth, config }) {
   }));
   const payInvoice = (session, id, data) => work(session, 'payables', (db, current) => once(db, current, 'SUPPLIER_PAYMENT', { purchaseId: id, ...data }, async () => {
     const [purchase] = await repo.rows(db, 'SELECT * FROM purchases WHERE business_id=? AND id=? FOR UPDATE', [current.business_id, id]);
-    if (!purchase || purchase.purchase_type !== 'CREDIT') throw httpError(404, 'PAYABLE_NOT_FOUND');
+    if (!purchase || purchase.purchase_type !== 'CREDIT' || purchase.is_historical) throw httpError(404, 'PAYABLE_NOT_FOUND');
     if (purchase.status !== 'COMPLETED') throw httpError(409, 'PURCHASE_CANCELLED');
     const [sum] = await repo.rows(db, "SELECT COALESCE(SUM(CASE WHEN status='POSTED' THEN amount ELSE 0 END),0.00) AS paid,COALESCE(SUM(CASE WHEN status='PENDING' THEN amount ELSE 0 END),0.00) AS pending FROM supplier_payments WHERE business_id=? AND purchase_id=?", [current.business_id, id]);
     const balance = units(purchase.total) - units(sum.paid), available = balance - units(sum.pending), amount = units(data.amount);
@@ -328,7 +354,8 @@ function createProcurementService({ repo, auth, config }) {
      return { kind: 'SUPPLIER_PAYMENT', payment: { id: paymentId, businessId: String(current.business_id), purchaseId: String(id), supplierId: String(purchase.supplier_id), purchaseNumber: purchaseNumber(id), supplierInvoiceNumber: supplierInvoiceNumber(purchase), invoiceNumber: purchase.invoice_number, amount: data.amount, paymentMethod: data.paymentMethod, status, createdAt: new Date().toISOString(), userName: user.full_name } };
   }));
   const payablesSummary = session => work(session, 'payables', async (db, current) => {
-    const [summary] = await repo.rows(db, "SELECT COALESCE(SUM(p.total-(SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='POSTED')),0.00) AS balance,COALESCE(SUM((SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='PENDING')),0.00) AS pending FROM purchases p WHERE p.business_id=? AND p.purchase_type='CREDIT' AND p.status='COMPLETED'", [current.business_id]);
+    const historicalFilter = await hasColumn(db, 'purchases', 'is_historical') ? ' AND p.is_historical=FALSE' : '';
+    const [summary] = await repo.rows(db, "SELECT COALESCE(SUM(p.total-(SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='POSTED')),0.00) AS balance,COALESCE(SUM((SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='PENDING')),0.00) AS pending FROM purchases p WHERE p.business_id=? AND p.purchase_type='CREDIT' AND p.status='COMPLETED'" + historicalFilter, [current.business_id]);
     return { businessId: String(current.business_id), balance: summary.balance || '0.00', pendingPayments: summary.pending || '0.00' };
   });
   return { listSuppliers, getSupplier, createSupplier, updateSupplier, setSupplierActive, purchaseProducts, createPurchaseProduct, listPurchases, getPurchase: getPurchaseForView, getPayable: getPayableForView, listPayables, statement, recordPurchase, cancelPurchase, payInvoice, payablesSummary };

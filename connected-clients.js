@@ -166,7 +166,7 @@
         ...value.payments.map(payment => {
           const invoice = invoiceMap.get(payment.saleId);
           const method = ({ CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia' })[payment.paymentMethod] || payment.paymentMethod;
-          const status = payment.status === 'PENDING' ? ' · Abono pendiente de confirmar' : '';
+          const status = payment.status === 'VOID' ? ' · Anulado: ' + (payment.cancelReason || '') + (payment.cancelledByName ? ' (' + payment.cancelledByName + ')' : '') : payment.status === 'PENDING' ? ' · Abono pendiente de confirmar' : '';
           return { type: 'payment', date: payment.createdAt, ref: 'Abono #' + String(payment.invoiceNumber).padStart(6, '0'),
             detail: 'Pago recibido por ' + method + (payment.userName ? ' (' + payment.userName + ')' : '') + status,
             amount: Number(payment.amount), paymentStatus: payment.status, saleId: payment.saleId, invoice, receipt: payment };
@@ -209,6 +209,11 @@
             window.verComprobanteAbono(entry.receipt, 'cliente', value.client.name, '#' + String(entry.receipt.invoiceNumber).padStart(6, '0'));
           });
           actions.append(receiptButton);
+          if (entry.paymentStatus !== 'VOID' && !entry.receipt.isHistorical) {
+            const reverse = document.createElement('button'); reverse.type = 'button'; reverse.className = 'btn btn-sm btn-danger'; reverse.textContent = 'Revertir abono';
+            reverse.addEventListener('click', () => window.PosSales.reversePayment('customer', entry.receipt.id, entry.receipt.paymentMethod, entry.paymentStatus));
+            actions.append(reverse);
+          }
         }
         const invoice = entry.type === 'charge' && receivables.find(item => String(item.id) === String(entry.saleId));
         if (invoice) {

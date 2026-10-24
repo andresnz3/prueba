@@ -19,6 +19,7 @@ test('estado de cuenta calcula saldos por factura y reserva pagos pendientes', a
   const repo = {
     tenant: async (_session, action) => action('tenant-db', { business_id: '7', user_id: '8', session_id: '9' }),
     rows: async (_db, sql) => {
+      if (sql.includes('INFORMATION_SCHEMA.COLUMNS')) return [];
       if (sql.includes('FROM sessions')) return [{ id: '9' }];
       if (sql.includes('FROM suppliers s WHERE')) return [supplier];
       if (sql.includes('FROM purchases p LEFT JOIN suppliers s')) return purchases;

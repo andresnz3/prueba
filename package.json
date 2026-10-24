@@ -5,7 +5,9 @@
   "main": "app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check:encoding": "node scripts/check-text-encoding.cjs",
+    "test:local-browser": "node scripts/run-local-playwright.cjs"
   },
   "repository": {
     "type": "git",

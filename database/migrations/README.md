@@ -32,3 +32,66 @@ Agrega MIGRACION_INICIAL al ENUM de inventory_movements para registrar saldos im
 Migracion 006: planes y pagos del panel privado
 
 Crea business_subscriptions y business_subscription_payments para asignar planes, vencimientos y guardar importes/fechas de pago en USD. Deja libre la migración 005 de pagos a proveedores. No modifica schema.sql ni datos existentes; los negocios permanecen sin plan asignado hasta que el administrador elija uno. Las tablas se eliminan en cascada junto con un negocio vacío. Para aplicar a la base seleccionada tras autorizacion explicita: npm.cmd run migrate:system-admin-billing --prefix backend -- --apply. El ejecutor rechaza estados previos/parciales. DDL no es transaccional: inspeccionar information_schema antes de reintentar. Las pruebas solo aplican 006 a una base temporal pos_auth_test_* y la eliminan.
+
+# Migracion 009: compras historicas locales
+
+Agrega descuentos, notas y la marca `is_historical` a compras y detalles, y crea `migration_purchase_references` para idempotencia por negocio origen y compra local. Los registros marcados como históricos no crean movimientos operativos; las consultas de cuentas por pagar los excluyen y el endpoint de pagos los rechaza. Las compras ordinarias conservan `is_historical = 0`. No se modifica `schema.sql` ni se aplica esta migracion a `pos_multitenant` durante el desarrollo. La integracion la ejecuta solo en su base temporal `pos_auth_test_*` aleatoria y la elimina. Para uso real, revisar y aplicar este SQL manualmente solo después de autorización explícita; la vista previa y la importación quedan bloqueadas hasta que la migración y sus columnas existan.
+
+## Migracion 005: pagos a proveedores con tarjeta y transferencia
+
+Amplia supplier_payments.status con PENDING al final del ENUM y conserva POSTED como valor predeterminado. No agrega filas, no reescribe el estado de pagos actuales y no modifica database/schema.sql. Requiere 002 y 003 para idempotencia y metadatos de confirmacion de Caja. Los pagos CARD/TRANSFER reservan saldo en estado PENDING; Caja permite confirmarlos y guarda actor/fecha en el movimiento y auditoria, sin sumar ni restar efectivo fisico.
+
+## Ejecutor ordenado 001-017
+
+Para una instalacion nueva en MySQL o Contabo, crea una base vacia y configura DB_NAME para ese destino. Revisa el plan de solo lectura y aplica la instalacion completa:
+
+npm.cmd run migrate:all --prefix backend -- --plan --target pos_nueva --confirm-target pos_nueva --install-base-schema
+npm.cmd run migrate:all --prefix backend -- --apply --target pos_nueva --confirm-target pos_nueva --install-base-schema
+
+El plan comprueba MySQL 8.0.16+ y que la base este vacia, sin ejecutar DDL. La aplicacion importa solo las instrucciones CREATE TABLE de schema.sql, omite su CREATE DATABASE/USE fijo a pos_multitenant y ejecuta 001-017 en orden. Para una base existente, omite --install-base-schema y usa --plan/--apply. El destino debe coincidir exactamente con DB_NAME. Se validan dependencias, firmas de esquema y checksums, y el estado queda en schema_migrations. Las migraciones previas sin ledger se adoptan solo si todas las firmas coinciden. Ante esquema parcial, drift o interrupcion, el ejecutor se detiene para revision; el DDL no es transaccional. Requiere respaldo reciente y privilegios CREATE/ALTER. En Contabo se ejecuta desde el backend con un usuario limitado a la base destino. pos_multitenant requiere --allow-principal y autorizacion expresa; esta auditoria no modifico esa base.
+
+### Migracion 017: plan conectado Estandar
+
+Amplia la restriccion de `business_subscriptions.plan_code` para aceptar `CONECTADO_ESTANDAR`, con hasta 5 usuarios activos por negocio. No reescribe suscripciones, pagos, usuarios ni otros datos y requiere la migracion 006. La prueba de compatibilidad conserva una suscripcion y un pago previos, admite el nuevo codigo y sigue rechazando codigos invalidos. Se aplica solo mediante el ejecutor oficial en bases nuevas o destinos autorizados; no se ha aplicado a `pos_multitenant` en esta tarea.
+
+### Migracion 015: eventos historicos de inventario con cantidad cero
+
+Conserva eventos de Kardex con cantidad cero en una tabla historica separada. No genera deltas ni altera existencias. Requiere que la consulta del Kardex combine ledger y eventos historicos.
+
+### Migracion 016: ordenes historicas sin precio por linea
+
+Permite representar como desconocidos, con `NULL` y `price_snapshot_available=0`, los precios por linea que el POS local nunca guardo. Los valores previos no nulos permanecen intactos; el CHECK impide combinar el indicador de precio ausente con importes inventados. Requiere 003 y 015. Se verifico en bases temporales; el plan oficial de solo lectura del 23 de octubre de 2026 confirmó 001–015 `APPLIED` y 016 `PENDING` en `pos_multitenant`, sin ejecutar DDL. Posteriormente, con autorización explícita y después de respaldo restaurable verificado, se aplicó solo 016; el plan posterior confirmó 001–016 `APPLIED`. El proyector historico requiere esta migracion para conservar ordenes canceladas cuyos precios originales no existen. Respaldo: `C:\Users\andre\Documents\POS-Backups\pos_multitenant-pre-016-20261023T182140.392Z-58fce0ff.sql`.
+## Inventario y dependencias revisadas
+
+| Version | Estado del archivo y esquema | Dependencias |
+| --- | --- | --- |
+| 001 | Presente: otorgante de autorizaciones | Base |
+| 002 | Presente: operaciones idempotentes y valores de efectivo/cambio | 001 |
+| 003 | Presente: flujo de Caja y pedidos centralizados | 002 |
+| 004 | Presente: credito de clientes y conciliacion de abonos | 002, 003 |
+| 005 | Implementada: estado PENDING para conciliacion de pagos de proveedores | 002, 003 |
+| 006 | Presente: planes y pagos de suscripcion | Base |
+| 007 | Presente: tipo de movimiento de inventario inicial | Base |
+| 008 | Presente: referencias idempotentes de ventas locales | 002, 003 |
+| 009 | Presente: referencias e importacion de compras historicas | Base |
+| 010 | Presente: referencias de credito historico | 004, 008 |
+| 011 | Presente: razon social en configuracion comercial | Base |
+| 012 | Nueva: archivo reanudable por negocio de los registros locales de origen | 003, 008, 009, 010, 011 |
+| 013 | Nueva: control de acceso hasta conciliar la importacion | 012 |
+| 014 | Nueva: marcas y referencias para consultar operaciones locales historicas sin alterar saldos actuales | 013 |
+
+### Migracion 012: archivo de origen local
+
+Crea `migration_import_batches` y `migration_source_records`, cada una aislada por `business_id`. El endpoint de administrador de sistema valida el paquete local v2, su identidad y huella, conserva el contenido historico depurado por bloques reintentables y deja en estado pendiente las filas ambiguas, sin ID o que no pueden proyectarse sin riesgo. No crea ventas, compras, pagos, movimientos de caja ni stock, y no elimina ni actualiza Dexie. Los secretos y credenciales se omiten; se retienen etiquetas legibles de responsables. El archivo de imagen original puede permanecer en el JSON historico, pero aun no se publica en el almacenamiento de imagenes del negocio. El guardado del paquete no declara completa la migracion operativa.
+
+El servicio requiere confirmacion explicita, destino INACTIVE creado para importacion, origen identificable y que las filas incluidas no declaren otro negocio. Si hay identidad ambigua, filas legadas sin negocio o alcance inconsistente, rechaza el guardado. Repetir el mismo paquete reanuda el lote por huella sin duplicar filas ni auditorias de finalizacion; un paquete distinto para el mismo origen se rechaza. Aplicar la 012 solo despues de respaldo y autorizacion para la base destino, con `npm.cmd run migrate:all --prefix backend -- --plan --target <base> --confirm-target <base>` y luego `--apply` sobre esa misma base. Las pruebas la aplican exclusivamente a bases temporales `pos_auth_test_*`.
+
+Los archivos 001-004 y 006-010 ya existian en el arbol de trabajo; 005 era la migracion pendiente. El ejecutor verifica sus huellas completas antes de adoptar una aplicacion previa sin ledger. Estas notas describen el codigo local; no implican que se haya aplicado a la base principal.
+
+### Migracion 013: bloqueo hasta conciliar una importacion
+
+Crea `business_migration_controls`, ligada al negocio, al administrador que inicia el proceso y al lote 012. El endpoint exclusivo de administrador general crea destinos INACTIVE con estado PENDING; el paquete solo puede asociarse a ese destino y su primer origen queda fijado para impedir mezclar otro negocio. El login, las sesiones y el cambio de estado a ACTIVE se bloquean mientras el control permanezca PENDING. La migracion no activa el destino y no cambia `schema.sql` ni filas existentes. Hoy no hay una proyeccion completa ni un verificador que pueda cambiar el control a COMPLETE; por tanto, los destinos quedan bloqueados hasta que se implemente y pruebe la conciliacion operativa.
+
+### Migracion 014: operaciones historicas locales
+
+Adiciona marcas historicas y nombres de responsables/estados originales en Caja, gastos, pagos a proveedores, inventario, ventas, compras y ordenes. Crea `migration_supplier_payment_references` para conservar la relacion de abonos locales con pagos MySQL y hacer seguros los reintentos. Los valores por omision dejan los registros actuales como operativos y la migracion no crea movimientos ni altera saldos. El importador administrativo la requiere para consultar operaciones historicas desde los modulos normales; solo se aplica automaticamente en las bases temporales del ejecutor. No se ha aplicado a `pos_multitenant`.

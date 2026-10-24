@@ -71,10 +71,10 @@ test('basic import package validates its envelope and maps only the basic stores
   assert.equal(imported.suppliers.length, 1);
   assert.equal(imported.categoriesDetected, 1);
   assert.equal(imported.products[0].category, 'Abarrotes');
+  assert.doesNotThrow(() => packageForImport({ ...basicPackage(), version: 2 }));
   for (const value of [
     null,
     { ...basicPackage(), type: 'other' },
-    { ...basicPackage(), version: 2 },
     { ...basicPackage(), data: null },
     { ...basicPackage(), data: { ...basicPackage().data, products: [{ name: '', barcode: 'x' }] } }
   ]) assert.throws(() => packageForImport(value), error => error.publicCode === 'MIGRATION_PACKAGE_INVALID');

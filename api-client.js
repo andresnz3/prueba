@@ -1,12 +1,17 @@
 'use strict';
+
 (() => {
   const messages = {
+    PAYMENT_ALREADY_VOID: 'Este pago ya está anulado. Actualiza el estado de cuenta.',
+    PAYMENT_NOT_REVERSIBLE: 'Solo se pueden revertir pagos operativos de facturas de crédito vigentes. Los registros históricos son de consulta.',
+    EXTERNAL_REFUND_REQUIRED: 'Confirma que la devolución se realizó por el mismo medio fuera del POS.',
+    CASH_BALANCE_LIMIT: 'El movimiento supera el límite de efectivo admitido por la caja.',
     CART_EMPTY: 'El carrito está vacío. Agrega productos antes de cobrar.',
     QUANTITY_INVALID: 'Ingresa una cantidad mayor que cero, con hasta tres decimales.',
     DISCOUNT_INVALID: 'El descuento debe estar entre 0 y 100, con hasta cuatro decimales.',
     PAYMENT_METHOD_REQUIRED: 'Selecciona efectivo, tarjeta, transferencia o cr\u00e9dito.',
     PRODUCT_INACTIVE: 'El producto está inactivo. Retíralo del carrito.',
-    CASH_CLOSED: 'No hay una caja abierta. Abre una caja para continuar.',
+    CASH_CLOSED: 'Debes abrir caja antes de facturar o cobrar',
     CASH_AMBIGUOUS: 'Hay más de una caja abierta. Requiere revisión antes de cobrar.',
     CASH_ALREADY_OPEN: 'Ya hay una caja abierta en este negocio.',
     CASH_OPEN: 'Cierra la caja actual antes de cambiar el flujo de ventas.',
@@ -30,6 +35,8 @@
     OPERATION_KEY_INVALID: 'No se pudo identificar la operación. Recarga y comprueba el cobro.',
     SALE_NOT_FOUND: 'No se encontró esa factura en este negocio.',
     SALE_CANCELLED: 'La venta ya está anulada. Su historial se conserva.',
+    HISTORICAL_SALE_READ_ONLY: 'Las ventas históricas son de solo lectura y no se pueden anular desde el POS.',
+    MIGRATION_SALES_ORIGIN_CONFIRMATION_REQUIRED: 'El destino ya contiene ventas de otro origen. Revisa el aviso y confirma explícitamente el nuevo origen.',
     INVOICE_DUPLICATE: 'La factura ya existe. Comprueba la operación antes de cobrar nuevamente.',
     INVOICE_LIMIT: 'La secuencia de facturas llegó a su límite.',
     REASON_REQUIRED: 'Ingresa el motivo de anulación.',
@@ -84,6 +91,16 @@
     MIGRATION_BASIC_REQUIRED: 'Primero completa la migración básica de productos para este negocio.',
     MIGRATION_INVENTORY_SCHEMA_REQUIRED: 'La base conectada requiere la migración de inventario inicial antes de usar esta función.',
     MIGRATION_TARGET_INACTIVE: 'El negocio conectado destino no está activo.',
+    MIGRATION_GATE_SCHEMA_REQUIRED: 'Para usar la importación segura deben aplicarse las migraciones 012 y 013 en el servidor. No se modificó ningún negocio.',
+    MIGRATION_TARGET_PROTECTED: 'El negocio principal del sistema no puede usarse como destino.',
+    MIGRATION_TARGET_ALREADY_PREPARED: 'Este negocio ya está reservado para una importación o ya tiene un proceso iniciado.',
+    MIGRATION_TARGET_HAS_DATA: 'Este negocio ya contiene operaciones o información que no se puede sustituir. No se modificó.',
+    MIGRATION_TARGET_CONFIRMATION_REQUIRED: 'Confirma que deseas reservar este negocio y bloquear su acceso mientras se prepara la migración.',
+    MIGRATION_TARGET_REQUIRED: 'Selecciona un negocio creado para importar y que todavía esté bloqueado.',
+    MIGRATION_SOURCE_MISMATCH: 'Este destino ya quedó asociado a otro negocio de origen.',
+    MIGRATION_TARGET_SOURCE_NAME_MISMATCH: 'El nombre del origen no coincide con el destino seleccionado. Verifica el negocio antes de continuar.',
+    MIGRATION_RECONCILIATION_REQUIRED: 'No se puede activar todavía. Completa la migración y la conciliación desde «Migración local».',
+    BUSINESS_MIGRATION_PENDING: 'Este negocio todavía está en proceso de migración y no se puede abrir.',
     MIGRATION_SYSTEM_BUSINESS_CONFIRMATION_REQUIRED: 'Confirma explícitamente que deseas importar al negocio del sistema.',
     SUPPORT_TARGET_INVALID: 'Selecciona un negocio de cliente para iniciar la sesión de soporte.',
     SUPPORT_BUSINESS_UNAVAILABLE: 'El negocio está suspendido o no disponible para soporte.',
@@ -93,10 +110,20 @@
     BUSINESS_NOT_FOUND: 'No se encontró el negocio solicitado.',
     BUSINESS_PROTECTED: 'El negocio del sistema no se puede suspender.',
     BUSINESS_DELETE_PROTECTED: 'No se puede eliminar el negocio principal del sistema.',
-    BUSINESS_HAS_DATA: 'No se puede eliminar porque el negocio ya tiene información registrada. Puede suspenderlo.',
+    BUSINESS_DELETE_BLOCKED: 'Otra información del sistema todavía depende de este negocio. No se realizaron cambios; revise esas relaciones antes de volver a intentarlo.',
+    BUSINESS_DELETE_SCHEMA_UNSUPPORTED: 'No se pudo comprobar de forma segura la estructura para eliminar este negocio. No se realizaron cambios.',
+    BUSINESS_DELETE_PREVIEW_REQUIRED: 'Vuelve a abrir el resumen antes de confirmar la eliminación.',
+    BUSINESS_DELETE_PREVIEW_STALE: 'La información del negocio cambió desde que se mostró el resumen. Revisa el resumen actualizado antes de confirmar.',
     BUSINESS_DELETE_CONFIRMATION_REQUIRED: 'Eliminación cancelada. Debes escribir exactamente ELIMINAR.',
     SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED: 'La gestión de planes y pagos necesita la migración 006 aprobada. Consulta al administrador del sistema.',
     BUSINESS_PLAN_INVALID: 'Selecciona uno de los planes disponibles.',
+    BUSINESS_PLAN_SCHEMA_UNSUPPORTED: 'El plan guardado no es compatible. Consulta al administrador del sistema.',
+    BUSINESS_PLAN_STANDARD_MIGRATION_REQUIRED: 'El plan Estándar necesita una actualización pendiente del sistema. No se modificó el negocio.',
+    BUSINESS_PLAN_REQUIRED: 'Asigna un plan al negocio antes de crear o reactivar usuarios.',
+    BUSINESS_PLAN_USER_LIMIT_EXCEEDED: 'Se alcanzaría el máximo de usuarios activos del plan. No se modificó el negocio.',
+    BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED: 'El plan permite un administrador activo por negocio. No se modificó la cuenta ni el plan.',
+    BUSINESS_PLAN_DOWNGRADE_BLOCKED: 'El negocio supera el límite del plan seleccionado. No se cambió el plan ni se desactivaron usuarios.',
+    BUSINESS_PLAN_ACTIVATION_BLOCKED: 'No se puede activar el negocio hasta que su plan y usuarios activos estén dentro de los límites.',
     BUSINESS_PLAN_NOT_MONTHLY: 'Solo se pueden registrar pagos para planes conectados mensuales.',
     PAYMENT_AMOUNT_INVALID: 'Ingresa un importe en USD mayor que cero y con hasta dos decimales.',
     PAYMENT_DATE_FUTURE: 'La fecha del pago no puede estar en el futuro.',
@@ -120,6 +147,27 @@
     IMAGE_STORAGE_UNAVAILABLE: 'El almacenamiento de fotografias del servidor no esta disponible.',
     IMAGE_QUOTA_EXCEEDED: 'El negocio alcanzo su limite de almacenamiento de fotografias.',
     IMAGE_BUSY: 'El servidor esta procesando otras fotografias. Intenta nuevamente en unos segundos.',
+    BUSINESS_SETTINGS_MIGRATION_REQUIRED: 'La configuracion central del negocio necesita la migracion 011.',
+    MIGRATION_ARCHIVE_SCHEMA_REQUIRED: 'Para usar la importación segura, el servidor necesita la migración 012. No se modificó el negocio.',
+    MIGRATION_PACKAGE_CHANGED: 'El paquete local cambió después de iniciar la migración. Recupera el mismo archivo guardado para reanudarla.',
+    MIGRATION_ARCHIVE_CONFIRMATION_REQUIRED: 'Confirma que el paquete pertenece al negocio destino.',
+    MIGRATION_BATCH_CONFLICT: 'El lote de migración cambió. Consulta su estado antes de reintentar.',
+    MIGRATION_OPERATIONAL_SCHEMA_REQUIRED: 'El servidor necesita la migración 014 para importar y conciliar las operaciones históricas.',
+    MIGRATION_ZERO_INVENTORY_SCHEMA_REQUIRED: 'El servidor necesita la migración 015 para conservar los eventos históricos de inventario sin cambio de existencias.',
+    MIGRATION_TARGET_USER_REQUIRED: 'Antes de migrar, crea una cuenta para el negocio destino con un usuario y una contraseña nuevos. No se copian las contraseñas del POS local.',
+    MIGRATION_CATALOG_RECONCILIATION_REQUIRED: 'Los datos del catálogo no pudieron comprobarse. El negocio permanece bloqueado; revisa el resultado y vuelve a intentar con el mismo archivo.',
+    MIGRATION_STAGE_IN_PROGRESS: 'La importación de este negocio ya está en curso. Consulta su estado antes de volver a intentarlo.',
+    MIGRATION_CASH_SESSION_REFERENCE_UNRESOLVED: 'Una sesión de caja contiene referencias que no coinciden con los registros importados. No se conservó ningún movimiento parcial; revisa las relaciones del paquete.',
+    MIGRATION_RECORD_CONFLICT: 'Un registro local tiene otra huella en el lote. Se detuvo para evitar sobrescribir información.',
+    MIGRATION_ARCHIVE_INCOMPLETE: 'La copia del paquete no terminó de guardarse. Reintenta con el mismo archivo.',
+    MIGRATION_SOURCE_SCOPE_REQUIRED: 'No se guardó la información: verifica que el paquete pertenezca a un solo negocio y no incluya registros sin identificar.',
+      MIGRATION_IDENTITY_CONFIRMATION_REQUIRED: 'Confirma que este registro pertenece al negocio del paquete antes de incluirlo.',
+      MIGRATION_IDENTITY_REVIEW_UNAVAILABLE: 'La información del paquete no permite resolver este registro. Sigue pendiente y el negocio permanece bloqueado.',
+      MIGRATION_IDENTITY_ALREADY_REVIEWED: 'Este registro ya tiene una decisión guardada. No se reemplazó.',
+      MIGRATION_RECORD_NOT_FOUND: 'No se encontró el registro pendiente en el archivo de migración.',
+    MIGRATION_BATCH_NOT_FOUND: 'No se encontró el lote de migración para este negocio.',
+    BUSINESS_SETTINGS_EXISTS: 'Ya existe configuracion en MySQL. La copia de este dispositivo no se importo.',
+    LEGACY_SETTINGS_BUSINESS_MISMATCH: 'El nombre de la configuracion local no coincide con el negocio conectado. No se importo.',
     TOO_MANY_ATTEMPTS: 'Demasiados intentos. Espera antes de intentar nuevamente.',
     BARCODE_EXISTS: 'Ese c\u00f3digo de barras ya existe en este negocio.',
     PRODUCT_CONFLICT: 'El producto cambi\u00f3 en otra sesi\u00f3n. Actualiza el inventario y abre la edici\u00f3n nuevamente.',
@@ -192,9 +240,9 @@
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || !url.pathname.endsWith('/api')) throw new ApiError('INVALID_INPUT');
       this.baseUrl = url.href.replace(/\/$/, '');
     }
-    async #request(path, method = 'GET', body, contentType = 'application/json') {
+    async #request(path, method = 'GET', body, contentType = 'application/json', timeoutMs = 8000) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       let response;
       try {
         response = await fetch(this.baseUrl + path, { method, credentials: 'include', cache: 'no-store', redirect: 'error', signal: controller.signal,
@@ -210,10 +258,21 @@
         const code = typeof receivedCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(receivedCode) ? receivedCode : 'INTERNAL_ERROR';
         const error = new ApiError(code, response.status);
         const serverMessage = data?.error?.message;
-        const businessDeleteCodes = ['BUSINESS_NOT_FOUND', 'BUSINESS_DELETE_PROTECTED', 'BUSINESS_HAS_DATA', 'BUSINESS_DELETE_CONFIRMATION_REQUIRED'];
-        const businessPlanCodes = ['SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED', 'BUSINESS_PLAN_INVALID', 'BUSINESS_PLAN_NOT_MONTHLY', 'PAYMENT_AMOUNT_INVALID', 'PAYMENT_DATE_FUTURE'];
+        const businessDeleteCodes = ['BUSINESS_NOT_FOUND', 'BUSINESS_DELETE_PROTECTED', 'BUSINESS_DELETE_BLOCKED', 'BUSINESS_DELETE_SCHEMA_UNSUPPORTED', 'BUSINESS_DELETE_PREVIEW_REQUIRED', 'BUSINESS_DELETE_PREVIEW_STALE', 'BUSINESS_DELETE_CONFIRMATION_REQUIRED'];
+        const businessPlanCodes = ['SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED', 'BUSINESS_PLAN_INVALID', 'BUSINESS_PLAN_SCHEMA_UNSUPPORTED', 'BUSINESS_PLAN_REQUIRED', 'BUSINESS_PLAN_STANDARD_MIGRATION_REQUIRED', 'BUSINESS_PLAN_USER_LIMIT_EXCEEDED', 'BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED', 'BUSINESS_PLAN_DOWNGRADE_BLOCKED', 'BUSINESS_PLAN_ACTIVATION_BLOCKED', 'BUSINESS_PLAN_NOT_MONTHLY', 'PAYMENT_AMOUNT_INVALID', 'PAYMENT_DATE_FUTURE'];
         if ((businessDeleteCodes.includes(code) || businessPlanCodes.includes(code)) && typeof serverMessage === 'string' && serverMessage.trim() && serverMessage.length <= 500) error.message = serverMessage.trim();
         else if (typeof receivedCode === 'string' && !Object.prototype.hasOwnProperty.call(messages, code)) error.message = 'El servidor devolvi\u00f3 el error ' + code + '.';
+        const details = data?.error?.details;
+        const numericDetails = details && typeof details === 'object' && !Array.isArray(details) && Object.values(details).every(item => Number.isSafeInteger(item) && item >= 0) ? details : null;
+        if (numericDetails && ['BUSINESS_PLAN_USER_LIMIT_EXCEEDED', 'BUSINESS_PLAN_DOWNGRADE_BLOCKED', 'BUSINESS_PLAN_ACTIVATION_BLOCKED'].includes(code) && Number.isSafeInteger(numericDetails.activeUsers) && Number.isSafeInteger(numericDetails.maximumUsers)) {
+          const excess = Math.max(0, numericDetails.activeUsers - numericDetails.maximumUsers);
+          error.message = code === 'BUSINESS_PLAN_USER_LIMIT_EXCEEDED'
+            ? 'El negocio ya tiene ' + numericDetails.activeUsers + ' usuarios activos y el plan permite hasta ' + numericDetails.maximumUsers + '. No se creó ni reactivó la cuenta.'
+            : 'El negocio tiene ' + numericDetails.activeUsers + ' usuarios activos y el plan permite hasta ' + numericDetails.maximumUsers + '. No se cambió el plan ni se desactivó a nadie.' + (excess ? ' Desactiva manualmente ' + excess + ' usuario(s) y vuelve a intentarlo.' : '');
+        } else if (numericDetails && code === 'BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED' && Number.isSafeInteger(numericDetails.activeAdmins)) {
+          error.message = 'El negocio tendría ' + numericDetails.activeAdmins + ' administradores activos y el límite es uno. No se realizó el cambio.';
+        }
+        if (numericDetails) error.details = numericDetails;
         error.field = data?.error?.field;
         if (error.code === 'TOO_MANY_ATTEMPTS') { error.retryAfter = Number(response.headers.get('Retry-After')) || 60; error.message = 'Demasiados intentos. Intenta nuevamente en ' + error.retryAfter + ' segundos.'; }
         throw error;
@@ -225,14 +284,14 @@
       if (!value || typeof value.csrfToken !== 'string' || !/^[A-Za-z0-9_.-]{43,200}$/.test(value.csrfToken)) throw new ApiError('INVALID_RESPONSE');
       this.#csrf = value.csrfToken;
     }
-    #write(path, method, body, contentType = 'application/json') {
+    #write(path, method, body, contentType = 'application/json', timeoutMs = 8000) {
       const operation = this.#pending.catch(() => {}).then(async () => {
         if (!this.#csrf) await this.csrf();
-        try { return await this.#request(path, method, body, contentType); }
+        try { return await this.#request(path, method, body, contentType, timeoutMs); }
         catch (error) {
           if (error.code !== 'CSRF_FAILED') throw error;
           if (this.#ownerIdentity) await this.me(); else await this.csrf();
-          return this.#request(path, method, body, contentType);
+          return this.#request(path, method, body, contentType, timeoutMs);
         }
       });
       this.#pending = operation.then(() => undefined, () => undefined);
@@ -243,14 +302,17 @@
       if (record.businessId !== this.#effectiveBusinessId()) throw new ApiError('INVALID_RESPONSE');
       if (value.sale) {
         const sale = value.sale;
-        if (!/^[1-9]\d*$/.test(sale.id || '') || !/^\d{6,20}$/.test(sale.invoiceNumber || '') || !['COMPLETED', 'CANCELLED'].includes(sale.status) || !['CASH', 'CARD', 'TRANSFER', 'CREDIT'].includes(sale.paymentMethod) || !['NOT_APPLICABLE', 'PENDING', 'CONFIRMED'].includes(sale.cashStatus) || !Array.isArray(sale.items) || !Number.isFinite(Date.parse(sale.createdAt)) || !['subtotal','discount','total','tax'].every(field => /^\d+\.\d{2}$/.test(sale[field]))) throw new ApiError('INVALID_RESPONSE');
+        const validInvoiceNumber = /^(?:\d{6,20}|MIG-(?:[A-Za-z0-9_-]{1,18}-)?[a-f0-9]{28})$/.test(sale.invoiceNumber || '');
+        if (!/^[1-9]\d*$/.test(sale.id || '') || !validInvoiceNumber || !['COMPLETED', 'CANCELLED'].includes(sale.status) || !['CASH', 'CARD', 'TRANSFER', 'CREDIT'].includes(sale.paymentMethod) || !['NOT_APPLICABLE', 'PENDING', 'CONFIRMED'].includes(sale.cashStatus) || !Array.isArray(sale.items) || !Number.isFinite(Date.parse(sale.createdAt)) || !['subtotal','discount','total','tax'].every(field => /^\d+\.\d{2}$/.test(sale[field]))) throw new ApiError('INVALID_RESPONSE');
       }
       if (value.payment) { const payment = value.payment; if (!/^[1-9]\d*$/.test(payment.id || '') || !/^[1-9]\d*$/.test(payment.saleId || '') || !/^[1-9]\d*$/.test(payment.clientId || '') || payment.businessId !== this.#effectiveBusinessId() || !/^\d+\.\d{2}$/.test(payment.amount || '') || !['CASH','CARD','TRANSFER'].includes(payment.paymentMethod) || !['PENDING','POSTED'].includes(payment.status)) throw new ApiError('INVALID_RESPONSE'); }
       return value;
     }
     #cashRecord(value) {
       const amount = candidate => (typeof candidate === 'string' || typeof candidate === 'number') && Number.isFinite(Number(candidate));
-      if (!value || typeof value !== 'object' || value.businessId !== this.#effectiveBusinessId() || !/^[1-9]\d{0,19}$/.test(value.id || '') || !['OPEN', 'CLOSED'].includes(value.status) || !amount(value.openingAmount) || !amount(value.expectedAmount) || !Number.isFinite(Date.parse(value.openedAt)) || (value.closedAt !== null && value.closedAt !== undefined && !Number.isFinite(Date.parse(value.closedAt))) || (value.movements !== undefined && !Array.isArray(value.movements))) throw new ApiError('CASH_RESPONSE_INVALID');
+      const originalSessionWasOpen = value?.isHistorical === true && value.status === 'CLOSED' && typeof value.sourceStatus === 'string' && /^(OPEN|ABIERTA|ABIERTO|ACTIVA|ACTIVO)$/i.test(value.sourceStatus.trim());
+      const expectedAmountIsValid = amount(value?.expectedAmount) || (value?.expectedAmount === null && originalSessionWasOpen);
+      if (!value || typeof value !== 'object' || value.businessId !== this.#effectiveBusinessId() || !/^[1-9]\d{0,19}$/.test(value.id || '') || !['OPEN', 'CLOSED'].includes(value.status) || !amount(value.openingAmount) || !expectedAmountIsValid || !Number.isFinite(Date.parse(value.openedAt)) || (value.closedAt !== null && value.closedAt !== undefined && !Number.isFinite(Date.parse(value.closedAt))) || (value.movements !== undefined && !Array.isArray(value.movements))) throw new ApiError('CASH_RESPONSE_INVALID');
       return value;
     }
     #cashOverview(value) {
@@ -271,6 +333,7 @@
     async operation(key) { return this.#salesResult(await this.#request('/operations/'+encodeURIComponent(key))); }
     async resolveOperation(key) { return this.#salesResult(await this.#write('/operations/'+encodeURIComponent(key)+'/resolve','POST',{})); }
     async sales(offset=0,maxId=null) { const value=await this.#request('/sales?limit=100&offset='+offset+(maxId ? '&maxId='+encodeURIComponent(maxId) : '')); if(!Array.isArray(value?.sales)) throw new ApiError('INVALID_RESPONSE'); return value.sales.map(sale=>this.#salesResult({sale}).sale); }
+    async historicalOrders(offset=0) { const value=await this.#request('/sales/orders/history?limit=100&offset='+offset); if(!Array.isArray(value?.orders)||value.orders.some(order=>order.businessId!==this.#effectiveBusinessId()||!order.isHistorical||!['PENDING','COMPLETED','CANCELLED'].includes(order.status)||!Array.isArray(order.items))) throw new ApiError('INVALID_RESPONSE'); return value.orders; }
     async sale(id) { const value = this.#salesResult(await this.#request('/sales/' + encodeURIComponent(id))); return value.sale; }
     async currentCash(full=false) { const value=await this.#request('/cash/current'+(full?'?full=true':'')); if(!value || !Object.prototype.hasOwnProperty.call(value, 'cash')) throw new ApiError('CASH_RESPONSE_INVALID'); if(value.cash===null) return null; return this.#cashRecord(value.cash); }
     async cashSessions(offset=0) { const value=await this.#request('/cash/sessions?limit=100&offset='+offset); if(!Array.isArray(value?.sessions)) throw new ApiError('CASH_RESPONSE_INVALID'); return value.sessions.map(cash=>this.#cashRecord(cash)); }
@@ -278,6 +341,31 @@
     async closeCash(id,data) { return this.#cashOperation(await this.#write('/cash/sessions/'+encodeURIComponent(id)+'/close','POST',data), 'CLOSE_CASH'); }
     async salesFlow() { const value=await this.#request('/business-settings/sales-flow'); if(value?.businessId!==this.#effectiveBusinessId()||!['DIRECT','CENTRALIZED'].includes(value.salesFlow)) throw new ApiError('INVALID_RESPONSE'); return value; }
     async setSalesFlow(salesFlow) { const value=await this.#write('/business-settings/sales-flow','PUT',{salesFlow}); if(value?.businessId!==this.#effectiveBusinessId()||value.salesFlow!==salesFlow) throw new ApiError('INVALID_RESPONSE'); return value; }
+    #businessSettings(value) {
+      const businessId = this.#effectiveBusinessId();
+      const strings = ['businessName','legalName','ruc','phone','address','invoicePrefix','ticketHeader','ticketFooter'];
+      if (!value || value.businessId !== businessId || !/^[1-9]\d{0,19}$/.test(value.businessId || '') || value.currency !== 'C$' || typeof value.hasStoredSettings !== 'boolean' || typeof value.schemaReady !== 'boolean' || !strings.every(field => typeof value[field] === 'string') || !['retailMarginDefault','wholesaleMarginDefault','minStockDefault','taxRateDefault'].every(field => Number.isFinite(Number(value[field]))) || !(value.logo === null || typeof value.logo === 'string')) throw new ApiError('INVALID_RESPONSE');
+      if (value.logo !== null) {
+        const match = /^\/api\/product-images\/([1-9]\d{0,19})\/[a-f0-9]{32}\.jpg$/.exec(value.logo);
+        if (!match || match[1] !== businessId) throw new ApiError('INVALID_RESPONSE');
+      }
+      return value;
+    }
+    async businessSettings() { return this.#businessSettings(await this.#request('/business-settings')); }
+    async updateBusinessSettings(data) { return this.#businessSettings(await this.#write('/business-settings','PUT',data)); }
+    async importLegacyBusinessSettings(data) { return this.#businessSettings(await this.#write('/business-settings/import-legacy','POST',data)); }
+    async uploadBusinessLogo(file) {
+      if (!(file instanceof Blob) || !['image/jpeg','image/png','image/webp'].includes(file.type) || file.size < 1 || file.size > 8 * 1024 * 1024) throw new ApiError('IMAGE_FORMAT_INVALID', 400);
+      return this.#businessSettings(await this.#write('/business-settings/logo','POST',file,file.type));
+    }
+    assetUrl(reference) {
+      const match = typeof reference === 'string' && /^\/api\/product-images\/([1-9]\d{0,19})\/[a-f0-9]{32}\.jpg$/.exec(reference);
+      const base = new URL(this.baseUrl);
+      if (!match || match[1] !== this.#effectiveBusinessId()) throw new ApiError('INVALID_RESPONSE');
+      const url = new URL(reference, base);
+      if (url.origin !== base.origin) throw new ApiError('INVALID_RESPONSE');
+      return url.href;
+    }
     async cashOverview() { const value=await this.#request('/cash/overview'); if(!value?.overview) throw new ApiError('CASH_RESPONSE_INVALID'); return this.#cashOverview(value.overview); }
     async connectedReport(from = null, until = null) {
       const query = new URLSearchParams();
@@ -290,7 +378,12 @@
       if (report?.businessId !== this.#effectiveBusinessId() || !report.sales || !report.cash || !report.inventory || !report.receivables || !report.expenses || !report.purchases || !report.payables || !report.suppliers || !moneyValue(report.sales.total) || !moneyValue(report.sales.cost) || !moneyValue(report.sales.grossProfit) || !moneyValue(report.sales.netProfit) || !moneyValue(report.expenses.total) || !Number.isSafeInteger(report.expenses.count) || !Array.isArray(report.expenses.byCategory) || !Array.isArray(report.expenses.history) || !Array.isArray(report.inventory.movements) || !moneyValue(report.cash.periodIn) || !moneyValue(report.cash.periodOut) || !(report.cash.currentExpected === null || moneyValue(report.cash.currentExpected)) || !Array.isArray(report.sales.history) || !Array.isArray(report.sales.paymentMethods) || !Array.isArray(report.sales.sellers) || !Array.isArray(report.sales.topProducts) || !Array.isArray(report.cash.closures) || !Array.isArray(report.cash.movements) || !Array.isArray(report.inventory.products) || !Array.isArray(report.receivables.clients) || !Array.isArray(report.receivables.payments) || !moneyValue(report.purchases.total) || !Array.isArray(report.purchases.history) || !moneyValue(report.payables.balance) || !moneyValue(report.payables.pendingPayments) || !Array.isArray(report.payables.invoices) || !Array.isArray(report.suppliers.list) || !Array.isArray(report.suppliers.payments)) throw new ApiError('INVALID_RESPONSE');
       return report;
     }
-    async confirmPayment(id,data) { return this.#salesResult(await this.#write('/cash/payments/'+encodeURIComponent(id)+'/confirm','POST',data)); }
+    async confirmPayment(id,data) {
+      const value = this.#salesResult(await this.#write('/cash/payments/'+encodeURIComponent(id)+'/confirm','POST',data));
+      if (value?.kind !== 'CONFIRM_PAYMENT' || value.movement?.businessId !== this.#effectiveBusinessId() || value.movement.id !== String(id) || value.movement.status !== 'CONFIRMED' || !['CARD','TRANSFER'].includes(value.movement.paymentMethod)) throw new ApiError('INVALID_RESPONSE');
+      if (value.supplierPayment && (value.supplierPayment.businessId !== this.#effectiveBusinessId() || !/^[1-9]\d*$/.test(value.supplierPayment.id || '') || value.supplierPayment.status !== 'POSTED' || !['CARD','TRANSFER'].includes(value.supplierPayment.paymentMethod))) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
     async prepareOrder(data) { return this.#salesResult(await this.#write('/sales/orders','POST',data)); }
     async quoteOrder(id,paymentMethod) { const value=await this.#write('/cash/orders/'+encodeURIComponent(id)+'/quote','POST',{paymentMethod}); if(!value?.quote||value.quote.businessId!==this.#effectiveBusinessId()||value.quote.orderId!==String(id)||!/^[a-f0-9]{64}$/.test(value.quote.quoteToken)||!/^\d+\.\d{2}$/.test(value.quote.total)||!/^\d+\.\d{2}$/.test(value.quote.estimatedTotal)) throw new ApiError('INVALID_RESPONSE'); return value.quote; }
     async chargeOrder(id,data) { return this.#salesResult(await this.#write('/cash/orders/'+encodeURIComponent(id)+'/charge','POST',data)); }
@@ -366,6 +459,30 @@
     async clientStatement(id) { const value = await this.#request('/clients/' + encodeURIComponent(id) + '/statement?limit=100&offset=0'); if (value?.client?.businessId !== this.#effectiveBusinessId() || !Array.isArray(value.invoices) || !Array.isArray(value.payments)) throw new ApiError('INVALID_RESPONSE'); return value; }
     async payReceivable(id, data) { return this.#salesResult(await this.#write('/receivables/' + encodeURIComponent(id) + '/payments', 'POST', data)); }
     async expenses(offset = 0, q = '') { const value = await this.#request('/expenses?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : '')); if (!Array.isArray(value?.expenses) || value.expenses.length > 100 || value?.summary?.businessId !== this.#effectiveBusinessId() || !['total', 'today'].every(key => /^\d+\.\d{2}$/.test(value.summary[key] || '')) || !Number.isSafeInteger(value.summary.count)) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async resolveFinancialOperation(key, kind) {
+      const value = await this.#write('/financial/operations/' + encodeURIComponent(key) + '/resolve', 'POST', { kind });
+      const record = value?.purchase || value?.expense || value?.payment || value?.movement || value;
+      if (record?.businessId !== this.#effectiveBusinessId() || !['PURCHASE', 'CANCEL_PURCHASE', 'EXPENSE', 'SUPPLIER_PAYMENT', 'CUSTOMER_PAYMENT_VOID', 'SUPPLIER_PAYMENT_VOID', 'CASH_MANUAL', 'ABANDONED'].includes(value?.kind)) throw new ApiError('INVALID_RESPONSE');
+      if (value.kind === 'ABANDONED') {
+        if (value.operationKind !== kind) throw new ApiError('INVALID_RESPONSE');
+      } else {
+        if (value.kind !== (kind === 'CANCEL_EXPENSE' ? 'EXPENSE' : kind) || !/^[1-9]\d{0,19}$/.test(record.id || '')) throw new ApiError('INVALID_RESPONSE');
+        if (value.purchase && (!Array.isArray(record.items) || !['COMPLETED', 'CANCELLED'].includes(record.purchaseStatus) || !['OPEN', 'PARTIAL', 'PAID', 'OVERDUE', 'PENDING_CONFIRMATION', 'CANCELLED'].includes(record.status) || !/^\d+\.\d{2}$/.test(record.total || ''))) throw new ApiError('INVALID_RESPONSE');
+        if (!value.purchase && (!/^\d+\.\d{2}$/.test(record.amount || '') || !['POSTED', 'PENDING', 'VOID', 'CONFIRMED'].includes(record.status))) throw new ApiError('INVALID_RESPONSE');
+      }
+      return value;
+    }
+    async manualCashMovement(data) {
+      const value = await this.#write('/financial/cash/movements', 'POST', data);
+      if (value?.kind !== 'CASH_MANUAL' || value.movement?.businessId !== this.#effectiveBusinessId() || !/^[1-9]\d{0,19}$/.test(value.movement.id || '') || !['MANUAL_ENTRY', 'MANUAL_EXIT'].includes(value.movement.type) || !/^\d+\.\d{2}$/.test(value.expectedAmount || '')) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async reverseFinancialPayment(type, id, data) {
+      if (!['customer', 'supplier'].includes(type)) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/financial/' + type + '-payments/' + encodeURIComponent(id) + '/reverse', 'POST', data);
+      if (value?.kind !== (type === 'customer' ? 'CUSTOMER_PAYMENT_VOID' : 'SUPPLIER_PAYMENT_VOID') || value.payment?.businessId !== this.#effectiveBusinessId() || value.payment.id !== String(id) || value.payment.status !== 'VOID') throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
     async createExpense(data) { const value = await this.#write('/expenses', 'POST', data); if (value?.kind !== 'EXPENSE' || value.expense?.businessId !== this.#effectiveBusinessId() || !/^[1-9]\d*$/.test(value.expense.id || '') || !/^\d+\.\d{2}$/.test(value.expense.amount || '')) throw new ApiError('INVALID_RESPONSE'); return value.expense; }
     async cancelExpense(id, data) { const value = await this.#write('/expenses/' + encodeURIComponent(id) + '/cancel', 'POST', data); if (value?.kind !== 'EXPENSE' || value.expense?.businessId !== this.#effectiveBusinessId() || value.expense.id !== String(id) || value.expense.status !== 'VOID') throw new ApiError('INVALID_RESPONSE'); return value.expense; }
     async suppliers(offset = 0, q = '') {
@@ -420,11 +537,14 @@
     async users(offset = 0) {
       const value = await this.#request('/users?limit=100&offset=' + encodeURIComponent(offset));
       if (!Array.isArray(value?.users)) throw new ApiError('INVALID_RESPONSE');
-      return value.users.map(item => {
+      const users = value.users.map(item => {
         const validated = user({ ...item, active: true });
         if (typeof item.active !== 'boolean') throw new ApiError('INVALID_RESPONSE');
         return { ...validated, active: item.active };
       });
+      const capacity = value.capacity;
+      if (!capacity || !(capacity.planCode === null || ['LOCAL', 'CONECTADO_BASICO', 'CONECTADO_ESTANDAR', 'CONECTADO_PREMIUM'].includes(capacity.planCode)) || typeof capacity.planName !== 'string' || !Number.isSafeInteger(capacity.activeUsers) || !Number.isSafeInteger(capacity.inactiveUsers) || !Number.isSafeInteger(capacity.activeAdmins) || !(capacity.maximumUsers === null || Number.isSafeInteger(capacity.maximumUsers)) || !(capacity.availableUsers === null || Number.isSafeInteger(capacity.availableUsers))) throw new ApiError('INVALID_RESPONSE');
+      return { users, capacity };
     }
     async createUser(data) { const value = await this.#write('/users', 'POST', data); return user(value?.user); }
     async updateUser(id, data) { const value = await this.#write('/users/' + encodeURIComponent(id), 'PATCH', data); if (typeof value?.user?.active !== 'boolean') throw new ApiError('INVALID_RESPONSE'); return { ...user({ ...value.user, active: true }), active: value.user.active }; }
@@ -447,14 +567,15 @@
     async adminBilling() {
       this.#requireSystemAdmin();
       const value = await this.#request('/admin/billing');
-      const planCodes = ['LOCAL', 'CONECTADO_BASICO', 'CONECTADO_PREMIUM'];
+      const planCodes = ['LOCAL', 'CONECTADO_BASICO', 'CONECTADO_ESTANDAR', 'CONECTADO_PREMIUM'];
       const statuses = ['UNASSIGNED', 'NOT_APPLICABLE', 'DATE_PENDING', 'OVERDUE', 'DUE_TODAY', 'DUE_SOON', 'CURRENT'];
       const summaryFields = ['activeBusinesses', 'localPlans', 'monthlyPlans', 'paymentsDueSoon', 'paymentsOverdue', 'unassignedPlans'];
       const date = candidate => candidate === null || /^\d{4}-\d{2}-\d{2}$/.test(candidate || '');
       if (!value || !Array.isArray(value.plans) || !Array.isArray(value.businesses) || !value.summary || !summaryFields.every(key => Number.isSafeInteger(value.summary[key]) && value.summary[key] >= 0) || !date(value.today)) throw new ApiError('INVALID_RESPONSE');
-      if (!value.plans.every(plan => planCodes.includes(plan.code) && typeof plan.name === 'string' && typeof plan.monthly === 'boolean' && typeof plan.reminders === 'boolean' && Number.isSafeInteger(plan.includedUsers))) throw new ApiError('INVALID_RESPONSE');
+      const planLimits = { LOCAL: 1, CONECTADO_BASICO: 3, CONECTADO_ESTANDAR: 5, CONECTADO_PREMIUM: 10 };
+      if (value.plans.length !== 4 || !value.plans.every(plan => planCodes.includes(plan.code) && typeof plan.name === 'string' && typeof plan.monthly === 'boolean' && typeof plan.reminders === 'boolean' && plan.includedUsers === planLimits[plan.code])) throw new ApiError('INVALID_RESPONSE');
       for (const business of value.businesses) {
-        if (!/^[1-9]\d{0,19}$/.test(business.id || '') || typeof business.name !== 'string' || !['ACTIVE', 'INACTIVE'].includes(business.status) || !Number.isSafeInteger(business.userCount) || !(business.planCode === null || planCodes.includes(business.planCode)) || typeof business.planName !== 'string' || typeof business.monthly !== 'boolean' || !date(business.nextDueDate) || !statuses.includes(business.paymentStatus) || !(business.lastPayment === null || (date(business.lastPayment.date) && /^\d+\.\d{2}$/.test(business.lastPayment.amount || '')))) throw new ApiError('INVALID_RESPONSE');
+        if (!/^[1-9]\d{0,19}$/.test(business.id || '') || typeof business.name !== 'string' || !['ACTIVE', 'INACTIVE'].includes(business.status) || !['NOT_REQUIRED', 'PENDING', 'COMPLETE'].includes(business.migrationState) || !Number.isSafeInteger(business.userCount) || !Number.isSafeInteger(business.activeUserCount) || !Number.isSafeInteger(business.inactiveUserCount) || !Number.isSafeInteger(business.activeAdminCount) || !(business.planCode === null || planCodes.includes(business.planCode)) || typeof business.planName !== 'string' || typeof business.monthly !== 'boolean' || !date(business.nextDueDate) || !statuses.includes(business.paymentStatus) || !(business.lastPayment === null || (date(business.lastPayment.date) && /^\d+\.\d{2}$/.test(business.lastPayment.amount || '')))) throw new ApiError('INVALID_RESPONSE');
       }
       const reminder = value.reminder;
       if (reminder !== null && (!reminder || !/^[1-9]\d{0,19}$/.test(reminder.businessId || '') || typeof reminder.businessName !== 'string' || !date(reminder.dueDate) || !Number.isSafeInteger(reminder.daysUntil) || reminder.daysUntil < 0 || reminder.daysUntil > 7)) throw new ApiError('INVALID_RESPONSE');
@@ -462,7 +583,7 @@
     }
     async setAdminBusinessPlan(id, planCode, nextDueDate) {
       this.#requireSystemAdmin();
-      if (typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id) || !['LOCAL', 'CONECTADO_BASICO', 'CONECTADO_PREMIUM'].includes(planCode) || !(nextDueDate === null || nextDueDate === '' || /^\d{4}-\d{2}-\d{2}$/.test(nextDueDate))) throw new ApiError('INVALID_INPUT');
+      if (typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id) || !['LOCAL', 'CONECTADO_BASICO', 'CONECTADO_ESTANDAR', 'CONECTADO_PREMIUM'].includes(planCode) || !(nextDueDate === null || nextDueDate === '' || /^\d{4}-\d{2}-\d{2}$/.test(nextDueDate))) throw new ApiError('INVALID_INPUT');
       const value = await this.#write('/admin/businesses/' + encodeURIComponent(id) + '/plan', 'PATCH', { planCode, nextDueDate: nextDueDate || null });
       if (value?.subscription?.businessId !== id || value.subscription.planCode !== planCode || (planCode === 'LOCAL' && value.subscription.nextDueDate !== null) || (value.subscription.nextDueDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(value.subscription.nextDueDate))) throw new ApiError('INVALID_RESPONSE');
       return value.subscription;
@@ -486,14 +607,14 @@
       const value = await this.#request('/admin/businesses');
       if (!Array.isArray(value?.businesses)) throw new ApiError('INVALID_RESPONSE');
       return value.businesses.map(item => {
-        if (!/^[1-9]\d{0,19}$/.test(item.id || '') || typeof item.name !== 'string' || !item.name.trim() || !['ACTIVE', 'INACTIVE'].includes(item.status) || !Number.isSafeInteger(item.userCount) || item.userCount < 0) throw new ApiError('INVALID_RESPONSE');
+        if (!/^[1-9]\d{0,19}$/.test(item.id || '') || typeof item.name !== 'string' || !item.name.trim() || !['ACTIVE', 'INACTIVE'].includes(item.status) || !['NOT_REQUIRED', 'PENDING', 'COMPLETE'].includes(item.migrationState) || !Number.isSafeInteger(item.userCount) || item.userCount < 0) throw new ApiError('INVALID_RESPONSE');
         return item;
       });
     }
     async migrateBasic(targetBusinessId, packageValue, confirmSystemBusiness = false) {
       this.#requireSystemAdmin();
       if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) ||
-          !packageValue || packageValue.type !== 'pos_local_migration_package' || packageValue.version !== 1 ||
+          !packageValue || packageValue.type !== 'pos_local_migration_package' || ![1, 2].includes(packageValue.version) ||
           !packageValue.data || !Array.isArray(packageValue.data.products) ||
           !Array.isArray(packageValue.data.clients) || !Array.isArray(packageValue.data.suppliers) ||
           (targetBusinessId === '1' && confirmSystemBusiness !== true)) throw new ApiError('INVALID_INPUT');
@@ -527,7 +648,7 @@
       return value;
     }
     #safeInventoryMigrationPackage(packageValue) {
-      if (!packageValue || packageValue.type !== 'pos_local_migration_package' || packageValue.version !== 1 ||
+      if (!packageValue || packageValue.type !== 'pos_local_migration_package' || ![1, 2].includes(packageValue.version) ||
           !packageValue.business || typeof packageValue.business !== 'object' || Array.isArray(packageValue.business) ||
           !packageValue.data || !Array.isArray(packageValue.data.products) || packageValue.data.products.length > 50000 ||
           (packageValue.data.inventoryMovements !== undefined && (!Array.isArray(packageValue.data.inventoryMovements) || packageValue.data.inventoryMovements.length > 50000))) throw new ApiError('INVALID_INPUT');
@@ -570,8 +691,8 @@
           !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
       return value;
     }
-    #safeSalesMigrationPackage(packageValue) {
-      if (!packageValue || packageValue.type !== 'pos_local_migration_package' || packageValue.version !== 1 ||
+    #safeSalesMigrationPackage(packageValue, compact = false) {
+      if (!packageValue || packageValue.type !== 'pos_local_migration_package' || ![1, 2].includes(packageValue.version) ||
           !packageValue.business || typeof packageValue.business !== 'object' || Array.isArray(packageValue.business) ||
           !packageValue.data || !Array.isArray(packageValue.data.products) || packageValue.data.products.length > 50000 ||
           !Array.isArray(packageValue.data.clients) || packageValue.data.clients.length > 50000 ||
@@ -580,6 +701,108 @@
         if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
         return Object.fromEntries(allowed.filter(key => Object.hasOwn(record, key)).map(key => [key, record[key]]));
       });
+      if (compact) {
+        const valueFor = (record, aliases) => {
+          for (const key of aliases) if (record && record[key] !== undefined && record[key] !== null && record[key] !== '') return record[key];
+          return undefined;
+        };
+        const copy = (record, target, name, aliases) => {
+          const value = valueFor(record, aliases);
+          if (value !== undefined) target[name] = value;
+        };
+        const compactProducts = packageValue.data.products.map(source => {
+          if (!source || typeof source !== 'object' || Array.isArray(source)) return source;
+          const target = {};
+          copy(source, target, 'id', ['id', 'productId', 'productoId', 'product_id']);
+          copy(source, target, 'barcode', ['barcode', 'codigo', 'code']);
+          copy(source, target, 'name', ['name', 'nombre']);
+          copy(source, target, 'cost', ['cost']);
+          copy(source, target, 'taxRate', ['taxRate', 'tax_rate', 'tax']);
+          return target;
+        });
+        const compactProductsById = new Map(compactProducts
+          .filter(product => product && product.id !== undefined && product.id !== null)
+          .map(product => [String(product.id), product]));
+        const compactClients = packageValue.data.clients.map(source => {
+          if (!source || typeof source !== 'object' || Array.isArray(source)) return source;
+          const target = {};
+          copy(source, target, 'id', ['id', 'clientId', 'clienteId', 'client_id']);
+          copy(source, target, 'name', ['name', 'nombre']);
+          return target;
+        });
+        const compactClientsById = new Map(compactClients
+          .filter(client => client && client.id !== undefined && client.id !== null)
+          .map(client => [String(client.id), client]));
+        const compactSales = packageValue.data.sales.map(source => {
+          if (!source || typeof source !== 'object' || Array.isArray(source)) return source;
+          const target = {};
+          copy(source, target, 'id', ['id', 'saleId', 'ventaId', 'sale_id', 'venta_id']);
+          copy(source, target, 'invoiceNumber', ['invoiceNumber', 'numeroFactura', 'factura', 'invoice', 'comprobante', 'numero']);
+          copy(source, target, 'createdAt', ['createdAt', 'created_at', 'fechaTS', 'fecha', 'date', 'timestamp']);
+          copy(source, target, 'clientId', ['clientId', 'clienteId', 'client_id', 'cliente_id']);
+          const rawClient = valueFor(source, ['client', 'cliente', 'customer']);
+          const clientName = valueFor(source, ['clientName', 'clienteNombre', 'nombreCliente', 'customerName']) ??
+            (typeof rawClient === 'string' ? rawClient : valueFor(rawClient, ['name', 'nombre']));
+          const sourceClient = target.clientId === undefined ? null : compactClientsById.get(String(target.clientId));
+          if (clientName !== undefined && clientName !== sourceClient?.name) target.clientName = clientName;
+          for (const [name, aliases] of [
+            ['subtotal', ['subtotal', 'subTotal', 'base']],
+            ['discount', ['discount', 'descuento', 'discountAmount', 'descuentoMonto']],
+            ['discountPercent', ['discountPercent', 'descuentoPorcentaje', 'porcentajeDescuento', 'descuentoPct']],
+            ['tax', ['tax', 'impuesto']],
+            ['total', ['total', 'grandTotal', 'totalVenta', 'montoTotal', 'importeTotal']],
+            ['paymentMethod', ['paymentMethod', 'metodoPago', 'metodo', 'payment_method', 'medioPago']],
+            ['saleType', ['saleType', 'tipoVenta', 'sale_type', 'tipo']],
+            ['status', ['status', 'estado', 'saleStatus']],
+            ['priceType', ['priceType', 'tipoPrecio', 'sale_price_type', 'tarifa']],
+            ['detail', ['detail', 'nota', 'note']],
+            ['cancelledAt', ['cancelledAt', 'fechaAnulacion', 'cancelDate']],
+            ['cancelReason', ['cancelReason', 'motivoAnulacion']],
+            ['dueAt', ['dueAt', 'fechaVencimiento', 'vencimiento']]
+          ]) copy(source, target, name, aliases);
+          if (target.status === undefined) copy(source, target, 'anulada', ['anulada', 'cancelled', 'cancelado']);
+          const rawItems = valueFor(source, ['items', 'detalleProductos', 'detalles', 'products', 'lineItems']);
+          if (Array.isArray(rawItems)) target.items = rawItems.map(line => {
+            if (!line || typeof line !== 'object' || Array.isArray(line)) return line;
+            const compactLine = {};
+            const nestedProduct = valueFor(line, ['product', 'producto']);
+            copy(line, compactLine, 'productId', ['productId', 'productoId', 'product_id', 'producto_id', 'id']);
+            if (compactLine.productId === undefined) copy(nestedProduct, compactLine, 'productId', ['id', 'productId']);
+            const sourceProduct = compactLine.productId === undefined ? null : compactProductsById.get(String(compactLine.productId));
+            const barcode = valueFor(line, ['barcode', 'codigo', 'code']) ?? valueFor(nestedProduct, ['barcode', 'codigo', 'code']);
+            const productName = valueFor(line, ['productName', 'nombreProducto', 'name', 'nombre', 'descripcion']) ?? valueFor(nestedProduct, ['name', 'nombre']);
+            if (barcode !== undefined && barcode !== sourceProduct?.barcode) compactLine.barcode = barcode;
+            if (productName !== undefined && productName !== sourceProduct?.name) compactLine.productName = productName;
+            const linePriceType = valueFor(line, ['tarifa', 'priceType', 'tipoPrecio']) ?? target.priceType;
+            const priceToken = String(linePriceType ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+            const priceAliases = /MAYOREO|MAYORISTA|WHOLESALE/.test(priceToken) ? ['wholesalePrice', 'precio2'] : ['retailPrice', 'precio1'];
+            copy(line, compactLine, 'unitPrice', ['unitPrice', 'precioUnitario', 'price', 'precio', 'precioVenta', ...priceAliases]);
+            for (const [name, aliases] of [
+              ['quantity', ['quantity', 'cantidad', 'qty']],
+              ['subtotal', ['subtotal', 'subTotal']],
+              ['discount', ['discount', 'descuento', 'discountAmount', 'descuentoMonto']],
+              ['discountPercent', ['discountPercent', 'descuentoPorcentaje', 'porcentajeDescuento', 'descuentoPct']],
+              ['tax', ['tax', 'impuesto']],
+              ['total', ['total', 'importe', 'monto']],
+            ]) copy(line, compactLine, name, aliases);
+            const costAtSale = valueFor(line, ['costAtSale', 'cost', 'costo']);
+            if (costAtSale !== undefined && (sourceProduct?.cost === undefined || Number(costAtSale) !== Number(sourceProduct.cost))) compactLine.costAtSale = costAtSale;
+            const taxRate = valueFor(line, ['taxRate', 'tax_rate', 'impuestoPorcentaje']);
+            if (taxRate !== undefined && (sourceProduct?.taxRate === undefined || Number(taxRate) !== Number(sourceProduct.taxRate))) compactLine.taxRate = taxRate;
+            return compactLine;
+          });
+          return target;
+        });
+        const sourceBusinessId = ['localBusinessId', 'businessId', 'business_id', 'id', 'negocioId']
+          .find(key => Object.hasOwn(packageValue.business, key));
+        return {
+          type: packageValue.type,
+          version: packageValue.version,
+          exportedAt: packageValue.exportedAt,
+          business: { name: packageValue.business.name, ...(sourceBusinessId ? { id: packageValue.business[sourceBusinessId] } : {}) },
+          data: { products: compactProducts, clients: compactClients, suppliers: [], sales: compactSales, inventoryMovements: [] }
+        };
+      }
       const productFields = ['id', 'productId', 'productoId', 'product_id', 'barcode', 'codigo', 'code', 'name', 'nombre', 'cost', 'taxRate', 'tax_rate', 'tax'];
       const clientFields = ['id', 'clientId', 'clienteId', 'client_id', 'name', 'nombre'];
       const saleFields = ['id', 'saleId', 'ventaId', 'sale_id', 'venta_id', 'numero', 'createdAt', 'created_at', 'fechaTS', 'fecha', 'date', 'timestamp',
@@ -637,33 +860,366 @@
         }
       };
     }
+    #safePurchasesMigrationPackage(packageValue, compact = false) {
+      const data = packageValue?.data;
+      if (!packageValue || packageValue.type !== 'pos_local_migration_package' || ![1, 2].includes(packageValue.version) ||
+          !packageValue.business || typeof packageValue.business !== 'object' || !data || typeof data !== 'object' ||
+          !Array.isArray(data.products) || data.products.length > 50000 || !Array.isArray(data.suppliers) || data.suppliers.length > 50000 ||
+          !Array.isArray(data.purchases) || data.purchases.length > 50000) throw new ApiError('INVALID_INPUT');
+      const fields = (records, allowed) => records.map(record => {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+        return Object.fromEntries(allowed.filter(key => Object.hasOwn(record, key)).map(key => [key, record[key]]));
+      });
+      if (compact) {
+        const valueFor = (record, aliases) => {
+          for (const key of aliases) if (record && record[key] !== undefined && record[key] !== null && record[key] !== '') return record[key];
+          return undefined;
+        };
+        const copy = (record, target, name, aliases) => {
+          const value = valueFor(record, aliases);
+          if (value !== undefined) target[name] = value;
+        };
+        const compactProducts = data.products.map(source => {
+          if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+          const target = {};
+          copy(source, target, 'id', ['id', 'productId', 'productoId', 'product_id']);
+          copy(source, target, 'barcode', ['barcode', 'codigo', 'code']);
+          copy(source, target, 'name', ['name', 'nombre']);
+          return target;
+        });
+        const compactSuppliers = data.suppliers.map(source => {
+          if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+          const target = {};
+          copy(source, target, 'id', ['id', 'supplierId', 'proveedorId', 'supplier_id', 'proveedor_id']);
+          copy(source, target, 'name', ['name', 'nombre']);
+          return target;
+        });
+        const compactPurchases = data.purchases.map(source => {
+          if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+          const target = {};
+          copy(source, target, 'id', ['id', 'purchaseId', 'compraId', 'purchase_id', 'compra_id']);
+          copy(source, target, 'invoiceNumber', ['supplierInvoiceNumber', 'invoiceNumber', 'invoice_number', 'factura', 'facturaNumero', 'numeroFactura', 'numero', 'comprobante', 'referencia']);
+          copy(source, target, 'createdAt', ['createdAt', 'created_at', 'fechaTS', 'fecha', 'date', 'timestamp']);
+          copy(source, target, 'supplierId', ['supplierId', 'proveedorId', 'supplier_id', 'proveedor_id']);
+          const rawSupplier = valueFor(source, ['supplier', 'proveedor']);
+          const supplierName = valueFor(source, ['supplierName', 'proveedorNombre']) ??
+            (typeof rawSupplier === 'string' ? rawSupplier : valueFor(rawSupplier, ['name', 'nombre']));
+          if (supplierName !== undefined) target.supplierName = supplierName;
+          for (const [name, aliases] of [
+            ['purchaseType', ['purchaseType', 'purchase_type', 'tipoCompra', 'tipo_compra', 'tipo']],
+            ['status', ['status', 'estado']],
+            ['anulada', ['anulada', 'cancelled', 'cancelado']],
+            ['subtotal', ['subtotal', 'subTotal', 'base']],
+            ['discount', ['discount', 'descuento', 'discountAmount', 'descuentoMonto']],
+            ['discountPercent', ['discountPercent', 'descuentoPorcentaje', 'porcentajeDescuento', 'descuentoPct']],
+            ['tax', ['tax', 'impuesto', 'taxAmount', 'impuestoMonto']],
+            ['total', ['total', 'grandTotal', 'totalCompra', 'montoTotal', 'importeTotal']],
+            ['dueAt', ['vencimientoTS', 'dueAt', 'due_at', 'vencimiento', 'fechaVencimiento', 'fecha_vencimiento']],
+            ['notes', ['notes', 'note', 'detail', 'observaciones', 'nota']]
+          ]) copy(source, target, name, aliases);
+          const rawItems = valueFor(source, ['items', 'detalles', 'detalleProductos', 'products', 'lineItems']);
+          if (Array.isArray(rawItems)) target.items = rawItems.map(line => {
+            if (!line || typeof line !== 'object' || Array.isArray(line)) return null;
+            const compactLine = {};
+            const nestedProduct = valueFor(line, ['product', 'producto']);
+            copy(line, compactLine, 'productId', ['productId', 'productoId', 'product_id', 'producto_id', 'id']);
+            if (compactLine.productId === undefined) copy(nestedProduct, compactLine, 'productId', ['id', 'productId']);
+            copy(line, compactLine, 'barcode', ['barcode', 'codigo', 'code']);
+            if (compactLine.barcode === undefined) copy(nestedProduct, compactLine, 'barcode', ['barcode', 'codigo', 'code']);
+            copy(line, compactLine, 'productName', ['productName', 'nombreProducto', 'name', 'nombre', 'descripcion']);
+            if (compactLine.productName === undefined) {
+              const nestedName = typeof nestedProduct === 'string' ? nestedProduct : valueFor(nestedProduct, ['name', 'nombre']);
+              if (nestedName !== undefined) compactLine.productName = nestedName;
+            }
+            for (const [name, aliases] of [
+              ['quantity', ['quantity', 'cantidad', 'qty']],
+              ['unitCost', ['unitCost', 'unit_cost', 'cost', 'costo', 'costoUnitario', 'precioCosto']],
+              ['subtotal', ['subtotal', 'subTotal']],
+              ['discount', ['discount', 'descuento', 'discountAmount', 'descuentoMonto']],
+              ['discountPercent', ['discountPercent', 'descuentoPorcentaje', 'porcentajeDescuento', 'descuentoPct']],
+              ['tax', ['tax', 'impuesto', 'taxAmount', 'impuestoMonto']],
+              ['total', ['total', 'importe', 'monto']]
+            ]) copy(line, compactLine, name, aliases);
+            return compactLine;
+          });
+          return target;
+        });
+        const sourceBusinessId = ['localBusinessId', 'businessId', 'business_id', 'id', 'negocioId'].find(key => Object.hasOwn(packageValue.business, key));
+        return {
+          type: packageValue.type, version: packageValue.version, exportedAt: packageValue.exportedAt,
+          business: { name: packageValue.business.name, ...(sourceBusinessId ? { id: packageValue.business[sourceBusinessId] } : {}) },
+          data: { products: compactProducts, clients: [], suppliers: compactSuppliers, purchases: compactPurchases }
+        };
+      }
+      const products = ['id', 'productId', 'productoId', 'product_id', 'barcode', 'codigo', 'code', 'name', 'nombre'];
+      const suppliers = ['id', 'supplierId', 'proveedorId', 'supplier_id', 'proveedor_id', 'name', 'nombre'];
+      const purchaseFields = ['id', 'purchaseId', 'compraId', 'purchase_id', 'compra_id', 'supplierId', 'proveedorId', 'supplier_id', 'proveedor_id',
+        'supplierName', 'proveedorNombre', 'factura', 'facturaNumero', 'numeroFactura', 'numero', 'invoice', 'invoiceNumber', 'invoice_number', 'supplierInvoiceNumber', 'comprobante', 'referencia',
+        'createdAt', 'created_at', 'fechaTS', 'fecha', 'date', 'timestamp', 'purchaseType', 'purchase_type', 'tipoCompra', 'tipo_compra', 'tipo',
+        'status', 'estado', 'anulada', 'cancelled', 'cancelado', 'subtotal', 'subTotal', 'base', 'discount', 'descuento', 'discountAmount', 'descuentoMonto',
+        'discountPercent', 'descuentoPorcentaje', 'porcentajeDescuento', 'descuentoPct', 'tax', 'impuesto', 'taxAmount', 'impuestoMonto', 'total', 'grandTotal', 'totalCompra', 'montoTotal', 'importeTotal',
+        'dueAt', 'due_at', 'vencimiento', 'vencimientoTS', 'fechaVencimiento', 'fecha_vencimiento', 'notes', 'note', 'detail', 'observaciones', 'nota'];
+      const itemFields = ['id', 'productId', 'productoId', 'product_id', 'producto_id', 'barcode', 'codigo', 'code', 'productName', 'nombreProducto', 'name', 'nombre', 'descripcion',
+        'quantity', 'cantidad', 'qty', 'unitCost', 'unit_cost', 'cost', 'costo', 'costoUnitario', 'precioCosto', 'subtotal', 'subTotal', 'discount', 'descuento', 'discountAmount', 'descuentoMonto',
+        'discountPercent', 'descuentoPorcentaje', 'porcentajeDescuento', 'descuentoPct', 'tax', 'impuesto', 'taxAmount', 'impuestoMonto', 'total', 'importe', 'monto'];
+      const purchases = data.purchases.map(purchase => {
+        if (!purchase || typeof purchase !== 'object' || Array.isArray(purchase)) return null;
+        const safe = Object.fromEntries(purchaseFields.filter(key => Object.hasOwn(purchase, key)).map(key => [key, purchase[key]]));
+        for (const key of ['items', 'detalles', 'detalleProductos', 'products', 'lineItems']) {
+          if (!Object.hasOwn(purchase, key)) continue;
+          safe[key] = Array.isArray(purchase[key]) ? purchase[key].map(item => {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+            const clean = Object.fromEntries(itemFields.filter(field => Object.hasOwn(item, field)).map(field => [field, item[field]]));
+            for (const productKey of ['product', 'producto']) {
+              const product = item[productKey];
+              if (product && typeof product === 'object' && !Array.isArray(product)) clean[productKey] = Object.fromEntries(['id', 'productId', 'barcode', 'codigo', 'code', 'name', 'nombre'].filter(field => Object.hasOwn(product, field)).map(field => [field, product[field]]));
+              else if (typeof product === 'string') clean[productKey] = product;
+            }
+            return clean;
+          }) : [];
+        }
+        for (const key of ['supplier', 'proveedor']) {
+          const supplier = purchase[key];
+          if (typeof supplier === 'string') safe[key] = supplier;
+          else if (supplier && typeof supplier === 'object' && !Array.isArray(supplier)) safe[key] = Object.fromEntries(['id', 'supplierId', 'proveedorId', 'name', 'nombre'].filter(field => Object.hasOwn(supplier, field)).map(field => [field, supplier[field]]));
+        }
+        return safe;
+      });
+      const sourceBusinessId = ['localBusinessId', 'businessId', 'business_id', 'id', 'negocioId'].find(key => Object.hasOwn(packageValue.business, key));
+      return {
+        type: packageValue.type, version: packageValue.version, exportedAt: packageValue.exportedAt,
+        business: { name: packageValue.business.name, ...(sourceBusinessId ? { id: packageValue.business[sourceBusinessId] } : {}) },
+        data: { products: fields(data.products, products), clients: [], suppliers: fields(data.suppliers, suppliers), purchases, sales: [], inventoryMovements: [] }
+      };
+    }
+    #safeCreditMigrationPackage(packageValue) {
+      if (!Array.isArray(packageValue?.data?.abonos) || packageValue.data.abonos.length > 50000) throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safeSalesMigrationPackage(packageValue, true);
+      const pick = (row, keys) => row && typeof row === 'object' && !Array.isArray(row) ? Object.fromEntries(keys.filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])) : null;
+      safePackage.data.clients = packageValue.data.clients.map(row => pick(row, ['id', 'clientId', 'clienteId', 'client_id', 'name', 'nombre', 'debt', 'deudaSinFactura']));
+      safePackage.data.sales.forEach((row, index) => {
+        const source = packageValue.data.sales[index];
+        if (row && source) {
+          const dueAt = ['vencimientoTS', 'dueAt', 'due_at', 'fechaVencimiento', 'fecha_vencimiento', 'vencimiento'].find(key => Object.hasOwn(source, key));
+          if (dueAt) row.dueAt = source[dueAt];
+        }
+      });
+      safePackage.data.abonos = packageValue.data.abonos.map(row => pick(row, ['id', 'tipo', 'referenciaId', 'facturaId', 'monto', 'metodoPago', 'estado', 'fechaTS', 'createdAt', 'fecha', 'anulado']));
+      return safePackage;
+    }
+    async previewCreditMigration(targetBusinessId, packageValue) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safeCreditMigrationPackage(packageValue);
+      const value = await this.#write('/system-admin/migration/credit/preview', 'POST', { targetBusinessId, package: safePackage });
+      if (value?.ok !== true || value.previewOnly !== true || typeof value.canImport !== 'boolean' || typeof value.eligible !== 'boolean' || typeof value.financiallyConsistent !== 'boolean' || !['invoices', 'payments', 'clients', 'issues', 'otherOrigins'].every(key => Array.isArray(value[key])) || !value.totals) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async migrateCreditMigration(targetBusinessId, packageValue, confirmDifferentSource = false) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) || typeof confirmDifferentSource !== 'boolean') throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safeCreditMigrationPackage(packageValue);
+      const value = await this.#write('/system-admin/migration/credit', 'POST', { targetBusinessId, package: safePackage, confirmDifferentSource });
+      const counts = item => item && Number.isSafeInteger(item.invoices) && item.invoices >= 0 && Number.isSafeInteger(item.payments) && item.payments >= 0;
+      if (value?.ok !== true || !counts(value.created) || !counts(value.skipped) || !value.financial || !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
     async previewSalesMigration(targetBusinessId, packageValue) {
       this.#requireSystemAdmin();
       if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw new ApiError('INVALID_INPUT');
-      const safePackage = this.#safeSalesMigrationPackage(packageValue);
+      const safePackage = this.#safeSalesMigrationPackage(packageValue, true);
       const value = await this.#write('/system-admin/migration/sales/preview', 'POST', { targetBusinessId, package: safePackage });
       const counts = value?.sales, gates = value?.gates;
       if (value?.ok !== true || typeof value.eligible !== 'boolean' ||
           !counts || !['detected', 'couldMigrate', 'toSkip'].every(key => Number.isSafeInteger(counts[key]) && counts[key] >= 0) ||
           !gates || !['basic', 'inventory', 'schema', 'targetUser'].every(key => typeof gates[key] === 'boolean') ||
-          !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
+          !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string') ||
+          (value.sourceOriginConflict !== undefined && (!value.sourceOriginConflict || typeof value.sourceOriginConflict.required !== 'boolean' || typeof value.sourceOriginConflict.incomingSourceBusinessName !== 'string' || !/^[a-f0-9]{64}$/.test(value.sourceOriginConflict.incomingSourceBusinessKey || '') || !Array.isArray(value.sourceOriginConflict.existingSources) || !value.sourceOriginConflict.existingSources.every(source => /^[a-f0-9]{64}$/.test(source.sourceBusinessKey || '') && (source.sourceBusinessName === null || typeof source.sourceBusinessName === 'string') && Number.isSafeInteger(source.saleCount) && source.saleCount >= 0)))) throw new ApiError('INVALID_RESPONSE');
       return value;
     }
-    async migrateSales(targetBusinessId, packageValue) {
+    async migrateSales(targetBusinessId, packageValue, confirmDifferentSource = false) {
       this.#requireSystemAdmin();
-      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw new ApiError('INVALID_INPUT');
-      const safePackage = this.#safeSalesMigrationPackage(packageValue);
-      const value = await this.#write('/system-admin/migration/sales', 'POST', { targetBusinessId, package: safePackage });
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) || typeof confirmDifferentSource !== 'boolean') throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safeSalesMigrationPackage(packageValue, true);
+      const value = await this.#write('/system-admin/migration/sales', 'POST', { targetBusinessId, package: safePackage, confirmDifferentSource });
       const validCounts = counts => counts && Number.isSafeInteger(counts.sales) && counts.sales >= 0;
       if (value?.ok !== true || !validCounts(value.created) || !validCounts(value.skipped) ||
           !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
       return value;
     }
-    async createAdminBusiness(name) {
+    async previewPurchasesMigration(targetBusinessId, packageValue) {
       this.#requireSystemAdmin();
-      const value = await this.#write('/admin/businesses', 'POST', { name });
-      if (!value?.business || !/^[1-9]\d{0,19}$/.test(value.business.id || '') || value.business.name !== name.trim() || value.business.status !== 'ACTIVE') throw new ApiError('INVALID_RESPONSE');
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safePurchasesMigrationPackage(packageValue, true);
+      const value = await this.#write('/system-admin/migration/purchases/preview', 'POST', { targetBusinessId, package: safePackage });
+      const counts = value?.purchases, gates = value?.gates, diagnostics = value?.diagnostics;
+      const keys = ['suppliersUnmatched', 'suppliersAmbiguous', 'productsUnmatched', 'productsAmbiguous', 'duplicateInvoices', 'missingCosts', 'inconsistentTotals', 'unsupportedStatuses'];
+      if (value?.ok !== true || typeof value.eligible !== 'boolean' ||
+          !counts || !['detected', 'couldMigrate', 'toSkip'].every(key => Number.isSafeInteger(counts[key]) && counts[key] >= 0) ||
+          !gates || !['basic', 'schema', 'targetUser'].every(key => typeof gates[key] === 'boolean') ||
+          !diagnostics || !keys.every(key => Number.isSafeInteger(diagnostics[key]) && diagnostics[key] >= 0) ||
+          !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async migratePurchases(targetBusinessId, packageValue) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw new ApiError('INVALID_INPUT');
+      const safePackage = this.#safePurchasesMigrationPackage(packageValue, true);
+      const value = await this.#write('/system-admin/migration/purchases', 'POST', { targetBusinessId, package: safePackage });
+      const counts = item => item && Number.isSafeInteger(item.purchases) && item.purchases >= 0;
+      if (value?.ok !== true || !counts(value.created) || !counts(value.skipped) ||
+          !Array.isArray(value.warnings) || !value.warnings.every(warning => typeof warning === 'string')) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    #scrubArchiveValue(value) {
+      if (Array.isArray(value)) return value.map(item => this.#scrubArchiveValue(item));
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+          try { return JSON.stringify(this.#scrubArchiveValue(JSON.parse(trimmed))); } catch { return value; }
+        }
+        return value;
+      }
+      if (!value || typeof value !== 'object') return value;
+      const clean = {};
+      for (const [key, nested] of Object.entries(value)) {
+        const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+        if (/(password|passwd|secret|credential|token|sessiontoken|privatekey|signingkey|encryptionkey|salt|username|userid|useragent|accesskey|apikey)/.test(normalized) || /^(user|usuario|vendedor|cajero|seller|cashier)id$/.test(normalized)) continue;
+        clean[key] = this.#scrubArchiveValue(nested);
+      }
+      return clean;
+    }
+    #migrationArchivePackage(targetBusinessId, packageValue, confirmed, fileSha256 = null) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) ||
+          !packageValue || packageValue.type !== 'pos_local_migration_package' || ![1, 2].includes(packageValue.version) ||
+          !packageValue.business || typeof packageValue.business !== 'object' || Array.isArray(packageValue.business) ||
+          !packageValue.data || typeof packageValue.data !== 'object' || Array.isArray(packageValue.data) ||
+          (fileSha256 !== null && !/^[a-f0-9]{64}$/.test(fileSha256)) ||
+          (confirmed !== null && typeof confirmed !== 'boolean')) throw new ApiError('INVALID_INPUT');
+      const body = JSON.stringify({ targetBusinessId, package: this.#scrubArchiveValue(packageValue), ...(fileSha256 ? { packageFileSha256: fileSha256 } : {}), ...(confirmed !== null ? { confirmed } : {}) });
+      if (new TextEncoder().encode(body).length > 32 * 1024 * 1024) throw new ApiError('PAYLOAD_TOO_LARGE');
+      return body;
+    }
+    async previewFullMigration(targetBusinessId, packageValue, fileSha256 = null) {
+      const body = this.#migrationArchivePackage(targetBusinessId, packageValue, null, fileSha256);
+      const value = await this.#write('/system-admin/migration/archive/preview', 'POST', body, 'application/vnd.pos.local-migration+json', 120000);
+      const counts = value?.counts;
+      if (value?.ok !== true || value.targetBusinessId !== targetBusinessId || value.targetStatus !== 'INACTIVE' || value.targetMigrationState !== 'PENDING' || !/^[a-f0-9]{64}$/.test(value.packageSha256 || '') ||
+          !/^[a-f0-9]{64}$/.test(value.sourceBusinessKey || '') || !counts || Object.values(counts).some(count => !Number.isSafeInteger(count) || count < 0) ||
+          !Number.isSafeInteger(value.recordsExpected) || value.recordsExpected < 0 || !Array.isArray(value.blockers) || !value.blockers.every(item => typeof item === 'string') ||
+          !Array.isArray(value.missingStores) || typeof value.eligibleToArchive !== 'boolean' || typeof value.legacyIdentityConfirmationRequired !== 'boolean' || !Number.isSafeInteger(value.bulkIdentityEligibleRecords) || value.bulkIdentityEligibleRecords < 0 ||
+          (value.fileSha256 !== null && value.fileSha256 !== undefined && !/^[a-f0-9]{64}$/.test(value.fileSha256)) ||
+          (fileSha256 && value.fileSha256 !== fileSha256) || !value.identityReview || !value.identityReview.counts || !Array.isArray(value.identityReview.records)) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async archiveFullMigration(targetBusinessId, packageValue, confirmed, fileSha256 = null) {
+      if (confirmed !== true) throw new ApiError('MIGRATION_ARCHIVE_CONFIRMATION_REQUIRED', 409);
+      const body = this.#migrationArchivePackage(targetBusinessId, packageValue, true, fileSha256);
+      const value = await this.#write('/system-admin/migration/archive', 'POST', body, 'application/vnd.pos.local-migration+json', 120000);
+      if (value?.ok !== true || !/^[0-9a-f-]{36}$/i.test(value.batchId || '') ||
+          !['ARCHIVED', 'BLOCKED'].includes(value.status) || !/^[a-f0-9]{64}$/.test(value.packageSha256 || '') ||
+          !Number.isSafeInteger(value.recordsArchived) || value.recordsArchived < 0 || !Array.isArray(value.blockers) || !value.blockers.every(item => typeof item === 'string') || !Number.isSafeInteger(value.identityConfirmationApplied) || value.identityConfirmationApplied < 0 ||
+          (fileSha256 && value.fileSha256 !== fileSha256) || (value.identityConfirmation !== null && (value.identityConfirmation?.confirmed !== true || !/^[a-f0-9]{64}$/.test(value.identityConfirmation.packageSha256 || '') || (value.identityConfirmation.fileSha256 !== null && value.identityConfirmation.fileSha256 !== undefined && !/^[a-f0-9]{64}$/.test(value.identityConfirmation.fileSha256)) || typeof value.identityConfirmation.targetBusinessId !== 'string' || typeof value.identityConfirmation.confirmedAt !== 'string'))) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async reviewMigrationIdentityRecord(targetBusinessId, batchId, entity, sourceRecordKey, decision, attestBelongsToSource = false) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) || !/^[0-9a-f-]{36}$/i.test(batchId || '') ||
+          typeof entity !== 'string' || typeof sourceRecordKey !== 'string' || !sourceRecordKey.trim() || sourceRecordKey.length > 120 ||
+          !['INCLUDE', 'EXCLUDE'].includes(decision) || typeof attestBelongsToSource !== 'boolean' || (decision === 'INCLUDE' && attestBelongsToSource !== true)) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write(`/system-admin/migration/archive/${encodeURIComponent(targetBusinessId)}/${encodeURIComponent(batchId)}/review`, 'POST', {
+        entity, sourceRecordKey, decision, attestBelongsToSource
+      });
+      if (value?.ok !== true || value.businessId !== targetBusinessId || value.batchId !== batchId || value.entity !== entity || value.sourceRecordKey !== sourceRecordKey || value.decision !== decision ||
+          !['ARCHIVED', 'EXCLUDED', 'PENDING'].includes(value.recordStatus) || value.businessStatus !== 'INACTIVE' || value.migrationState !== 'PENDING') throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async createMigrationTarget(name, planCode) {
+      this.#requireSystemAdmin();
+      if (typeof name !== 'string' || !name.trim() || name.trim().length > 160 || !['CONECTADO_BASICO', 'CONECTADO_ESTANDAR', 'CONECTADO_PREMIUM'].includes(planCode)) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/system-admin/migration/targets', 'POST', { name: name.trim(), planCode });
+      const business = value?.business;
+      if (!business || !/^[1-9]\d{0,19}$/.test(business.id || '') || business.name !== name.trim() || business.status !== 'INACTIVE' || business.migrationState !== 'PENDING' || business.planCode !== planCode) throw new ApiError('INVALID_RESPONSE');
+      return business;
+    }
+    async inspectExistingMigrationTarget(businessId) {
+      this.#requireSystemAdmin();
+      if (typeof businessId !== 'string' || !/^[1-9]\d{0,19}$/.test(businessId) || businessId === '1') throw new ApiError('INVALID_INPUT');
+      const value = await this.#request('/system-admin/migration/targets/' + encodeURIComponent(businessId) + '/inspect');
+      const business = value?.business, preserved = value?.preserved;
+      const countsValid = preserved && ['users', 'settings', 'auditLogs', 'sessions', 'subscriptions'].every(key => Number.isSafeInteger(preserved[key]) && preserved[key] >= 0);
+      const accessChanges = value?.accessChanges;
+      const accessChangesValid = accessChanges && ['activeSessions', 'sessionsToRevoke', 'authorizationsToRemove'].every(key => Number.isSafeInteger(accessChanges[key]) && accessChanges[key] >= 0);
+      if (!business || String(business.id) !== businessId || !['ACTIVE', 'INACTIVE'].includes(business.status) || business.migrationState !== 'NOT_REQUIRED' || typeof value.eligible !== 'boolean' || !Array.isArray(value.blockers) || !value.blockers.every(item => typeof item === 'string') || !Array.isArray(value.warnings) || !value.warnings.every(item => typeof item === 'string') || !countsValid || !accessChangesValid || typeof preserved.businessPhone !== 'boolean' || typeof preserved.businessAddress !== 'boolean') throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async prepareExistingMigrationTarget(businessId, confirmed) {
+      this.#requireSystemAdmin();
+      if (typeof businessId !== 'string' || !/^[1-9]\d{0,19}$/.test(businessId) || businessId === '1') throw new ApiError('INVALID_INPUT');
+      if (confirmed !== true) throw new ApiError('MIGRATION_TARGET_CONFIRMATION_REQUIRED', 409);
+      const value = await this.#write('/system-admin/migration/targets/' + encodeURIComponent(businessId) + '/prepare', 'POST', { confirmed });
+      const business = value?.business, preserved = value?.preserved;
+      const countsValid = preserved && ['users', 'settings', 'auditLogs', 'sessions', 'subscriptions'].every(key => Number.isSafeInteger(preserved[key]) && preserved[key] >= 0);
+      const accessChanges = value?.accessChanges;
+      const accessChangesValid = accessChanges && ['activeSessions', 'sessionsToRevoke', 'authorizationsToRemove'].every(key => Number.isSafeInteger(accessChanges[key]) && accessChanges[key] >= 0);
+      if (!business || String(business.id) !== businessId || business.status !== 'INACTIVE' || business.migrationState !== 'PENDING' || value.accessSuspended !== true || !countsValid || !accessChangesValid || typeof value.sessionsRevoked !== 'number' || typeof value.authorizationsRemoved !== 'number') throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async migrationBatchStatus(targetBusinessId, batchId) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) || !/^[0-9a-f-]{36}$/i.test(batchId || '')) throw new ApiError('INVALID_INPUT');
+      const value = await this.#request('/system-admin/migration/archive/' + encodeURIComponent(targetBusinessId) + '/' + encodeURIComponent(batchId));
+      if (value?.ok !== true || value.batch?.id !== batchId || value.batch.business_id !== undefined && String(value.batch.business_id) !== targetBusinessId || !value.records || typeof value.records !== 'object') throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async projectMigrationCatalog(targetBusinessId, batchId) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) || !/^[0-9a-f-]{36}$/i.test(batchId || '')) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/system-admin/migration/archive/' + encodeURIComponent(targetBusinessId) + '/' + encodeURIComponent(batchId) + '/project/catalog', 'POST', {});
+      const reconciliation = value?.reconciliation;
+      if (value?.ok !== true || value.businessId !== targetBusinessId || value.batchId !== batchId || !reconciliation || reconciliation.complete !== false || reconciliation.fullMigrationComplete !== false || !Array.isArray(reconciliation.differences) || !Array.isArray(reconciliation.blockers) || !reconciliation.totals || !reconciliation.pending) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async projectMigrationOperations(targetBusinessId, batchId) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) || !/^[0-9a-f-]{36}$/i.test(batchId || '')) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/system-admin/migration/archive/' + encodeURIComponent(targetBusinessId) + '/' + encodeURIComponent(batchId) + '/project/operations', 'POST', {});
+      const reconciliation = value?.reconciliation;
+      if (value?.ok !== true || value.businessId !== targetBusinessId || value.batchId !== batchId || !reconciliation || typeof reconciliation.complete !== 'boolean' || reconciliation.fullMigrationComplete !== reconciliation.complete || !Array.isArray(reconciliation.differences) || !Array.isArray(reconciliation.blockers) || typeof reconciliation.unresolved !== 'boolean') throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async migrationBatchRecords(targetBusinessId, batchId, offset = 0, limit = 100) {
+      this.#requireSystemAdmin();
+      if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId) || !/^[0-9a-f-]{36}$/i.test(batchId || '') || !Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 250) throw new ApiError('INVALID_INPUT');
+      const query = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+      const value = await this.#request('/system-admin/migration/archive/' + encodeURIComponent(targetBusinessId) + '/' + encodeURIComponent(batchId) + '/records?' + query);
+      if (value?.ok !== true || !Array.isArray(value.records) || value.records.some(record => !record || typeof record.entityType !== 'string' || typeof record.sourceRecordKey !== 'string' || !record.payload || typeof record.payload !== 'object')) throw new ApiError('INVALID_RESPONSE');
+      return value.records;
+    }
+    async migrationHistory(module, offset = 0, limit = 50) {
+      const allowed = new Set(['inventory', 'purchases', 'payables', 'clients', 'history', 'cash', 'expenses', 'settings', 'reports']);
+      if (!allowed.has(module) || !Number.isInteger(offset) || offset < 0 || offset > 1000000 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new ApiError('INVALID_INPUT');
+      const query = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+      const value = await this.#request('/migration-history/' + encodeURIComponent(module) + '?' + query);
+      const reconciliation = value?.reconciliation;
+      if (value?.businessId !== this.#effectiveBusinessId() || typeof value.available !== 'boolean' || !Array.isArray(value.records) || !Number.isSafeInteger(value.total) || value.offset !== offset || value.limit !== limit || !reconciliation || reconciliation.complete !== false || !['MATCH', 'DIFFERENT', 'UNAVAILABLE', 'NO_ARCHIVE'].includes(reconciliation.archiveIntegrity) || reconciliation.operationalComparison !== 'NOT_RUN' || !Array.isArray(reconciliation.differences)) throw new ApiError('INVALID_RESPONSE');
+      if (value.records.some(record => !record || !/^[0-9a-f-]{36}$/i.test(record.batchId || '') || typeof record.sourceBusinessName !== 'string' || typeof record.entityType !== 'string' || typeof record.sourceRecordKey !== 'string' || !['ARCHIVED', 'PROJECTED', 'PENDING', 'EXCLUDED'].includes(record.recordStatus) || !record.payload || typeof record.payload !== 'object' || Array.isArray(record.payload) || typeof record.hasImage !== 'boolean')) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async createAdminBusiness(name, planCode) {
+      this.#requireSystemAdmin();
+      if (typeof name !== 'string' || !name.trim() || !['CONECTADO_BASICO', 'CONECTADO_ESTANDAR', 'CONECTADO_PREMIUM'].includes(planCode)) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/admin/businesses', 'POST', { name: name.trim(), planCode });
+      if (!value?.business || !/^[1-9]\d{0,19}$/.test(value.business.id || '') || value.business.name !== name.trim() || value.business.status !== 'ACTIVE' || value.business.planCode !== planCode) throw new ApiError('INVALID_RESPONSE');
       return value.business;
+    }
+    async adminBusinessUserCapacity(businessId) {
+      this.#requireSystemAdmin();
+      const value = await this.#request('/admin/businesses/' + encodeURIComponent(businessId) + '/user-capacity');
+      const capacity = value?.capacity;
+      if (!capacity || capacity.businessId !== String(businessId) || !(capacity.planCode === null || ['LOCAL', 'CONECTADO_BASICO', 'CONECTADO_ESTANDAR', 'CONECTADO_PREMIUM'].includes(capacity.planCode)) || typeof capacity.planName !== 'string' || !Number.isSafeInteger(capacity.activeUsers) || !Number.isSafeInteger(capacity.inactiveUsers) || !Number.isSafeInteger(capacity.activeAdmins) || !(capacity.maximumUsers === null || Number.isSafeInteger(capacity.maximumUsers)) || !(capacity.availableUsers === null || Number.isSafeInteger(capacity.availableUsers))) throw new ApiError('INVALID_RESPONSE');
+      return capacity;
     }
     async setAdminBusinessStatus(id, status) {
       this.#requireSystemAdmin();
@@ -672,11 +1228,24 @@
       if (value?.business?.id !== String(id) || value.business.status !== status) throw new ApiError('INVALID_RESPONSE');
       return value.business;
     }
-    async deleteAdminBusiness(id, confirmation) {
+    async adminBusinessDeletionPreview(id) {
+      this.#requireSystemAdmin();
+      if (typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id)) throw new ApiError('INVALID_INPUT');
+      const value = await this.#request('/admin/businesses/' + encodeURIComponent(id) + '/deletion-preview');
+      const safeCount = item => Number.isSafeInteger(item) && item >= 0;
+      if (value?.business?.id !== id || typeof value.business.name !== 'string' || !['ACTIVE', 'INACTIVE'].includes(value.business.status) || !Array.isArray(value.counts) || !safeCount(value.totalRecords) || !safeCount(value.sessions) || !value.images || !safeCount(value.images.count) || !safeCount(value.images.bytes) || !value.retainedBilling || !safeCount(value.retainedBilling.subscriptions) || !safeCount(value.retainedBilling.payments) || typeof value.previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(value.previewToken)) throw new ApiError('INVALID_RESPONSE');
+      if (value.counts.some(item => !item || typeof item.table !== 'string' || typeof item.label !== 'string' || !safeCount(item.count))) throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async deleteAdminBusiness(id, confirmation, previewToken) {
       this.#requireSystemAdmin();
       if (typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id)) throw new ApiError('INVALID_INPUT');
       if (confirmation !== 'ELIMINAR') throw new ApiError('BUSINESS_DELETE_CONFIRMATION_REQUIRED', 400);
-      await this.#write('/admin/businesses/' + encodeURIComponent(id), 'DELETE', { confirmation });
+      if (previewToken !== undefined && (typeof previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(previewToken))) throw new ApiError('INVALID_INPUT');
+      const body = { confirmation, ...(previewToken ? { previewToken } : {}) };
+      const value = await this.#write('/admin/businesses/' + encodeURIComponent(id), 'DELETE', body);
+      if (value?.id !== id || typeof value.name !== 'string' || !Array.isArray(value.counts) || !Number.isSafeInteger(value.totalDeletedRecords) || value.totalDeletedRecords < 1 || !Number.isSafeInteger(value.revokedSessions) || value.revokedSessions < 0 || typeof value.filesPendingCleanup !== 'boolean') throw new ApiError('INVALID_RESPONSE');
+      return value;
     }
     async adminUsers(businessId) {
       this.#requireSystemAdmin();
@@ -689,9 +1258,11 @@
     }
     async createAdminUser(businessId, data) {
       this.#requireSystemAdmin();
+      if (typeof businessId !== 'string' || !/^[1-9]\d{0,19}$/.test(businessId) || BigInt(businessId) > 18446744073709551615n) throw new ApiError('INVALID_INPUT');
       const value = await this.#write('/admin/businesses/' + encodeURIComponent(businessId) + '/users', 'POST', data);
-      if (value?.user?.businessId !== String(businessId) || value.user.active !== true) throw new ApiError('INVALID_RESPONSE');
-      return value.user;
+      const created = user(value?.user);
+      if (created.businessId !== businessId || created.role !== data.role || created.username !== data.username) throw new ApiError('INVALID_RESPONSE');
+      return created;
     }
     async setAdminUserActive(id, active) {
       this.#requireSystemAdmin();

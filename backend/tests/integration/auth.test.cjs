@@ -56,10 +56,12 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
   await t.test('bootstrap atomico sin valores predeterminados y rechazo de repeticion', async () => {
     const result = await bootstrap(pool, { businessName: 'Synthetic A', username: 'owner', fullName: 'Admin A', password: adminPassword }, database);
     businessA = result.businessId; rootId = result.userId;
+    await rows(pool, "INSERT INTO business_subscriptions (business_id,plan_code) VALUES (?,'CONECTADO_BASICO')", [businessA]);
     await assert.rejects(bootstrap(pool, { businessName: 'Duplicate', username: 'other', fullName: 'Other', password: adminPassword }, database));
     assert.equal((await rows(pool, 'SELECT id FROM businesses', [])).length, 1);
   });
   const businessB = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Synthetic B'])).insertId);
+  await rows(pool, "INSERT INTO business_subscriptions (business_id,plan_code) VALUES (?,'CONECTADO_BASICO')", [businessB]);
   const userB = String((await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessB, 'owner_b', 'Admin B', await hashPassword('Other-business-password-123!'), 'ADMIN'])).insertId);
   const base = await serve();
   const admin = client(base), other = client(base);
@@ -115,7 +117,7 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
       assert.equal((await systemOwner.login(businessA, 'andres', adminPassword)).status, 200);
       const noName = await systemOwner.request('/admin/businesses', 'POST', { name: '   ' });
       assert.equal(noName.status, 400);
-      const createdBusiness = await systemOwner.request('/admin/businesses', 'POST', { name: 'Panel temporary C' });
+      const createdBusiness = await systemOwner.request('/admin/businesses', 'POST', { name: 'Panel temporary C', planCode: 'CONECTADO_BASICO' });
       assert.equal(createdBusiness.status, 201); assert.equal(createdBusiness.data.business.status, 'ACTIVE');
       const businessId = createdBusiness.data.business.id;
       assert.equal((await systemOwner.request('/admin/businesses?businessId=1')).status, 400);
@@ -293,16 +295,17 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
     assert.equal((await client(base).login(businessA, 'seller', sellerPassword)).status, 401);
     assert.equal((await seller.login(businessA, 'seller', 'New-seller-password-123!')).status, 200);
   });
-  await t.test('asignar rol revoca sesion y permisos; no cambia negocio', async () => {
-    assert.equal((await admin.request('/users/' + sellerId, 'PATCH', { role: 'ADMIN' })).status, 200);
-    assert.equal((await seller.request('/auth/me')).status, 401);
-    await seller.login(businessA, 'seller', 'New-seller-password-123!');
-    assert.equal((await seller.request('/users')).status, 200);
-    assert.equal((await admin.request('/users/' + sellerId, 'PATCH', { role: 'VENDEDOR' })).status, 200);
-    await seller.login(businessA, 'seller', 'New-seller-password-123!');
+  await t.test('el plan no permite promover un segundo administrador activo', async () => {
+    const promoted = await admin.request('/users/' + sellerId, 'PATCH', { role: 'ADMIN' });
+    assert.equal(promoted.status, 409); assert.equal(promoted.data.error.code, 'BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED');
+    assert.equal((await seller.request('/auth/me')).status, 200);
+    assert.equal((await seller.request('/users')).status, 403);
+    const [stored] = await rows(pool, 'SELECT role FROM users WHERE business_id=? AND id=?', [businessA, sellerId]);
+    assert.equal(stored.role, 'VENDEDOR');
   });
-  await t.test('cuenta otorgante desactivada elimina sus autorizaciones', async () => {
-    const create = await admin.request('/users', 'POST', { username: 'approver', fullName: 'Approver', password: adminPassword, role: 'ADMIN' }); assert.equal(create.status, 201);
+  await t.test('desactivar una cuenta ADMIN heredada revoca sus autorizaciones', async () => {
+    const create = await admin.request('/users', 'POST', { username: 'approver', fullName: 'Approver', password: adminPassword, role: 'VENDEDOR' }); assert.equal(create.status, 201);
+    await rows(pool, "UPDATE users SET role='ADMIN' WHERE business_id=? AND id=?", [businessA, create.data.user.id]);
     const grant = await seller.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'approver', adminPassword }); assert.equal(grant.status, 201);
     assert.equal((await admin.request('/users/' + create.data.user.id, 'PATCH', { active: false })).status, 200);
     assert.equal((await seller.request('/auth/access/inventory')).status, 403);
@@ -334,11 +337,11 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
     const result = await production.login(businessA); assert.equal(result.status, 200);
     assert.match(result.headers.get('set-cookie'), /__Host-pos_session=/); assert.match(result.headers.get('set-cookie'), /Secure/); assert.match(result.headers.get('set-cookie'), /SameSite=None/); assert.equal(result.headers.get('set-cookie').includes('Domain='), false);
   });
-  await t.test('concurrencia no elimina ultimo ADMIN activo', async () => {
-    const created = await admin.request('/users', 'POST', { username: 'second', fullName: 'Second', password: adminPassword, role: 'ADMIN' });
+  await t.test('concurrencia no puede crear un segundo ADMIN activo mediante cambios de rol', async () => {
+    const created = await admin.request('/users', 'POST', { username: 'second', fullName: 'Second', password: adminPassword, role: 'VENDEDOR' });
     assert.equal(created.status, 201);
-    const results = await Promise.all([admin.request('/users/' + created.data.user.id, 'PATCH', { role: 'VENDEDOR' }), admin.request('/users/' + rootId, 'PATCH', { role: 'VENDEDOR' })]);
-    assert.equal(results.filter(r => r.status === 200).length, 1);
+    const results = await Promise.all([admin.request('/users/' + created.data.user.id, 'PATCH', { role: 'ADMIN' }), admin.request('/users/' + sellerId, 'PATCH', { role: 'ADMIN' })]);
+    assert.equal(results.filter(r => r.status === 409 && r.data.error.code === 'BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED').length, 2);
     assert.equal((await rows(pool, 'SELECT id FROM users WHERE business_id = ? AND active = TRUE AND role = ?', [businessA, 'ADMIN'])).length, 1);
   });
 });

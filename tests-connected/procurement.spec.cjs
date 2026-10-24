@@ -46,6 +46,7 @@ async function mysqlPurchase(invoiceNumber) {
 
 test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', async ({ page }) => {
   await login(page);
+  const openingPayablesBalance = Number((await call(page, 'payablesSummary')).balance);
   if (!await call(page, 'currentCash', true)) await call(page, 'openCash', { operationKey: randomUUID(), openingAmount: '100.00' });
   const suffix = randomBytes(4).toString('hex');
   const product = await call(page, 'createProduct', { barcode: 'BUY-' + suffix, name: 'Producto compra ' + suffix, category: 'General', cost: '4.00', marginRetail: '20.0000', marginWholesale: '10.0000', retailPrice: '4.80', wholesalePrice: '4.40', stock: '2.000', minStock: '1.000', taxRate: '0.0000', image: null, active: true });
@@ -74,7 +75,7 @@ test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', as
   await page.locator('#purchaseForm button[type=submit]').click(); await expect(page.locator('#purchaseModal')).toBeHidden({ timeout: 15000 });
   await expect(page.locator('#customAlertMessage')).toContainText(cashInvoice); await closeAlert(page);
   await expect(page.locator('#connectedPurchasesTableBody')).toContainText(cashInvoice);
-  const [purchaseDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#connectedPurchasesControls .data-table-export').click()]);
+  const [purchaseDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#purchasesView .data-table-export:visible').click()]);
   expect(purchaseDownload.suggestedFilename()).toMatch(/^compras_conectadas_\d{4}-\d{2}-\d{2}\.xlsx$/);
   const purchaseBook = await downloadedWorkbook(purchaseDownload);
   expect(JSON.stringify(purchaseBook.Sheets)).toContain(cashInvoice);
@@ -85,7 +86,7 @@ test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', as
   await page.locator('#navReportesBtn').click(); await expect(page.locator('#reportesView')).toBeVisible();
   const connectedDateStyle = await page.locator('#reporteDesdeInput').evaluate(input => ({ scheme: getComputedStyle(input).colorScheme, background: getComputedStyle(input).backgroundColor, calendar: getComputedStyle(input, '::-webkit-calendar-picker-indicator').display }));
   expect(connectedDateStyle).toEqual({ scheme: 'light', background: 'rgb(255, 255, 255)', calendar: 'block' });
-  await expect(page.locator('.connected-report-only button[onclick="window.PosReports?.exportExcel()"]')).toHaveClass(/btn-export-excel/);
+  await expect(page.locator('#exportReportsAllBtn')).toHaveClass(/btn-export-excel/);
   await page.locator('.rep-subtab[data-target="repComprasBox"]').click();
   await expect(page.locator('#repComprasBody')).toContainText(cashInvoice);
   const [reportDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#repComprasBox .data-table-export').first().click()]);
@@ -97,7 +98,7 @@ test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', as
 
   await page.locator('#navSuppliersBtn').click(); await expect(page.locator('#suppliersView')).toBeVisible();
   await expect(page.locator('#connectedSuppliersTableBody')).toContainText(supplierName);
-  const [supplierDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#connectedSuppliersControls .data-table-export').click()]);
+  const [supplierDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#suppliersView .data-table-export:visible').click()]);
   expect(supplierDownload.suggestedFilename()).toMatch(/^proveedores_conectados_\d{4}-\d{2}-\d{2}\.xlsx$/);
   const supplierBook = await downloadedWorkbook(supplierDownload);
   expect(JSON.stringify(supplierBook.Sheets)).toContain(supplierName);
@@ -111,25 +112,64 @@ test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', as
   await page.locator('#purchaseForm button[type=submit]').click(); await expect(page.locator('#purchaseModal')).toBeHidden({ timeout: 15000 });
   await expect(page.locator('#customAlertMessage')).toContainText(creditInvoice); await closeAlert(page);
   await page.locator('#navPayablesBtn').click(); await expect(page.locator('#payablesView')).toBeVisible();
-  await expect(page.locator('#connectedPayablesTableBody')).toContainText(creditInvoice);
-  const [payableDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#connectedPayablesControls .data-table-export').click()]);
+  await expect(page.locator('#connectedPayablesTableBody')).toContainText(supplierName);
+  const [payableDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#payablesView .data-table-export:visible').click()]);
   expect(payableDownload.suggestedFilename()).toMatch(/^cuentas_por_pagar_conectadas_\d{4}-\d{2}-\d{2}\.xlsx$/);
   const payableBook = await downloadedWorkbook(payableDownload);
-  expect(JSON.stringify(payableBook.Sheets)).toContain(creditInvoice);
+  expect(JSON.stringify(payableBook.Sheets)).toContain(supplierName);
+  const payableSheet = payableBook.Sheets[payableBook.SheetNames[0]];
+  const payableRow = payableSheet['!data'].find(row => row[0] === supplierName);
+  expect(payableRow[3]).toBe(6);
   expect(JSON.stringify(payableBook.Sheets)).not.toMatch(/supplierId|purchaseId|businessId/);
-  const creditRow = page.locator('#connectedPayablesTableBody tr').filter({ hasText: creditInvoice });
+  const supplierDebtRow = page.locator('#connectedPayablesTableBody tr').filter({ hasText: supplierName });
+  await supplierDebtRow.getByRole('button', { name: 'Ver Facturas' }).click();
+  const creditRow = page.locator('#statementTableBody tr').filter({ hasText: creditInvoice });
   await creditRow.getByRole('button', { name: 'Abonar' }).click(); await expect(page.locator('#paymentInvoiceModal')).toBeVisible();
+  const cashBeforeBankPayments = (await call(page, 'currentCash', true)).expectedAmount;
   await page.locator('#payInvoiceMethod').selectOption('tarjeta'); await page.locator('#payInvoiceAmount').fill('1.00'); await page.locator('#paymentInvoiceForm button[type=submit]').click();
-  await expect(page.locator('#customAlertMessage')).toContainText('migración 005'); await closeAlert(page);
-  await expect(page.locator('#paymentInvoiceModal')).toBeVisible();
+  await expect(page.locator('#customAlertMessage')).toContainText('pendiente de confirmar en Caja'); await closeAlert(page);
+  await expect(page.locator('#paymentInvoiceModal')).toBeHidden();
+  await page.locator('#navCajaBtn').click(); await expect(page.locator('#cajaView')).toBeVisible();
+  const pendingCardRow = page.locator('#cajaOperacionesBody tr').filter({ hasText: creditInvoice });
+  await expect(pendingCardRow).toContainText('Tarjeta pendiente');
+  await pendingCardRow.getByRole('button', { name: 'Confirmar recibido' }).click();
+  await expect(page.locator('#customAlertMessage')).toContainText('Tarjeta confirmado para el pago de ' + supplierName); await closeAlert(page);
+  expect((await call(page, 'currentCash', true)).expectedAmount).toBe(cashBeforeBankPayments);
+
+  await page.locator('#navPayablesBtn').click(); await expect(page.locator('#payablesView')).toBeVisible();
+  const debtAfterCard = page.locator('#connectedPayablesTableBody tr').filter({ hasText: supplierName });
+  await debtAfterCard.getByRole('button', { name: 'Ver Facturas' }).click();
+  const creditAfterCard = page.locator('#statementTableBody tr').filter({ hasText: creditInvoice });
+  await creditAfterCard.getByRole('button', { name: 'Abonar' }).click(); await expect(page.locator('#paymentInvoiceModal')).toBeVisible();
+  await page.locator('#payInvoiceMethod').selectOption('transferencia'); await page.locator('#payInvoiceAmount').fill('1.00'); await page.locator('#paymentInvoiceForm button[type=submit]').click();
+  await expect(page.locator('#customAlertMessage')).toContainText('pendiente de confirmar en Caja'); await closeAlert(page);
+  await expect(page.locator('#paymentInvoiceModal')).toBeHidden();
+  await page.locator('#navCajaBtn').click(); await expect(page.locator('#cajaView')).toBeVisible();
+  const pendingTransferRow = page.locator('#cajaOperacionesBody tr').filter({ hasText: creditInvoice });
+  await expect(pendingTransferRow).toContainText('Transferencia pendiente');
+  await pendingTransferRow.getByRole('button', { name: 'Confirmar recibido' }).click();
+  await expect(page.locator('#customAlertMessage')).toContainText('Transferencia confirmado para el pago de ' + supplierName); await closeAlert(page);
+  expect((await call(page, 'currentCash', true)).expectedAmount).toBe(cashBeforeBankPayments);
+
+  await page.locator('#navPayablesBtn').click(); await expect(page.locator('#payablesView')).toBeVisible();
+  const finalDebt = page.locator('#connectedPayablesTableBody tr').filter({ hasText: supplierName });
+  await finalDebt.getByRole('button', { name: 'Ver Facturas' }).click();
+  const finalCredit = page.locator('#statementTableBody tr').filter({ hasText: creditInvoice });
+  await finalCredit.getByRole('button', { name: 'Abonar' }).click(); await expect(page.locator('#paymentInvoiceModal')).toBeVisible();
   await page.locator('#payInvoiceMethod').selectOption('efectivo'); await page.locator('#payInvoiceAmount').fill('2.00'); await page.locator('#paymentInvoiceForm button[type=submit]').click();
   await expect(page.locator('#customAlertMessage')).toContainText('Pago registrado'); await closeAlert(page);
-  await expect(page.locator('#connectedPayablesTableBody')).toContainText('C$4.00');
-  await expect(page.locator('#connectedPayablesSummary')).toContainText('C$4.00');
-  expect(await page.evaluate(async () => ({ sales: await localDB.sales.count(), queue: await localDB.sync_queue.count() }))).toEqual({ sales: 0, queue: 0 });
+  await expect(page.locator('#connectedPayablesTableBody')).toContainText('C$2.00');
+  expect(Number((await call(page, 'payablesSummary')).balance)).toBe(openingPayablesBalance + 2);
+  const supplierPaymentsReport = await call(page, 'connectedReport');
+  const confirmedSupplierPayments = supplierPaymentsReport.suppliers.payments.filter(row => row.invoiceNumber === creditInvoice && ['CARD', 'TRANSFER'].includes(row.paymentMethod));
+  expect(confirmedSupplierPayments).toHaveLength(2);
+  expect(confirmedSupplierPayments.every(row => row.status === 'POSTED' && row.confirmedBy === 'browseradmin' && row.confirmedAt)).toBe(true);
+  expect(Number((await call(page, 'currentCash', true)).expectedAmount)).toBe(Number(cashBeforeBankPayments) - 2);
+  expect(await page.evaluate(() => localDB)).toBeNull();
+
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const controls = await page.locator('#connectedPayablesControls').boundingBox();
+  const controls = await page.locator('#payablesView .data-table-toolbar:visible').boundingBox();
   expect(controls.x).toBeGreaterThanOrEqual(0); expect(controls.x + controls.width).toBeLessThanOrEqual(391);
   await page.locator('#navDashboardBtn').click(); await expect(page.locator('#dashboardConnectedContent')).toBeVisible();
   const dashboardDateStyle = await page.locator('#dashboardFromInput').evaluate(input => ({ scheme: getComputedStyle(input).colorScheme, background: getComputedStyle(input).backgroundColor, calendar: getComputedStyle(input, '::-webkit-calendar-picker-indicator').display }));
@@ -137,7 +177,7 @@ test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', as
   const dashboardDateBox = await page.locator('#dashboardFromInput').boundingBox();
   expect(dashboardDateBox.x).toBeGreaterThanOrEqual(0); expect(dashboardDateBox.x + dashboardDateBox.width).toBeLessThanOrEqual(391);
   await expect(page.locator('#connectedDashPurchasesBody')).toContainText(cashInvoice);
-  await expect(page.locator('#connectedDashPayablesBalance')).toHaveText('C$4.00');
+  await expect(page.locator('#connectedDashPayablesBalance')).toHaveText('C$' + (openingPayablesBalance + 2).toFixed(2));
   const [dashboardDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#dashboardView button[onclick="window.generarExcelDashboard()"]').click()]);
   const dashboardBook = await downloadedWorkbook(dashboardDownload);
   expect(dashboardBook.SheetNames).toContain('Compras del período'); expect(dashboardBook.SheetNames).toContain('Cuentas por pagar');
@@ -158,7 +198,7 @@ test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', as
   const noInvoiceRow = page.locator('#connectedPurchasesTableBody tr').filter({ hasText: noInvoiceNumber });
   await noInvoiceRow.getByRole('button', { name: 'Ver factura' }).click();
   await expect(page.locator('#ticketModal')).toBeVisible();
-  await expect(page.locator('#ticketContent')).toContainText('N° compra interno: ' + noInvoiceNumber);
+  await expect(page.locator('#ticketContent .invoice-field').filter({ hasText: 'N° compra interno' })).toContainText(noInvoiceNumber);
   await expect(page.locator('#ticketContent')).not.toContainText('Factura del proveedor:');
   await page.locator('#closeTicketBtn').click();
 

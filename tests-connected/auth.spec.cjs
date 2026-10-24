@@ -73,7 +73,7 @@ test('ADMIN crea vendedor, modifica rol/estado y cambia contrasena con API', asy
   const username = 'ui_' + randomBytes(5).toString('hex');
   await page.locator('#newUsername').fill(username); await page.locator('#newFullName').fill('Usuario de navegador'); await page.locator('#newUserPassword').fill(password); await page.locator('#createUserForm button').click();
   const row = page.locator('#usersTableBody tr').filter({ hasText: username }); await expect(row).toBeVisible(); await expect(page.locator('#newUserPassword')).toHaveValue('');
-  await row.locator('select').selectOption('ADMIN'); await row.getByRole('button', { name: 'Guardar rol' }).click(); await expect(row.locator('select')).toHaveValue('ADMIN');
+  await row.locator('select').selectOption('ADMIN'); await row.getByRole('button', { name: 'Guardar rol' }).click(); await expect(page.locator('#usersMessage')).toContainText('límite es uno'); await expect(row.locator('select')).toHaveValue('VENDEDOR');
   await row.getByRole('button', { name: 'Desactivar', exact: true }).click(); await expect(row).toContainText('Inactivo'); await row.getByRole('button', { name: 'Activar', exact: true }).click(); await expect(row).toContainText('Activo');
   await row.getByRole('button', { name: 'Cambiar contraseña' }).click(); await page.locator('#changedUserPassword').fill('Changed-browser-password-123!'); await page.locator('#userPasswordForm button[type=submit]').click(); await expect(page.locator('#usersMessage')).toContainText('Contraseña actualizada'); await expect(page.locator('#changedUserPassword')).toHaveValue('');
   await page.screenshot({ path: test.info().outputPath('users-desktop.png'), fullPage: true });
@@ -89,15 +89,16 @@ test('respuesta invalida del servidor no crea identidad', async ({ page }) => {
 });
 test('no persiste contrasenas, tokens o CSRF en almacenamiento web', async ({ page }) => {
   await open(page); await login(page, 'browserseller'); await authorize(page);
-  const result = await page.evaluate(async () => ({ local: JSON.stringify(localStorage), session: JSON.stringify(sessionStorage), tables: localDB.tables.map(t => t.name), cookie: document.cookie, profile: currentUser }));
-  expect(result.local).not.toContain(password); expect(result.session).not.toContain(password); expect(result.local).not.toContain('csrfToken'); expect(result.local).not.toContain('pos_session'); expect(result.cookie).not.toContain('pos_session'); expect(result.tables).not.toContain('sessions'); expect(result.profile.password).toBeUndefined();
+  const result = await page.evaluate(async () => ({ local: JSON.stringify(localStorage), session: JSON.stringify(sessionStorage), connectedDexieDisabled: localDB === null, cookie: document.cookie, profile: currentUser }));
+  expect(result.local).not.toContain(password); expect(result.session).not.toContain(password); expect(result.local).not.toContain('csrfToken'); expect(result.local).not.toContain('pos_session'); expect(result.cookie).not.toContain('pos_session'); expect(result.connectedDexieDisabled).toBe(true); expect(result.profile.password).toBeUndefined();
 });
-test('Dexie separa modo local y dos negocios sin copiar datos', async ({ page }) => {
-  await open(page); await page.evaluate(async () => { const db = createPosDatabase('POS_OfflineDB'); await db.products.put({ id: 1, barcode: 'LOCAL', name: 'LOCAL SECRET' }); db.close(); }); await login(page);
-  expect(await page.evaluate(() => localDB.products.count())).toBe(0);
-  await page.evaluate(() => localDB.products.put({ id: 2, barcode: 'A', name: 'BUSINESS A SECRET', business_id: DEFAULT_BUSINESS_ID }));
+test('modo conectado no inicializa Dexie y conserva la identidad de cada negocio', async ({ page }) => {
+  await open(page); await login(page, 'browserseller');
+  const first = await page.evaluate(async () => ({ businessId: (await new window.PosApiClient(window.POS_API_BASE_URL).me()).user.businessId, dexieDisabled: localDB === null }));
+  expect(first).toEqual({ businessId: business, dexieDisabled: true });
   await page.locator('#logoutBtn').click(); await expect(page.locator('#loginScreen')).toBeVisible(); await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled(); await login(page, 'otheradmin');
-  expect(await page.evaluate(() => localDB.products.count())).toBe(0); expect(await page.evaluate(() => DEFAULT_BUSINESS_ID)).toBe(businessB);
+  const second = await page.evaluate(async () => ({ businessId: (await new window.PosApiClient(window.POS_API_BASE_URL).me()).user.businessId, dexieDisabled: localDB === null }));
+  expect(second).toEqual({ businessId: businessB, dexieDisabled: true }); expect(first.businessId).not.toBe(second.businessId);
 });
 test('modo local no invoca API y cambio de modalidad recarga sin conservar identidad', async ({ page }) => {
   const requests = []; page.on('request', req => { if (req.url().startsWith(apiBase)) requests.push(req.url()); });

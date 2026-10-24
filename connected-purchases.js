@@ -12,7 +12,7 @@
   const purchaseNumber = purchase => purchase.purchaseNumber || 'COMP-' + String(purchase.id).padStart(6, '0');
   const purchaseReference = purchase => '<strong>' + esc(purchaseNumber(purchase)) + '</strong>' + (purchase.supplierInvoiceNumber ? '<br><small>Factura proveedor: ' + esc(purchase.supplierInvoiceNumber) + '</small>' : '');
   const dayKey = value => window.PosPeriodFilters?.dateKey(value) || (() => { const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? '' : parsed.getFullYear() + '-' + String(parsed.getMonth() + 1).padStart(2, '0') + '-' + String(parsed.getDate()).padStart(2, '0'); })();
-  const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', PAID: 'Pagada', PARTIAL: 'Parcial', OPEN: 'Pendiente', OVERDUE: 'Vencida', PENDING_CONFIRMATION: 'Pago por confirmar', PENDING: 'Pendiente', POSTED: 'Registrado', VOID: 'Anulado' })[value] || value || '—';
+  const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', HISTORICAL: 'Histórica · sin saldo operativo', PAID: 'Pagada', PARTIAL: 'Parcial', OPEN: 'Pendiente', OVERDUE: 'Vencida', PENDING_CONFIRMATION: 'Pago por confirmar', PENDING: 'Pendiente', POSTED: 'Registrado', VOID: 'Anulado' })[value] || value || '—';
   const uuid = () => crypto.randomUUID();
   const state = { suppliers: [], products: [], purchasesOffset: 0, payablesOffset: 0, purchaseHasNext: false, payableHasNext: false, quickSupplier: false, cart: [], purchaseSearchTimer: 0, supplierSearchTimer: 0, payableSearchTimer: 0, operationKey: null, currentView: null, loadedPurchase: null };
   const pageSize = 100;
@@ -73,9 +73,9 @@
     el('connectedPurchasesNext').disabled = !state.purchaseHasNext;
     el('connectedPurchasesPage').textContent = String(Math.floor(offset / pageSize) + 1);
     setTable('connectedPurchasesTableBody', 7, page.map(purchase => {
-      const status = purchase.status === 'CANCELLED' ? 'Anulada' : purchase.purchaseType === 'CREDIT' ? statusLabel(purchase.status) + (purchase.dueAt ? ' · vence ' + date(purchase.dueAt) : '') : 'Contado';
+      const status = purchase.status === 'CANCELLED' ? 'Anulada' : purchase.isHistorical ? statusLabel(purchase.status) : purchase.purchaseType === 'CREDIT' ? statusLabel(purchase.status) + (purchase.dueAt ? ' · vence ' + date(purchase.dueAt) : '') : 'Contado';
       const total = purchase.status === 'CANCELLED' ? '<del>' + money(purchase.total) + '</del>' : money(purchase.total);
-      const actions = '<button type="button" class="btn btn-sm btn-info" data-purchase-action="view" data-purchase-id="' + esc(purchase.id) + '">Ver factura</button>' + (purchase.status === 'CANCELLED' ? '' : ' <button type="button" class="btn btn-sm btn-danger" data-purchase-action="cancel" data-purchase-id="' + esc(purchase.id) + '">Anular</button>');
+      const actions = '<button type="button" class="btn btn-sm btn-info" data-purchase-action="view" data-purchase-id="' + esc(purchase.id) + '">Ver factura</button>' + (purchase.status === 'CANCELLED' || purchase.isHistorical ? '' : ' <button type="button" class="btn btn-sm btn-danger" data-purchase-action="cancel" data-purchase-id="' + esc(purchase.id) + '">Anular</button>');
       return '<tr data-table-date="' + esc(dayKey(purchase.createdAt)) + '"><td>' + esc(dateTime(purchase.createdAt)) + '</td><td>' + purchaseReference(purchase) + '</td><td>' + esc(purchase.supplierName) + '</td><td>' + Number(purchase.itemCount || 0) + ' productos</td><td>' + total + '</td><td>' + esc(status) + '</td><td>' + actions + '</td></tr>';
     }), 'No hay facturas de compra registradas.');
     el('connectedPurchasesStatus').textContent = filtered.length + ' compra(s) dentro del período seleccionado.';
@@ -119,7 +119,7 @@
         '<td>' + esc(supplier.contact || '—') + '<br><small>' + esc(supplier.phone || '') + '</small></td>' +
         '<td><small>' + esc(supplier.address || '—') + '</small></td>' +
         '<td><strong class="connected-supplier-purchases">' + money(supplier.totalPurchased) + '</strong><br><small>' + Number(supplier.purchaseCount || 0) + ' compras</small></td>' +
-        '<td><strong class="connected-supplier-debt">' + money(supplier.debt) + '</strong></td><td>' + actions + '</td></tr>';
+        '<td><strong class="connected-supplier-debt">' + money(supplier.debt) + '</strong><br><small>Deuda operativa</small>' + (Number(supplier.historicalDebt || 0) > 0 ? '<br><small>Saldo histórico, solo consulta: ' + money(supplier.historicalDebt) + '</small>' : '') + '</td><td>' + actions + '</td></tr>';
     }), 'No hay proveedores registrados.');
     const list = el('supplierDataList');
     if (list) list.innerHTML = state.suppliers.filter(row => row.active).map(row => '<option value="' + esc(row.name) + '"></option>').join('');
@@ -192,20 +192,18 @@
     if (credit) data.dueDays = Number(el('purchDays').value);
     else data.paymentMethod = el('purchPaymentMethod').value;
     try {
-      const purchase = await request((api, business) => api.createPurchase(data).then(row => { if (row.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401); return row; }));
-      state.operationKey = null; closePurchase(); await Promise.all([renderPurchases(el('connectedPurchasesSearch').value.trim()), loadProducts()]);
-      const reference = purchaseNumber(purchase) + (purchase.supplierInvoiceNumber ? ' (factura del proveedor ' + purchase.supplierInvoiceNumber + ')' : '');
-      refreshDerived(); window.showAlert('Compra ' + reference + ' registrada. Existencias y costo actualizados.');
+      await window.PosSales.performFinancial('PURCHASE', data, async (api, input) => ({ kind: 'PURCHASE', purchase: await api.createPurchase(input) }));
     } catch (error) { showError(error, 'connectedPurchasesStatus'); }
     finally { button.disabled = false; }
   }
   function viewPurchase(purchase) {
-    const lines = (purchase.items || []).map(item => '<div class="invoice-item-row"><span class="invoice-item-description">' + Number(item.quantity).toFixed(3) + ' × ' + esc(item.name) + '<small>costo ' + money(item.unitCost) + '</small></span><strong class="invoice-item-amount">' + money(item.total) + '</strong></div>').join('');
+    const lines = (purchase.items || []).map(item => '<div class="invoice-item-row"><span class="invoice-item-description">' + Number(item.quantity).toFixed(3) + ' × ' + esc(item.name) + '<small>costo ' + money(item.unitCost) + ' · subtotal ' + money(item.subtotal) + ' · descuento ' + money(item.discount) + ' · impuesto ' + money(item.tax) + '</small></span><strong class="invoice-item-amount">' + money(item.total) + '</strong></div>').join('');
     const cancelled = purchase.status === 'CANCELLED';
-    const status = cancelled ? '<p class="invoice-note invoice-note--danger">Factura anulada: ' + esc(purchase.cancelReason || '') + '</p>' : '';
-    const condition = purchase.purchaseType === 'CREDIT' ? 'Crédito · vence ' + esc(date(purchase.dueAt)) : 'Contado';
+    const historical = Boolean(purchase.isHistorical);
+    const status = (historical ? '<p class="invoice-note">Compra histórica. No genera saldo operativo ni permite pagos o anulaciones.</p>' : '') + (cancelled ? '<p class="invoice-note invoice-note--danger">Factura anulada: ' + esc(purchase.cancelReason || '') + '</p>' : '') + (purchase.notes ? '<p class="invoice-note">' + esc(purchase.notes) + '</p>' : '');
+    const condition = purchase.purchaseType === 'CREDIT' ? 'Crédito' + (purchase.dueAt ? ' · vence ' + esc(date(purchase.dueAt)) : '') + (historical ? ' · sin saldo operativo' : '') : 'Contado';
     el('ticketContent').innerHTML = '<div id="imprimibleTicket" class="invoice-view invoice-view--purchase">' +
-      '<header class="invoice-header"><div><span class="invoice-eyebrow">Documento del proveedor</span><h3 class="invoice-company-name">COMPROBANTE DE COMPRA</h3><p class="invoice-subtitle">Proveedor: ' + esc(purchase.supplierName) + '</p></div><span class="invoice-badge ' + (cancelled ? 'invoice-badge--danger' : 'invoice-badge--success') + '">' + (cancelled ? 'Anulada' : 'Registrada') + '</span></header>' +
+      '<header class="invoice-header"><div><span class="invoice-eyebrow">Documento del proveedor</span><h3 class="invoice-company-name">COMPROBANTE DE COMPRA</h3><p class="invoice-subtitle">Proveedor: ' + esc(purchase.supplierName) + '</p></div><span class="invoice-badge ' + (cancelled ? 'invoice-badge--danger' : 'invoice-badge--success') + '">' + (cancelled ? 'Anulada' : historical ? 'Histórica' : 'Registrada') + '</span></header>' +
       '<div class="invoice-card"><div class="invoice-grid">' +
       '<div class="invoice-field"><span class="invoice-field-label">N° compra interno</span><strong>' + esc(purchaseNumber(purchase)) + '</strong></div>' +
       (purchase.supplierInvoiceNumber ? '<div class="invoice-field"><span class="invoice-field-label">Factura del proveedor</span><strong>' + esc(purchase.supplierInvoiceNumber) + '</strong></div>' : '') +
@@ -213,7 +211,7 @@
       '<div class="invoice-field"><span class="invoice-field-label">Condición</span><strong>' + condition + '</strong></div>' +
       '</div></div>' + status +
       '<section class="invoice-card"><h4 class="invoice-section-title">Detalle de compra</h4><div class="invoice-items">' + lines + '</div></section>' +
-      '<section class="invoice-total-box"><div class="invoice-summary-row invoice-total-row"><span>Total</span><strong>' + money(purchase.total) + '</strong></div>' +
+      '<section class="invoice-total-box"><div class="invoice-summary-row"><span>Subtotal</span><strong>' + money(purchase.subtotal) + '</strong></div><div class="invoice-summary-row"><span>Descuento</span><strong>' + money(purchase.discount) + '</strong></div><div class="invoice-summary-row"><span>Impuesto</span><strong>' + money(purchase.tax) + '</strong></div><div class="invoice-summary-row invoice-total-row"><span>Total</span><strong>' + money(purchase.total) + '</strong></div>' +
       '<div class="invoice-summary-row"><span>Abonado</span><strong>' + money(purchase.paid) + '</strong></div><div class="invoice-summary-row"><span>Saldo</span><strong>' + money(purchase.balance) + '</strong></div></section></div>';
     el('ticketModal').classList.remove('hidden');
   }
@@ -236,10 +234,7 @@
     if (!reason) return;
     const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true;
     try {
-      const result = await request((api, business) => api.cancelPurchase(id, { operationKey: uuid(), reason }).then(row => { if (row.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401); return row; }));
-      el('cancelConnectedPurchaseModal').classList.add('hidden');
-      await Promise.all([renderPurchases(el('connectedPurchasesSearch').value.trim()), loadProducts()]);
-      refreshDerived(); window.showAlert('Compra ' + purchaseNumber(result) + ' anulada. Se revirtió el inventario.');
+      await window.PosSales.performFinancial('CANCEL_PURCHASE', { reason }, async (api, input) => ({ kind: 'CANCEL_PURCHASE', purchase: await api.cancelPurchase(id, input) }));
     } catch (error) { showError(error); }
     finally { button.disabled = false; }
   }
@@ -305,9 +300,11 @@
               invoiceReference: entry.reference || ''
             });
             buttons = '<button type="button" class="btn btn-sm btn-info" data-statement-action="receipt" data-payment-key="' + paymentKey + '">Ver comprobante</button>';
+            if (entry.paymentId) buttons += ' <button type="button" class="btn btn-sm btn-danger" data-reverse-supplier-payment="' + esc(entry.paymentId) + '" data-method="' + esc(entry.paymentMethod) + '" data-status="' + esc(entry.status) + '">Revertir pago</button>';
           }
         }
-        return '<tr data-period-date="' + esc(window.PosPeriodFilters?.dateKey(entry.date) || '') + '"><td>' + esc(dateTime(entry.date)) + '</td><td>' + esc(entry.reference || '—') + '</td><td>' + esc(entry.description || '—') + (entry.pending ? '<br><small>Por confirmar ' + money(entry.pending) + '</small>' : '') + '</td><td>' + (charge ? money(charge) : '—') + '</td><td>' + (paid ? money(paid) : '—') + '</td><td>' + money(entry.runningBalance) + '</td><td>' + buttons + '</td></tr>';
+        const voidNote = entry.status === 'VOID' ? '<br><small>Anulado: ' + esc(entry.cancelReason || '') + ' · ' + esc(entry.cancelledByName || '') + '</small>' : '';
+        return '<tr data-period-date="' + esc(window.PosPeriodFilters?.dateKey(entry.date) || '') + '"><td>' + esc(dateTime(entry.date)) + '</td><td>' + esc(entry.reference || '—') + '</td><td>' + esc(entry.description || '—') + voidNote + (entry.pending ? '<br><small>Por confirmar ' + money(entry.pending) + '</small>' : '') + '</td><td>' + (charge ? money(charge) : '—') + '</td><td>' + (paid ? money(paid) : '—') + '</td><td>' + money(entry.runningBalance) + '</td><td>' + buttons + '</td></tr>';
       });
       const orderedRows = [...renderedRows.filter((_, index) => payableRows[index]), ...renderedRows.filter((_, index) => !payableRows[index])];
       setTable('statementTableBody', 7, orderedRows, 'No hay movimientos registrados.');
@@ -336,10 +333,7 @@
     const methodMap = { efectivo: 'CASH', tarjeta: 'CARD', transferencia: 'TRANSFER' }, paymentMethod = methodMap[el('payInvoiceMethod').value] || 'OTHER';
     const button = el('paymentInvoiceForm').querySelector('button[type="submit"]'); button.disabled = true;
     try {
-      const payment = await request(api => api.paySupplierInvoice(id, { operationKey: uuid(), amount: Number(amount).toFixed(2), paymentMethod }));
-      el('paymentInvoiceModal').classList.add('hidden');
-      if (state.currentView === 'payablesView') await renderPayables(el('connectedPayablesSearch').value.trim());
-      refreshDerived(); window.showAlert(payment.status === 'PENDING' ? 'Pago pendiente de confirmar en Caja.' : 'Pago registrado.');
+      await window.PosSales.performFinancial('SUPPLIER_PAYMENT', { amount: Number(amount).toFixed(2), paymentMethod }, async (api, input) => ({ kind: 'SUPPLIER_PAYMENT', payment: await api.paySupplierInvoice(id, input) }));
     } catch (error) { showError(error); }
     finally { button.disabled = false; }
   }
@@ -419,5 +413,25 @@
     renderSuppliers(state.suppliers.filter(item => [item.name, item.contact, item.phone, item.ruc, item.address].some(value => String(value || '').toLocaleLowerCase('es').includes(query))));
   }, 100); });
 
-  window.PosPurchases = Object.freeze({ load, openPurchase, closePurchase, addItem: addPurchaseItem, addPurchaseItem, savePurchase, applyPeriod, supplierOptions: () => state.suppliers, quickEditProduct() { window.showAlert('Editar productos requiere entrar a Inventario.'); }, productCreated(product) { if (!state.products.some(row => row.id === product.id)) state.products.push(product); window.PosRuntime.setProducts(state.products); el('purchProductTemp').value = product.name; el('purchProductTemp').dataset.productId = product.id; el('purchCostTemp').value = Number(product.cost || 0).toFixed(2); }, newSupplier, editSupplier, saveSupplier, toggleSupplier, supplierStatement, viewPurchase: viewPurchaseById, openInvoicePayment, payInvoice, cancelPurchase: askCancel });
+  async function operationCompleted(result) {
+    if (result.kind === 'SUPPLIER_PAYMENT_VOID') {
+      el('statementModal').classList.add('hidden');
+      window.showAlert('Pago a proveedor revertido. El saldo fue restituido.' + (result.payment.refundCashSessionId ? ' La devolución ingresó en la caja actual; los cierres anteriores se conservan.' : ' No se modificó el efectivo físico.'));
+    } else if (result.kind === 'SUPPLIER_PAYMENT') {
+      el('paymentInvoiceModal').classList.add('hidden');
+      window.showAlert(result.payment.status === 'PENDING' ? 'Pago pendiente de confirmar en Caja.' : 'Pago registrado.');
+    } else {
+      closePurchase(); el('cancelConnectedPurchaseModal').classList.add('hidden');
+      const purchase = result.purchase;
+      const reference = purchaseNumber(purchase) + (purchase.supplierInvoiceNumber ? ' (factura del proveedor ' + purchase.supplierInvoiceNumber + ')' : '');
+      window.showAlert(result.kind === 'CANCEL_PURCHASE' ? 'Compra ' + purchaseNumber(purchase) + ' anulada. Se revirtió el inventario.' : 'Compra ' + reference + ' registrada. Existencias y costo actualizados.');
+    }
+    if (['purchasesView', 'payablesView', 'suppliersView'].includes(state.currentView)) await load(state.currentView);
+    refreshDerived();
+  }
+  el('statementTableBody').addEventListener('click', event => {
+    const button = event.target.closest('[data-reverse-supplier-payment]');
+    if (button) window.PosSales.reversePayment('supplier', button.dataset.reverseSupplierPayment, button.dataset.method, button.dataset.status);
+  });
+  window.PosPurchases = Object.freeze({ operationCompleted, load, openPurchase, closePurchase, addItem: addPurchaseItem, addPurchaseItem, savePurchase, applyPeriod, supplierOptions: () => state.suppliers, quickEditProduct() { window.showAlert('Editar productos requiere entrar a Inventario.'); }, productCreated(product) { if (!state.products.some(row => row.id === product.id)) state.products.push(product); window.PosRuntime.setProducts(state.products); el('purchProductTemp').value = product.name; el('purchProductTemp').dataset.productId = product.id; el('purchCostTemp').value = Number(product.cost || 0).toFixed(2); }, newSupplier, editSupplier, saveSupplier, toggleSupplier, supplierStatement, viewPurchase: viewPurchaseById, openInvoicePayment, payInvoice, cancelPurchase: askCancel });
 })();

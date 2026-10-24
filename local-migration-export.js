@@ -4,19 +4,17 @@
   const DB_NAME = 'POS_OfflineDB';
   const CONFIG_KEY = 'posSystemConfig';
   const LEGACY_BUSINESS_ID = '00000000-0000-0000-0000-000000000000';
-  const STORE_NAMES = ['products', 'clients', 'suppliers', 'sales', 'purchases', 'cajaSessions', 'inventory_movements', 'abonos'];
+  const STORE_NAMES = ['products', 'clients', 'suppliers', 'sales', 'purchases', 'cajaSessions', 'inventory_movements', 'abonos', 'gastos', 'audit_logs', 'saleOrders', 'sync_queue'];
+  const STORE_LABELS = { products: 'Productos', clients: 'Clientes', suppliers: 'Proveedores', sales: 'Ventas', purchases: 'Compras', cajaSessions: 'Caja', inventory_movements: 'Inventario', abonos: 'Abonos', gastos: 'Gastos', audit_logs: 'Auditoría', saleOrders: 'Órdenes pendientes', sync_queue: 'Operaciones locales pendientes' };
   const normalizeFieldName = key => key.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
   const SAFE_RELATION_KEYS = new Set([
     'id', 'clienteId', 'proveedorId', 'productoId', 'productId', 'facturaId', 'compraId', 'ventaId',
     'cajaSessionId', 'cashSessionId', 'referenciaId', 'business_id'
   ].map(normalizeFieldName));
-  const SENSITIVE_FIELD_PATTERN = /(usuario|user|operador|vendedor|cajero|cashier|confirmacion|confirmation|password|token|session|clave|auth)/;
   const SENSITIVE_KEYS = new Set([
     'password', 'passwordhash', 'pass', 'credential', 'credentials', 'token', 'accesstoken', 'refreshtoken', 'sessiontoken',
-    'secret', 'apikey', 'key', 'keyid', 'privatekey', 'publickey', 'signingkey', 'encryptionkey', 'username', 'user', 'userid', 'useragent', 'usuario',
-    'vendedor', 'cajero', 'seller', 'cashier', 'openedby', 'closedby', 'confirmedby', 'cancelledby', 'createdby', 'updatedby',
-    'usuariocreacion', 'usuarioapertura', 'usuariocierre', 'usuarioconfirmacion', 'usuarioanulacion', 'session', 'sessions',
-    'sessionid', 'authsession', 'authsessionid', 'jwt', 'salt', 'hash'
+    'secret', 'apikey', 'privatekey', 'signingkey', 'encryptionkey', 'username', 'userid', 'useragent', 'authsession',
+    'authsessionid', 'jwt', 'salt', 'sessiontoken'
   ]);
   const WARNING_LABELS = [
     ['PRODUCTS_WITHOUT_CODE', 'Productos sin código'],
@@ -43,11 +41,13 @@
     const configuredId = text(config.localBusinessId || config.local_business_id || config.businessId || config.business_id).toLowerCase();
     return {
       business: {
+        ...scrub(config),
         name: text(config.name) || 'POS DISTRIBUIDORA',
         currency: text(config.currency) || 'C$',
         ruc: text(config.ruc),
         address: text(config.address),
         phone: text(config.phone),
+        localBusinessId: configuredId && configuredId !== LEGACY_BUSINESS_ID ? configuredId : '',
         header: text(config.header),
         footer: text(config.footer),
         tax: Number.isFinite(Number(config.tax)) ? Number(config.tax) : 0,
@@ -60,6 +60,107 @@
 
   function businessIdOf(row) {
     return text(row?.business_id ?? row?.businessId ?? row?.localBusinessId).toLowerCase();
+  }
+
+  function safeReference(value, fallback) {
+    if (typeof value === 'string' || typeof value === 'number') {
+      const candidate = String(value).trim();
+      const hasControlChars = Array.from(candidate).some(character => {
+        const code = character.charCodeAt(0);
+        return code < 32 || code === 127;
+      });
+      if (candidate && candidate.length <= 120 && !hasControlChars) return candidate;
+    }
+    return fallback;
+  }
+
+  function rowReference(row, index) {
+    return safeReference(row?.id ?? row?.numero ?? row?.factura ?? row?.displayNumber, `fila ${index + 1}`);
+  }
+
+  function referenceIssuesOf(tables) {
+    const ids = Object.fromEntries(STORE_NAMES.map(name => [name, new Map()]));
+    for (const name of STORE_NAMES) for (const row of tables[name]) {
+      if (row?.id === undefined || row?.id === null || String(row.id).trim() === '') continue;
+      const key = String(row.id);
+      ids[name].set(key, [...(ids[name].get(key) || []), row]);
+    }
+    const issues = [];
+    const add = (source, row, index, field, target, value) => {
+      if (value === undefined || value === null || String(value).trim() === '') return;
+      const matches = ids[target]?.get(String(value)) || [];
+      if (!matches.length) {
+        issues.push({ module: source, record: rowReference(row, index), field, target: STORE_LABELS[target], value: safeReference(value, '[referencia]'), issue: 'MISSING_REFERENCE' });
+        return;
+      }
+      const sourceBusiness = businessIdOf(row), targetBusinesses = new Set(matches.map(businessIdOf).filter(id => id && id !== LEGACY_BUSINESS_ID));
+      if (sourceBusiness && sourceBusiness !== LEGACY_BUSINESS_ID && targetBusinesses.size && !targetBusinesses.has(sourceBusiness)) {
+        issues.push({ module: source, record: rowReference(row, index), field, target: STORE_LABELS[target], value: safeReference(value, '[referencia]'), issue: 'CROSS_BUSINESS_REFERENCE' });
+      }
+    };
+    const eachItem = (module, row, index, target) => (Array.isArray(row?.items) ? row.items : []).forEach((item, itemIndex) => {
+      add(module, row, index, `items[${itemIndex}].productId`, target, item?.productId ?? item?.productoId ?? item?.producto_id ?? item?.id);
+    });
+    tables.sales.forEach((row, index) => { add('sales', row, index, 'clienteId', 'clients', row?.clienteId ?? row?.clientId); eachItem('sales', row, index, 'products'); });
+    tables.purchases.forEach((row, index) => { add('purchases', row, index, 'proveedorId', 'suppliers', row?.proveedorId ?? row?.supplierId); eachItem('purchases', row, index, 'products'); });
+    tables.inventory_movements.forEach((row, index) => add('inventory_movements', row, index, 'producto_id', 'products', row?.producto_id ?? row?.productoId ?? row?.productId));
+    tables.abonos.forEach((row, index) => {
+      const supplierPayment = norm(row?.tipo) === 'proveedor';
+      add('abonos', row, index, 'referenciaId', supplierPayment ? 'suppliers' : 'clients', row?.referenciaId ?? row?.supplierId ?? row?.clientId);
+      add('abonos', row, index, 'facturaId', supplierPayment ? 'purchases' : 'sales', row?.facturaId ?? row?.invoiceId);
+      add('abonos', row, index, 'cajaSessionId', 'cajaSessions', row?.cajaSessionId ?? row?.cashSessionId);
+    });
+    tables.gastos.forEach((row, index) => add('gastos', row, index, 'sessionId', 'cajaSessions', row?.sessionId ?? row?.cajaSessionId));
+    tables.saleOrders.forEach((row, index) => { add('saleOrders', row, index, 'cajaSessionId', 'cajaSessions', row?.cajaSessionId ?? row?.cashSessionId); eachItem('saleOrders', row, index, 'products'); });
+    tables.cajaSessions.forEach((row, index) => (Array.isArray(row?.movimientos) ? row.movimientos : []).forEach((movement, movementIndex) => {
+      add('cajaSessions', row, index, `movimientos[${movementIndex}].saleId`, 'sales', movement?.saleId);
+      add('cajaSessions', row, index, `movimientos[${movementIndex}].purchaseId`, 'purchases', movement?.purchaseId);
+    }));
+    return issues;
+  }
+
+  function buildIdentityReview(tables, businessId, idSource, foreignRows) {
+    const byModule = {};
+    let confirmedRecords = 0, sharedIdRecords = 0, missingIdRecords = 0, inferredRecords = 0, foreignRecords = 0, duplicateIds = 0;
+    for (const name of STORE_NAMES) {
+      const rows = tables[name], seen = new Map();
+      const module = byModule[name] = { label: STORE_LABELS[name], confirmed: 0, legacy: 0, missingId: 0, sharedId: 0, otherBusiness: 0, duplicateIds: 0, legacyReferences: [], otherBusinessReferences: [], duplicateReferences: [] };
+      rows.forEach((row, index) => {
+        const rowId = businessIdOf(row);
+        if (!rowId) { module.legacy++; module.missingId++; missingIdRecords++; }
+        else if (rowId === LEGACY_BUSINESS_ID) { module.legacy++; module.sharedId++; sharedIdRecords++; }
+        else if (businessId && rowId === businessId && idSource === 'config') { module.confirmed++; confirmedRecords++; }
+        else if (businessId && rowId === businessId) { module.legacy++; inferredRecords++; }
+        else { module.otherBusiness++; foreignRecords++; }
+
+        const reference = rowReference(row, index);
+        if (!rowId || rowId === LEGACY_BUSINESS_ID || rowId === businessId && idSource !== 'config') {
+          if (module.legacyReferences.length < 2000) module.legacyReferences.push({ id: reference, identity: rowId === LEGACY_BUSINESS_ID ? 'shared' : rowId ? 'inferred' : 'missing' });
+        } else if (rowId !== businessId && module.otherBusinessReferences.length < 2000) {
+          module.otherBusinessReferences.push({ id: reference, businessId: safeReference(rowId, '[identificador]') });
+        }
+
+        const rowIdKey = row?.id === undefined || row?.id === null ? '' : String(row.id);
+        if (rowIdKey) {
+          const count = seen.get(rowIdKey) || 0;
+          seen.set(rowIdKey, count + 1);
+          if (count) {
+            module.duplicateIds++; duplicateIds++;
+            if (module.duplicateReferences.length < 2000) module.duplicateReferences.push({ id: safeReference(rowIdKey, '[referencia]'), duplicate: count + 1 });
+          }
+        }
+      });
+      if (module.legacyReferences.length === 2000) module.legacyReferencesTruncated = true;
+      if (module.otherBusinessReferences.length === 2000) module.otherBusinessReferencesTruncated = true;
+      if (module.duplicateReferences.length === 2000) module.duplicateReferencesTruncated = true;
+    }
+    const referenceIssues = referenceIssuesOf(tables);
+    return {
+      identityStatus: idSource === 'config' ? 'PERSISTENT' : idSource === 'inferred' ? 'INFERRED' : 'MISSING',
+      counts: { confirmed: confirmedRecords, legacy: sharedIdRecords + missingIdRecords + inferredRecords, missingId: missingIdRecords, sharedId: sharedIdRecords, inferred: inferredRecords, otherBusiness: foreignRecords, duplicateIds, referenceIssues: referenceIssues.length },
+      byModule, referenceIssues: referenceIssues.slice(0, 2000), referenceIssuesTruncated: referenceIssues.length > 2000,
+      otherBusinessRows: Object.values(foreignRows).reduce((sum, rows) => sum + rows.length, 0)
+    };
   }
 
   async function readOnlySnapshot(identity) {
@@ -94,14 +195,20 @@
       else if (!businessId && ids.size > 1) idSource = 'ambiguous';
 
       const scopedTables = Object.fromEntries(STORE_NAMES.map(name => [name, []]));
+      const foreignRows = Object.fromEntries(STORE_NAMES.map(name => [name, []]));
       let legacyRecords = 0, excludedRecords = 0;
       for (const name of STORE_NAMES) for (const row of tables[name]) {
         const rowId = businessIdOf(row);
         if (!rowId || rowId === LEGACY_BUSINESS_ID) { scopedTables[name].push(row); legacyRecords++; }
         else if (businessId && rowId === businessId) scopedTables[name].push(row);
-        else excludedRecords++;
+        else { excludedRecords++; foreignRows[name].push(row); }
       }
-      return { tables: scopedTables, businessId, idSource, idsFound: ids.size, legacyRecords, excludedRecords };
+      const identityReview = buildIdentityReview(tables, businessId, idSource, foreignRows);
+      return {
+        tables: scopedTables, businessId, idSource, idsFound: ids.size, legacyRecords, excludedRecords,
+        identityReview, unconfirmedRecords: identityReview.counts.inferred,
+        missingStores: STORE_NAMES.filter(name => !names.has(name))
+      };
     } finally {
       db.close();
     }
@@ -114,9 +221,18 @@
     const clean = {};
     for (const [key, nested] of Object.entries(value)) {
       const normalizedKey = normalizeFieldName(key);
-      const credentialLike = /(password|passwd|token|secret|credential|username|userid|useragent)/.test(normalizedKey);
+      const credentialLike = /(password|passwd|token|secret|credential|username|userid|useragent|privatekey|signingkey|encryptionkey)/.test(normalizedKey);
       const authKeyLike = /^(auth|login|private|public|signing|encryption)key(?:id|value)?$/.test(normalizedKey);
-      if (SAFE_RELATION_KEYS.has(normalizedKey) || (!SENSITIVE_KEYS.has(normalizedKey) && !credentialLike && !authKeyLike && !SENSITIVE_FIELD_PATTERN.test(normalizedKey))) clean[key] = scrub(nested);
+      const accountId = /^(user|usuario|vendedor|cajero|cashier|seller)(id|_id)$/.test(normalizedKey);
+      if (SAFE_RELATION_KEYS.has(normalizedKey) || (!SENSITIVE_KEYS.has(normalizedKey) && !credentialLike && !authKeyLike && !accountId)) {
+        if (typeof nested === 'string' && ['data', 'payload', 'detalle', 'details'].includes(normalizedKey)) {
+          const trimmed = nested.trim();
+          if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            try { clean[key] = JSON.stringify(scrub(JSON.parse(trimmed))); continue; } catch { /* preserve non-JSON business text */ }
+          }
+        }
+        clean[key] = scrub(nested);
+      }
     }
     return clean;
   }
@@ -137,7 +253,11 @@
       purchases: tables.purchases.length,
       cashSessions: tables.cajaSessions.length,
       inventoryMovements: tables.inventory_movements.length,
-      abonos: tables.abonos.length
+      abonos: tables.abonos.length,
+      expenses: tables.gastos.length,
+      auditLogs: tables.audit_logs.length,
+      saleOrders: tables.saleOrders.length,
+      syncQueue: tables.sync_queue.length
     };
     const warningCounts = {
       PRODUCTS_WITHOUT_CODE: products.filter(item => !norm(item.barcode ?? item.codigo ?? item.code)).length,
@@ -162,34 +282,98 @@
 
   function makeWarnings(warningCounts, snapshot) {
     const warnings = WARNING_LABELS.map(([code, label]) => ({ code, label, count: warningCounts[code] }));
-    if (!snapshot.businessId) {
-      warnings.push({
-        code: 'LOCAL_BUSINESS_ID_MISSING',
-        label: 'No se pudo confirmar un ID local exclusivo',
-        count: snapshot.legacyRecords,
-        detail: 'Se incluyen los registros heredados o con el ID fijo compartido para conservarlos; podrían abarcar datos guardados con nombres anteriores.'
-      });
-    } else if (snapshot.legacyRecords) {
-      warnings.push({
-        code: 'LEGACY_RECORDS_INCLUDED',
-        label: 'Registros heredados incluidos',
-        count: snapshot.legacyRecords,
-        detail: 'Los registros sin ID local o con el ID fijo anterior se incluyen para no excluir datos existentes.'
-      });
-    }
+    if (snapshot.missingStores.length) warnings.push({
+      code: 'LOCAL_STORES_NOT_PRESENT', label: 'Tiendas locales no encontradas', count: snapshot.missingStores.length,
+      detail: 'No se detectaron: ' + snapshot.missingStores.join(', ') + '. Verifica que esta instalación haya abierto el negocio local con la versión actual antes de exportar.'
+    });
+    if (snapshot.tables.sync_queue.length) warnings.push({
+      code: 'LOCAL_QUEUE_REQUIRES_REVIEW', label: 'Operaciones locales pendientes de revisión', count: snapshot.tables.sync_queue.length,
+      detail: 'La cola se conserva como referencia y nunca se ejecuta automáticamente para evitar duplicar ventas, pagos o movimientos.'
+    });
+    const pendingOrders = snapshot.tables.saleOrders.filter(item => item.status === 'PENDING').length;
+    if (pendingOrders) warnings.push({
+      code: 'PENDING_ORDERS_PRESERVED', label: 'Órdenes pendientes preservadas', count: pendingOrders,
+      detail: 'Las órdenes se conservarán como pendientes; no se convertirán en ventas ni se cobrarán automáticamente.'
+    });
+    if (!snapshot.businessId) warnings.push({
+      code: 'LOCAL_BUSINESS_ID_MISSING', label: 'No se pudo confirmar un ID local exclusivo',
+      count: snapshot.identityReview.counts.legacy,
+      detail: 'El paquete conserva los registros antiguos, pero no se usará el nombre del negocio para afirmar que todos pertenecen a la misma empresa.'
+    });
+    if (snapshot.idSource === 'inferred') warnings.push({
+      code: 'LOCAL_BUSINESS_ID_INFERRED', label: 'Identidad encontrada en los registros, por confirmar',
+      count: snapshot.identityReview.counts.inferred,
+      detail: 'El identificador no estaba guardado en la configuración de la instalación. Estos registros no se consideran confirmados.'
+    });
+    if (snapshot.identityReview.counts.legacy) warnings.push({
+      code: 'LEGACY_RECORDS_INCLUDED', label: 'Registros antiguos por confirmar',
+      count: snapshot.identityReview.counts.legacy,
+      detail: 'No se modificaron ni reasignaron. Su pertenencia debe revisarse con las referencias de cada módulo antes de incluirlos en una migración operativa.'
+    });
     if (snapshot.excludedRecords) warnings.push({
-      code: 'OTHER_BUSINESS_RECORDS_EXCLUDED',
-      label: 'Registros con otros business_id excluidos',
+      code: 'OTHER_BUSINESS_RECORDS_EXCLUDED', label: 'Registros asociados a otra identidad excluidos',
       count: snapshot.excludedRecords,
-      detail: 'Estos registros no coinciden con el ID local seleccionado para este paquete.'
+      detail: 'Se muestran sus referencias para que se exporten o revisen por separado. No se mezclarán en este paquete.'
+    });
+    if (snapshot.identityReview.counts.duplicateIds) warnings.push({
+      code: 'DUPLICATE_LOCAL_REFERENCES', label: 'Referencias locales repetidas', count: snapshot.identityReview.counts.duplicateIds,
+      detail: 'Los registros repetidos se conservan en el archivo, pero sus relaciones deben revisarse antes de importarlos.'
+    });
+    if (snapshot.identityReview.counts.referenceIssues) warnings.push({
+      code: 'INCONSISTENT_LOCAL_REFERENCES', label: 'Relaciones que requieren revisión', count: snapshot.identityReview.counts.referenceIssues,
+      detail: 'Hay referencias a registros no encontrados o asociados a otra identidad. No se corregirán automáticamente.'
     });
     return warnings;
+  }
+
+  function renderIdentityReview(review) {
+    const container = el('migrationExportIdentityReview');
+    if (!container) return;
+    container.replaceChildren();
+    const counts = review.counts;
+    const summary = document.createElement('p');
+    summary.textContent = `${countText(counts.confirmed)} registros con identidad estable; ${countText(counts.legacy)} antiguos por revisar; ${countText(counts.otherBusiness)} asociados a otra identidad; ${countText(counts.duplicateIds)} referencias repetidas; ${countText(counts.referenceIssues)} relaciones por revisar.`;
+    container.append(summary);
+    const modules = Object.entries(review.byModule).filter(([, value]) => value.legacy || value.otherBusiness || value.duplicateIds || value.referenceIssues);
+    for (const [, value] of modules) {
+      const details = document.createElement('details');
+      const heading = document.createElement('summary');
+      heading.textContent = `${value.label}: ${countText(value.legacy)} antiguos, ${countText(value.otherBusiness)} de otra identidad, ${countText(value.duplicateIds)} repetidos`;
+      details.append(heading);
+      const list = document.createElement('ul');
+      for (const row of value.legacyReferences) {
+        const item = document.createElement('li');
+        item.textContent = `Referencia ${row.id} · ${row.identity === 'shared' ? 'ID compartido' : row.identity === 'inferred' ? 'ID encontrado en los datos, no guardado en la configuración' : 'sin ID de negocio'}`;
+        list.append(item);
+      }
+      for (const row of value.otherBusinessReferences) {
+        const item = document.createElement('li'); item.textContent = `Referencia ${row.id} · otra identidad: ${row.businessId}`; list.append(item);
+      }
+      for (const row of value.duplicateReferences) {
+        const item = document.createElement('li'); item.textContent = `Referencia repetida ${row.id} · aparición ${row.duplicate}`; list.append(item);
+      }
+      details.append(list);
+      container.append(details);
+    }
+    for (const issue of review.referenceIssues) {
+      const item = document.createElement('p');
+      item.textContent = `${STORE_LABELS[issue.module] || issue.module}: referencia ${issue.record}, campo ${issue.field} → ${issue.target} ${issue.value} (${issue.issue === 'CROSS_BUSINESS_REFERENCE' ? 'otra identidad' : 'no encontrada'}).`;
+      container.append(item);
+    }
+    if (review.referenceIssuesTruncated) {
+      const note = document.createElement('p'); note.textContent = 'La lista de relaciones supera el límite de detalle; los conteos incluyen todas.'; container.append(note);
+    }
+    if (review.otherBusinessRows) {
+      const note = document.createElement('p'); note.textContent = 'Los registros asociados a otra identidad se excluyeron del contenido operativo del paquete y solo se muestran aquí mediante sus referencias.'; container.append(note);
+    }
+    container.classList.toggle('hidden', counts.legacy + counts.otherBusiness + counts.duplicateIds + counts.referenceIssues === 0);
   }
 
   function renderCounts(summary) {
     const labels = [
       ['Productos', summary.products], ['Clientes', summary.clients], ['Proveedores', summary.suppliers], ['Ventas', summary.sales],
-      ['Compras', summary.purchases], ['Caja', summary.cashSessions], ['Inventario', summary.inventoryMovements], ['Abonos', summary.abonos]
+      ['Compras', summary.purchases], ['Caja', summary.cashSessions], ['Inventario', summary.inventoryMovements], ['Abonos', summary.abonos],
+      ['Gastos', summary.expenses], ['Auditoría', summary.auditLogs], ['Órdenes', summary.saleOrders], ['Cola pendiente', summary.syncQueue]
     ];
     const list = el('migrationExportCounts');
     list.replaceChildren(...labels.map(([label, count]) => {
@@ -263,10 +447,13 @@
       const name = fileName(identity.business.name);
       const value = {
         type: 'pos_local_migration_package',
-        version: 1,
+        version: 2,
         exportedAt,
-        source: { mode: 'local', database: DB_NAME },
-        business: { name: identity.business.name, currency: identity.business.currency },
+        source: {
+          mode: 'local', database: DB_NAME,
+          scope: { localBusinessId: snapshot.businessId || null, idSource: snapshot.idSource, idsFound: snapshot.idsFound, legacyRecords: snapshot.legacyRecords, unconfirmedRecords: snapshot.unconfirmedRecords, excludedRecords: snapshot.excludedRecords, identityReview: snapshot.identityReview, missingStores: snapshot.missingStores }
+        },
+        business: { name: identity.business.name, currency: identity.business.currency, ...(snapshot.businessId ? { localBusinessId: snapshot.businessId } : {}) },
         summary: report.summary,
         warnings,
         data: {
@@ -278,15 +465,20 @@
           cashSessions: cleanTables.cajaSessions,
           inventoryMovements: cleanTables.inventory_movements,
           abonos: cleanTables.abonos,
-          configuration: identity.business,
+          expenses: cleanTables.gastos,
+          auditLogs: cleanTables.audit_logs,
+          saleOrders: cleanTables.saleOrders,
+          syncQueue: cleanTables.sync_queue,
+          configuration: scrub(identity.business),
           categories: categoryList
         }
       };
       packageData = { value, fileName: name };
       renderCounts(report.summary);
       renderWarnings(warnings);
+      renderIdentityReview(snapshot.identityReview);
       const idNote = snapshot.businessId
-        ? (snapshot.idSource === 'inferred' ? 'Se usó el único business_id encontrado en los registros.' : 'Se usó el ID local guardado en la configuración.')
+        ? (snapshot.idSource === 'inferred' ? 'Se encontró un único identificador en los registros, pero no estaba guardado en la configuración; esos registros aún requieren confirmación.' : 'Se usó el identificador persistente de esta instalación.')
         : 'No hay ID local por negocio; el paquete incluye el grupo heredado de POS_OfflineDB y podría contener datos guardados con nombres anteriores.';
       el('migrationExportScope').textContent = idNote + (snapshot.excludedRecords ? ' Se excluyeron ' + countText(snapshot.excludedRecords) + ' registros con otros business_id.' : '') + ' La lectura no modificó ningún registro.';
       el('migrationExportFilename').textContent = 'Nombre del archivo: ' + name;

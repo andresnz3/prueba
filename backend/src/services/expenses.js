@@ -49,17 +49,19 @@ function createExpenseService({ repo, auth, config }) {
   }
 
   function publicExpense(row) {
-    return { id: String(row.id), businessId: String(row.business_id), category: row.category, description: row.description, receiptReference: row.receipt_reference || '', amount: money(row.amount), paymentMethod: row.payment_method, status: row.status, createdAt: row.created_at, userName: row.user_name, cancelReason: row.cancel_reason || null, cancelledAt: row.cancelled_at || null };
+    return { id: String(row.id), businessId: String(row.business_id), category: row.category, description: row.description, receiptReference: row.receipt_reference || '', amount: money(row.amount), paymentMethod: row.source_method || row.payment_method, status: row.status, createdAt: row.created_at, userName: row.source_actor || row.user_name, isHistorical: Boolean(row.is_historical), sourceCancelledBy: row.source_cancelled_by || null, cancelReason: row.cancel_reason || null, cancelledAt: row.cancelled_at || null };
   }
 
   const list = (session, options) => work(session, async (db, current) => {
     const pattern = options.q ? '%' + options.q.replace(/[\\%_]/g, '\\$&') + '%' : null;
+    const [historyColumn] = await repo.rows(db, "SELECT 1 AS present FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='expenses' AND COLUMN_NAME='is_historical'", []);
+    const historical = historyColumn ? 'COALESCE(is_historical,FALSE)' : 'FALSE';
     const [rows, totals, today] = await Promise.all([
       repo.rows(db, 'SELECT e.*, u.full_name AS user_name FROM expenses e JOIN users u ON u.business_id=e.business_id AND u.id=e.user_id WHERE e.business_id=? AND (? IS NULL OR e.category LIKE ? OR e.description LIKE ? OR COALESCE(e.receipt_reference, \'\') LIKE ?) ORDER BY e.created_at DESC,e.id DESC LIMIT ? OFFSET ?', [current.business_id, pattern, pattern, pattern, pattern, options.limit, options.offset]),
-      repo.rows(db, "SELECT COUNT(*) AS count, COALESCE(SUM(CASE WHEN status='POSTED' THEN amount ELSE 0.00 END),0.00) AS total FROM expenses WHERE business_id=?", [current.business_id]),
-      repo.rows(db, "SELECT COALESCE(SUM(amount),0.00) AS total FROM expenses WHERE business_id=? AND status='POSTED' AND created_at >= UTC_DATE() AND created_at < UTC_DATE()+INTERVAL 1 DAY", [current.business_id])
+      repo.rows(db, 'SELECT COUNT(*) AS count, COALESCE(SUM(CASE WHEN status=\'POSTED\' AND NOT (' + historical + ') THEN amount ELSE 0.00 END),0.00) AS total, SUM(' + historical + ') AS historicalCount, COALESCE(SUM(CASE WHEN status=\'POSTED\' AND ' + historical + ' THEN amount ELSE 0.00 END),0.00) AS historicalTotal FROM expenses WHERE business_id=?', [current.business_id]),
+      repo.rows(db, 'SELECT COALESCE(SUM(amount),0.00) AS total FROM expenses WHERE business_id=? AND status=\'POSTED\' AND NOT (' + historical + ') AND created_at >= UTC_DATE() AND created_at < UTC_DATE()+INTERVAL 1 DAY', [current.business_id])
     ]);
-    return { expenses: rows.map(publicExpense), summary: { businessId: String(current.business_id), count: Number(totals[0]?.count || 0), total: money(totals[0]?.total), today: money(today[0]?.total) } };
+    return { expenses: rows.map(publicExpense), summary: { businessId: String(current.business_id), count: Number(totals[0]?.count || 0), total: money(totals[0]?.total), today: money(today[0]?.total), historicalCount: Number(totals[0]?.historicalCount || 0), historicalTotal: money(totals[0]?.historicalTotal) } };
   });
 
   const create = (session, data) => work(session, (db, current) => once(db, current, 'EXPENSE', data, async () => {
@@ -80,6 +82,7 @@ function createExpenseService({ repo, auth, config }) {
   const cancel = (session, id, data) => work(session, (db, current) => once(db, current, 'CANCEL_EXPENSE', { expenseId: id, ...data }, async () => {
     const [expense] = await repo.rows(db, 'SELECT * FROM expenses WHERE business_id=? AND id=? FOR UPDATE', [current.business_id, id]);
     if (!expense) throw httpError(404, 'EXPENSE_NOT_FOUND');
+    if (Number(expense.is_historical) === 1) throw httpError(409, 'HISTORICAL_EXPENSE_READ_ONLY');
     if (expense.status !== 'POSTED') throw httpError(409, 'EXPENSE_CANCELLED');
     let movement = null;
     if (expense.payment_method === 'CASH') {

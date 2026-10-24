@@ -6,6 +6,8 @@ const { monitorRequests } = require("./browser-diagnostics.cjs");
 const browserErrors = new WeakMap();
 
 test.beforeEach(async ({ page }) => {
+  // Keep the explicit workbook fixture from being overwritten by the CDN.
+  await page.route("**/xlsx@*/**", route => route.abort());
   await page.addInitScript({ path: require.resolve("./dexie-search-shim.js") });
   await page.addInitScript(() => {
     const column = index => { let value = index + 1, result = ""; while (value) { value -= 1; result = String.fromCharCode(65 + value % 26) + result; value = Math.floor(value / 26); } return result; };

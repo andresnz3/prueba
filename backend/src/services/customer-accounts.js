@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 const { createHash } = require('node:crypto');
 const { httpError } = require('../middleware/errors');
 const { units, fixed } = require('./inventory-values');
@@ -114,8 +114,8 @@ function createCustomerService({ repo, auth, config }) {
     if (!client) throw httpError(404, 'CLIENT_NOT_FOUND');
     const invoiceQuery = receivableQuery.replace(' AND (? IS NULL OR c.name LIKE ? OR s.invoice_number LIKE ? OR CAST(c.id AS CHAR) LIKE ?)', ' AND s.client_id = ?').replace(' LIMIT ? OFFSET ?', '');
     const invoices = (await repo.rows(db, invoiceQuery, [current.business_id, id])).map(formatReceivable);
-    const payments = await repo.rows(db, 'SELECT p.id, p.sale_id, p.amount, p.payment_method, p.status, p.created_at, s.invoice_number, u.full_name AS user_name FROM customer_payments p JOIN sales s ON s.business_id = p.business_id AND s.id = p.sale_id JOIN users u ON u.business_id = p.business_id AND u.id = p.user_id WHERE p.business_id = ? AND p.client_id = ? ORDER BY p.id DESC LIMIT ? OFFSET ?', [current.business_id, id, options.limit, options.offset]);
-    return { client: publicClient(client, current.business_id), invoices, payments: payments.map(item => ({ id: String(item.id), saleId: String(item.sale_id), invoiceNumber: item.invoice_number, amount: item.amount, paymentMethod: item.payment_method, status: item.status, createdAt: item.created_at, userName: item.user_name })) };
+    const payments = await repo.rows(db, 'SELECT p.*, z.full_name AS cancelled_by_name, s.invoice_number, u.full_name AS user_name FROM customer_payments p JOIN sales s ON s.business_id = p.business_id AND s.id = p.sale_id JOIN users u ON u.business_id = p.business_id AND u.id = p.user_id LEFT JOIN users z ON z.business_id=p.business_id AND z.id=p.cancelled_by WHERE p.business_id = ? AND p.client_id = ? ORDER BY p.id DESC LIMIT ? OFFSET ?', [current.business_id, id, options.limit, options.offset]);
+    return { client: publicClient(client, current.business_id), invoices, payments: payments.map(item => ({ id: String(item.id), saleId: String(item.sale_id), invoiceNumber: item.invoice_number, amount: item.amount, paymentMethod: item.payment_method, status: item.status, createdAt: item.created_at, userName: item.user_name, cancelReason: item.cancel_reason, cancelledAt: item.cancelled_at, cancelledByName: item.cancelled_by_name, isHistorical: Number(item.is_historical) === 1 })) };
   });
   const pay = (session, saleId, data) => work(session, 'cash', (db, current) => once(db, current, 'CUSTOMER_PAYMENT', { saleId, ...data }, async () => {
     const [cash] = await repo.rows(db, "SELECT * FROM cash_sessions WHERE business_id = ? AND status = 'OPEN' ORDER BY id DESC LIMIT 1 FOR UPDATE", [current.business_id]);

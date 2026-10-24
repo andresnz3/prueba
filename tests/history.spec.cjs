@@ -1,4 +1,4 @@
-/* global localDB, salesHistory, products */
+/* global localDB, salesHistory, products, actualizarTablaHistorial */
 const { test, expect } = require("@playwright/test");
 const { openCash } = require("./cash-fixture.cjs");
 const { monitorRequests } = require("./browser-diagnostics.cjs");
@@ -97,6 +97,7 @@ test("Historial muestra ventas, detalles, auditoría y anulaciones sin duplicar 
 
   const today = await page.evaluate(() => new Date().toLocaleDateString());
   await expect(saleRow).toContainText(today);
+  await expect(saleRow.getByRole("button", { name: "Anular" })).toBeVisible();
   const saleAuditRow = page.locator("#auditTableBody tr").filter({
     hasText: "NUEVA_VENTA"
   });
@@ -150,6 +151,41 @@ test("Historial muestra ventas, detalles, auditoría y anulaciones sin duplicar 
     hasText: "HISTORY-SALE-001"
   });
   await expect(productRow.locator("td").nth(3)).toContainText("8");
+});
+
+test("Historial y Factura muestran número y origen local para una venta histórica", async ({ page }) => {
+  await iniciarSesion(page);
+  const barcode = "HISTORY-RENDER-" + Date.now();
+  const productName = "Producto factura histórica";
+  await crearProductoDesdeUI(page, barcode, productName);
+  await openCash(page);
+  await agregarVenta(page, barcode, "card");
+  await expect(page.locator("#ticketModal")).toBeVisible();
+  await page.locator("#newSaleBtn").click();
+  await abrirHistorial(page);
+
+  await page.evaluate((name) => {
+    const sale = salesHistory.find(value => value.items?.some(item => item.name === name));
+    if (!sale) throw new Error("No se encontró la venta de prueba.");
+    Object.assign(sale, {
+      numero: "MIG-000027-a1b2c3d4e5f6",
+      numeroVisual: "000027",
+      historicaConectada: true,
+      origenHistorico: "Paquete Histórico Visual"
+    });
+    actualizarTablaHistorial();
+  }, productName);
+
+  const row = page.locator("#historyTableBody tr").filter({ hasText: "Paquete Histórico Visual" });
+  await expect(row).toContainText("#000027");
+  await expect(row).toContainText("Histórica");
+  await expect(row).not.toContainText("MIG-000027");
+  await expect(row.getByRole("button", { name: "Anular" })).toHaveCount(0);
+  await row.getByRole("button", { name: "Ver Factura" }).click();
+  await expect(page.locator("#ticketContent")).toContainText("#000027");
+  await expect(page.locator("#ticketContent")).toContainText("Histórica");
+  await expect(page.locator("#ticketContent")).toContainText("Paquete Histórico Visual");
+  await expect(page.locator("#ticketContent")).not.toContainText("MIG-000027");
 });
 
 test("devolución local de una venta anterior usa la caja abierta y conserva el cierre original", async ({ page }) => {
@@ -325,7 +361,7 @@ test("Historial muestra la auditoría de movimientos de Caja y abonos de crédit
   const clientRow = page.locator("#clientsTableBody tr").filter({
     hasText: "Cliente Historial Crédito"
   });
-  const clientId = (await clientRow.locator("td").first().innerText()).split("\n")[0];
+  const clientId = await clientRow.getAttribute("data-client-id");
 
   await page.locator("#navSalesBtn").click();
   await page.locator('input[name="paymentMethod"][value="credit"]').check();

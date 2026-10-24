@@ -90,4 +90,5 @@
     close() {}
   }
   window.Dexie = MemoryDexie;
+  window.Dexie.__databases = databases;
 })();

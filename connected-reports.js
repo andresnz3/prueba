@@ -35,8 +35,22 @@
   const paymentLabel = value => ({ CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia', CREDIT: 'Crédito', OTHER: 'Otro' })[value] || value || '—';
   const movementLabel = value => ({ SALE: 'Venta', CUSTOMER_PAYMENT: 'Abono de cliente', REVERSAL: 'Devolución', MANUAL_ENTRY: 'Entrada manual', MANUAL_EXIT: 'Salida manual', EXPENSE: 'Gasto', SUPPLIER_PAYMENT: 'Pago a proveedor' })[value] || value || 'Movimiento';
   const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', CONFIRMED: 'Confirmado', PENDING: 'Pendiente', VOID: 'Anulado', POSTED: 'Registrado' })[value] || value || '—';
+  const saleStatusLabel = row => row.isHistorical ? 'Histórica · ' + statusLabel(row.status) : statusLabel(row.status);
   const setText = (id, value) => { const node = el(id); if (node) node.textContent = value; };
   let report = null, requestId = 0;
+  function businessIdentitySheet() {
+    const identity = window.PosRuntime?.businessIdentity?.();
+    if (!identity) return null;
+    return {
+      name: 'Negocio',
+      rows: [
+        ['Dato', 'Valor'], ['Nombre comercial', identity.name], ['Razón social', identity.legalName],
+        ['RUC', identity.ruc], ['Dirección', identity.address], ['Teléfono', identity.phone],
+        ['Moneda', identity.currency], ['Encabezado del comprobante', identity.ticketHeader],
+        ['Pie del comprobante', identity.ticketFooter]
+      ]
+    };
+  }
 
   function placeholder(bodyId, columns, message) {
     const body = el(bodyId);
@@ -87,9 +101,12 @@
   function render(data) {
     if (!data) { renderPending(); return; }
     report = data;
+    el('exportReportsAllBtn')?.classList.remove('hidden');
     el('connectedReportScope')?.classList.add('hidden');
     el('repGastosPending')?.classList.add('hidden');
-    for (const node of document.querySelectorAll('#reportesView .connected-report-only')) node.classList.add('hidden');
+    // Keep connected detail tables usable; only the duplicate legacy export
+    // buttons stay hidden because the shared buttons have connected handlers.
+    for (const node of document.querySelectorAll('#reportesView .connected-report-only')) node.classList.toggle('hidden', node.matches('button'));
     const labels = { repCompras: 'Compras' };
     for (const [id, label] of Object.entries(labels)) {
       const card = el(id)?.closest('.summary-card');
@@ -118,18 +135,18 @@
     setRows('repVentasMetodoBody', 3, data.sales.paymentMethods, row => `<tr><td>${esc(paymentLabel(row.method))}</td><td>${row.count}</td><td>${money(row.total)}</td></tr>`, 'Sin ventas para el período seleccionado.');
     setRows('repTopProductosBody', 3, data.sales.topProducts, row => `<tr><td>${esc(row.name)}</td><td>${Number(row.quantity).toFixed(3)}</td><td>${money(row.total)}</td></tr>`, 'Sin productos vendidos en el período seleccionado.');
     setRows('repVendedoresBody', 7, data.sales.sellers, row => `<tr><td><strong>${esc(row.seller)}</strong></td><td>${row.count}</td><td>${money(row.cash)}</td><td>${money(row.card)}</td><td>${money(row.transfer)}</td><td>${money(row.credit)}</td><td>${money(row.total)}</td></tr>`, 'Sin ventas para el período seleccionado.');
-    setRows('repVentasHistorialBody', 6, data.sales.history, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.invoiceNumber)}</td><td>${esc(row.seller)}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${money(row.total)}</td><td>${esc(statusLabel(row.status))}</td></tr>`, 'Sin ventas para el período seleccionado.');
-    const historyNote = data.sales.historyLimited ? `Hay ${data.sales.historyCount} facturas en el período. El historial muestra las 1,000 más recientes; las sumas excluyen anulaciones.` : `El historial incluye ${data.sales.historyCount} facturas del período; las sumas excluyen anulaciones.`;
+    setRows('repVentasHistorialBody', 6, data.sales.history, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.invoiceNumber)}</td><td>${esc(row.seller)}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${money(row.total)}</td><td>${esc(saleStatusLabel(row))}</td></tr>`, 'Sin ventas para el período seleccionado.');
+    const historyNote = data.sales.historyLimited ? `Hay ${data.sales.historyCount} facturas en el período. Se muestran las 1,000 más recientes. Las ventas completadas, incluidas las importadas, forman parte de los indicadores; las anuladas no suman.` : `El historial conserva ${data.sales.historyCount} facturas. Las ventas completadas, incluidas las importadas, forman parte de los indicadores; las anuladas no suman.`;
     setText('repVentasHistoryNote', historyNote);
     setRows('repCajaMetodosBody', 3, data.sales.paymentMethods, row => `<tr><td>${esc(paymentLabel(row.method))}</td><td>${row.count}</td><td>${money(row.total)}</td></tr>`, 'Sin ventas para el período seleccionado.');
-    setRows('repCajaMovimientosBody', 6, data.cash.movements, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(movementLabel(row.type))}${row.supplierName ? `<br><small>${esc(row.supplierName)}${row.purchaseNumber || row.invoiceNumber ? ' · ' + esc(row.purchaseNumber || row.invoiceNumber) : ''}${row.supplierInvoiceNumber ? ' · Factura proveedor ' + esc(row.supplierInvoiceNumber) : ''}</small>` : ''}</td><td>${row.direction === 'IN' ? 'Entrada' : 'Salida'}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td></tr>`, 'Sin movimientos para el período seleccionado.');
+    setRows('repCajaMovimientosBody', 6, data.cash.movements, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(movementLabel(row.type))}${row.supplierName ? `<br><small>${esc(row.supplierName)}${row.purchaseNumber || row.invoiceNumber ? ' · ' + esc(row.purchaseNumber || row.invoiceNumber) : ''}${row.supplierInvoiceNumber ? ' · Factura proveedor ' + esc(row.supplierInvoiceNumber) : ''}</small>` : ''}</td><td>${row.direction === 'IN' ? 'Entrada' : 'Salida'}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}${row.confirmedBy ? `<br><small>Conciliado por ${esc(row.confirmedBy)} · ${esc(dateTime(row.confirmedAt))}</small>` : ''}</td><td>${money(row.amount)}</td></tr>`, 'Sin movimientos para el período seleccionado.');
     setRows('repCajaBody', 6, data.cash.closures, row => `<tr data-table-date="${rowDate(row.closedAt)}"><td>${esc(dateTime(row.openedAt))}</td><td>${esc(dateTime(row.closedAt))}</td><td>${esc(row.closedBy)}</td><td>${money(row.expectedAmount)}</td><td>${money(row.countedAmount)}</td><td>${money(row.difference)}</td></tr>`, 'Sin cierres de caja en el período seleccionado.');
     setRows('repInventarioBody', 5, data.inventory.products, row => `<tr><td>${esc(row.name)}</td><td>${Number(row.stock).toFixed(3)}</td><td>${money(row.cost)}</td><td>${money(row.value)}</td><td>${esc(row.status)}</td></tr>`, 'Sin productos disponibles.');
     setRows('repCxCBody', 4, data.receivables.clients, row => `<tr><td><strong>${esc(row.clientName)}</strong></td><td>${money(row.creditLimit)}</td><td>${money(row.balance)}</td><td>${esc(row.status)}</td></tr>`, 'Sin cuentas por cobrar.');
     setRows('repCxCPagosBody', 6, data.receivables.payments, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.clientName)}</td><td>${esc(row.invoiceNumber || '—')}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td></tr>`, 'Sin abonos para el período seleccionado.');
-    setRows('repComprasBody', 5, data.purchases.history, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(purchaseReference(row))}</td><td>${esc(row.supplierName)}</td><td>${esc(row.purchaseType === 'CREDIT' ? 'Crédito' : 'Contado')}${row.status === 'CANCELLED' ? ' · Anulada' : ''}</td><td>${money(row.total)}</td></tr>`, 'Sin compras para el período seleccionado.');
-    setRows('repSupplierPaymentsBody', 6, data.suppliers.payments, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.supplierName)}</td><td>${esc(purchaseReference(row))}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td></tr>`, 'Sin pagos a proveedores en el período seleccionado.');
-    setRows('repKardexBody', 8, data.inventory.movements, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.type)}</td><td>${esc(row.productName)}</td><td>${Number(row.quantity).toFixed(3)}</td><td>${row.stockAfter === null ? '—' : Number(row.stockAfter).toFixed(3)}</td><td>${row.unitCost === null ? '—' : money(row.unitCost)}</td><td>${esc(row.userName)}</td><td>${esc(row.reason)}</td></tr>`, 'Sin movimientos de inventario para el período seleccionado.');
+    setRows('repComprasBody', 5, data.purchases.history, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(purchaseReference(row))}</td><td>${esc(row.supplierName)}</td><td>${esc(row.purchaseType === 'CREDIT' ? 'Crédito' : 'Contado')}${row.isHistorical ? ' · Histórica · sin saldo operativo' : ''}${row.status === 'CANCELLED' ? ' · Anulada' : ''}</td><td>${money(row.total)}</td></tr>`, 'Sin compras para el período seleccionado.');
+    setRows('repSupplierPaymentsBody', 6, data.suppliers.payments, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.supplierName)}</td><td>${esc(purchaseReference(row))}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}${row.confirmedBy ? `<br><small>Conciliado por ${esc(row.confirmedBy)} · ${esc(dateTime(row.confirmedAt))}</small>` : ''}</td><td>${money(row.amount)}</td></tr>`, 'Sin pagos a proveedores en el período seleccionado.');
+    setRows('repKardexBody', 8, data.inventory.movements, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.type)}${row.historicalEvent ? ' · Evento histórico' : ''}</td><td>${esc(row.productName)}</td><td>${Number(row.quantity).toFixed(3)}</td><td>${row.stockAfter === null ? '—' : Number(row.stockAfter).toFixed(3)}</td><td>${row.unitCost === null ? '—' : money(row.unitCost)}</td><td>${esc(row.userName)}</td><td>${esc(row.reason)}</td></tr>`, 'Sin movimientos de inventario para el período seleccionado.');
     setRows('repGastosCategoriaBody', 3, data.expenses.byCategory, row => `<tr><td>${esc(row.category)}</td><td>${row.count}</td><td>${money(row.total)}</td></tr>`, 'Sin gastos para el período seleccionado.');
     setRows('repGastosHistoryBody', 8, data.expenses.history, row => `<tr data-table-date="${rowDate(row.createdAt)}"><td>${esc(dateTime(row.createdAt))}</td><td>${esc(row.category)}</td><td>${esc(row.description)}</td><td>${esc(row.receiptReference || '—')}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td><td>${esc(row.userName)}</td></tr>`, 'Sin gastos para el período seleccionado.');
     setText('connectedReportPayablesSummary', `${data.payables.invoices.length} facturas · deuda actual por pagar: ${money(data.payables.balance)} · pagos pendientes de confirmar: ${money(data.payables.pendingPayments)}.`);
@@ -174,17 +191,17 @@
   function exportExcel(scope = 'all') {
     if (!report) { window.showAlert?.('Espera a que termine de cargar el reporte conectado para exportar.'); return false; }
     const rows = report;
-    const scopedSheets = scope === 'sales' ? [
-      { name: 'Ventas por método', rows: [['Método', '# Ventas', 'Total'], ...rows.sales.paymentMethods.map(row => [paymentLabel(row.method), Number(row.count), Number(row.total)])] },
-      { name: 'Productos más vendidos', rows: [['Producto', 'Cantidad vendida', 'Total generado'], ...rows.sales.topProducts.map(row => [row.name, Number(row.quantity), Number(row.total)])] }
-    ] : scope === 'sellers' ? [
-      { name: 'Vendedores', rows: [['Vendedor', '# Ventas', 'Efectivo', 'Tarjeta', 'Transferencia', 'Crédito', 'Total'], ...rows.sales.sellers.map(row => [row.seller, Number(row.count), Number(row.cash), Number(row.card), Number(row.transfer), Number(row.credit), Number(row.total)])] }
-    ] : null;
-    if (scopedSheets) return Boolean(window.PosTables?.exportWorkbookToXlsx(scopedSheets, { fileName: scope === 'sales' ? 'ventas_conectadas' : 'vendedores_conectados' }));
+    if (scope === 'sales' || scope === 'sellers') {
+      const bodyIds = scope === 'sales' ? ['repVentasMetodoBody', 'repTopProductosBody', 'repVentasHistorialBody'] : ['repVendedoresBody'];
+      const history = el('repVentasHistorialBody');
+      const hasSales = [...(history?.rows || [])].some(row => !row.hidden && row.cells.length > 1);
+      if (!hasSales) { window.showAlert?.('No hay ventas visibles para exportar.'); return false; }
+      return Boolean(window.PosTables?.exportTablesToXlsx(bodyIds.map(el), { fileName: scope === 'sales' ? 'ventas_conectadas' : 'vendedores_conectados', leadingSheet: businessIdentitySheet() }));
+    }
     const sheets = [
       { name: 'Resumen', rows: [['Indicador', 'Valor'], ['Ventas', Number(rows.sales.total)], ['Costo vendido', Number(rows.sales.cost)], ['Utilidad bruta', Number(rows.sales.grossProfit)], ['Gastos', Number(rows.expenses.total)], ['Utilidad neta', Number(rows.sales.netProfit)], ['Compras del período', Number(rows.purchases.total)], ['Cuentas por pagar actuales', Number(rows.payables.balance)], ['Cuentas por cobrar', Number(rows.receivables.balance)], ['Entradas de caja', Number(rows.cash.periodIn)], ['Salidas de caja', Number(rows.cash.periodOut)], ['Inventario a costo', Number(rows.inventory.stockCostValue)]] },
-      { name: 'Ventas', rows: [['Fecha', 'Factura', 'Vendedor', 'Medio', 'Total', 'Estado'], ...rows.sales.history.map(row => [dateTime(row.createdAt), row.invoiceNumber, row.seller, paymentLabel(row.paymentMethod), Number(row.total), statusLabel(row.status)])] },
-      { name: 'Compras', rows: [['Fecha', 'N° compra interno', 'Factura proveedor', 'Proveedor', 'Condición', 'Estado', 'Total'], ...rows.purchases.history.map(row => [dateTime(row.createdAt), row.purchaseNumber || row.invoiceNumber, row.supplierInvoiceNumber || '', row.supplierName, row.purchaseType === 'CREDIT' ? 'Crédito' : 'Contado', statusLabel(row.status), Number(row.total)])] },
+      { name: 'Ventas', rows: [['Fecha', 'Factura', 'Vendedor', 'Medio', 'Total', 'Estado'], ...rows.sales.history.map(row => [dateTime(row.createdAt), row.invoiceNumber, row.seller, paymentLabel(row.paymentMethod), Number(row.total), saleStatusLabel(row)])] },
+      { name: 'Compras', rows: [['Fecha', 'N° compra interno', 'Factura proveedor', 'Proveedor', 'Condición', 'Estado', 'Total'], ...rows.purchases.history.map(row => [dateTime(row.createdAt), row.purchaseNumber || row.invoiceNumber, row.supplierInvoiceNumber || '', row.supplierName, row.purchaseType === 'CREDIT' ? 'Crédito' : 'Contado', row.isHistorical ? 'Histórica · sin saldo operativo' : statusLabel(row.status), Number(row.total)])] },
       { name: 'Cuentas por pagar', rows: [['N° compra interno', 'Factura proveedor', 'Proveedor', 'Vencimiento', 'Total', 'Abonado', 'Saldo', 'Estado'], ...rows.payables.invoices.map(row => [row.purchaseNumber || row.invoiceNumber, row.supplierInvoiceNumber || '', row.supplierName, row.dueAt ? new Date(row.dueAt).toLocaleDateString('es-NI') : '—', Number(row.total), Number(row.paid), Number(row.balance), statusLabel(row.status)])] },
       { name: 'Pagos proveedores', rows: [['Fecha', 'Proveedor', 'N° compra interno', 'Factura proveedor', 'Medio', 'Estado', 'Monto'], ...rows.suppliers.payments.map(row => [dateTime(row.createdAt), row.supplierName, row.purchaseNumber || row.invoiceNumber || '—', row.supplierInvoiceNumber || '', paymentLabel(row.paymentMethod), statusLabel(row.status), Number(row.amount)])] },
       { name: 'Gastos', rows: [['Fecha', 'Categoría', 'Descripción', 'Comprobante', 'Medio', 'Estado', 'Monto', 'Registrado por'], ...rows.expenses.history.map(row => [dateTime(row.createdAt), row.category, row.description, row.receiptReference || '—', paymentLabel(row.paymentMethod), statusLabel(row.status), Number(row.amount), row.userName])] },
@@ -193,9 +210,9 @@
       { name: 'Abonos CxC', rows: [['Fecha', 'Cliente', 'Factura', 'Medio', 'Estado', 'Monto'], ...rows.receivables.payments.map(row => [dateTime(row.createdAt), row.clientName, row.invoiceNumber || '—', paymentLabel(row.paymentMethod), statusLabel(row.status), Number(row.amount)])] },
       { name: 'Caja', rows: [['Fecha', 'Tipo', 'Dirección', 'Medio', 'Estado', 'Monto'], ...rows.cash.movements.map(row => [dateTime(row.createdAt), movementLabel(row.type) + (row.supplierName ? ' · ' + row.supplierName + (row.purchaseNumber || row.invoiceNumber ? ' · ' + (row.purchaseNumber || row.invoiceNumber) : '') + (row.supplierInvoiceNumber ? ' · Factura proveedor ' + row.supplierInvoiceNumber : '') : ''), row.direction === 'IN' ? 'Entrada' : 'Salida', paymentLabel(row.paymentMethod), statusLabel(row.status), Number(row.amount)])] },
       { name: 'Inventario', rows: [['Producto', 'Stock', 'Costo', 'Valor', 'Estado'], ...rows.inventory.products.map(row => [row.name, Number(row.stock), Number(row.cost), Number(row.value), row.status])] },
-      { name: 'Kardex', rows: [['Fecha', 'Movimiento', 'Producto', 'Cantidad', 'Stock después', 'Costo unitario', 'Usuario', 'Motivo'], ...rows.inventory.movements.map(row => [dateTime(row.createdAt), row.type, row.productName, Number(row.quantity), row.stockAfter === null ? '' : Number(row.stockAfter), row.unitCost === null ? '' : Number(row.unitCost), row.userName, row.reason])] }
+      { name: 'Kardex', rows: [['Fecha', 'Movimiento', 'Producto', 'Cantidad', 'Stock después', 'Costo unitario', 'Usuario', 'Motivo'], ...rows.inventory.movements.map(row => [dateTime(row.createdAt), row.type + (row.historicalEvent ? ' · Evento histórico' : ''), row.productName, Number(row.quantity), row.stockAfter === null ? '' : Number(row.stockAfter), row.unitCost === null ? '' : Number(row.unitCost), row.userName, row.reason])] }
     ];
-    if (!window.PosTables?.exportWorkbookToXlsx(sheets, { fileName: 'reportes_conectados' })) { window.showAlert?.('No se pudo preparar el archivo de Excel.'); return false; }
+    if (!window.PosTables?.exportWorkbookToXlsx(sheets, { fileName: 'reportes_conectados', leadingSheet: businessIdentitySheet() })) { window.showAlert?.('No se pudo preparar el archivo de Excel.'); return false; }
     return true;
   }
   document.addEventListener('connected:report-data-changed', () => {

@@ -1,4 +1,4 @@
-﻿/* global connectedMode, localDB, DEFAULT_BUSINESS_ID, sysConfig, configStorageKey, cart, buyerType, paymentMethod, currentUser, cajaActual, MSG_SIN_CAJA, r2, isAdmin, showAlert, showConfirm, initApp, actualizarCatalogo, actualizarTablaInventario, renderDashboard, renderCajaView, generarVisualizacionTicket, mediosPagoVenta, resetearDescuentoVenta, actualizarCarrito */
+/* global connectedMode, localDB, DEFAULT_BUSINESS_ID, sysConfig, configStorageKey, cart, buyerType, paymentMethod, currentUser, cajaActual, MSG_SIN_CAJA, r2, isAdmin, showAlert, showConfirm, initApp, actualizarCatalogo, actualizarTablaInventario, renderDashboard, renderCajaView, generarVisualizacionTicket, mediosPagoVenta, resetearDescuentoVenta, actualizarCarrito */
 'use strict';
 /* global saleNumber */
 (() => {
@@ -26,7 +26,7 @@
       if (seen.has(String(item.id)) || !Number.isFinite(item.cantidad) || item.cantidad <= 0) fail('Cantidad inválida.');
       seen.add(String(item.id));
       const p = await localDB.products.get(item.id);
-      if (!p || p.business_id !== DEFAULT_BUSINESS_ID || p.deleted || p.active === false) fail('El producto ya no está disponible.');
+    if (!p || !window.PosLocalIdentity.matches(p) || p.deleted || p.active === false) fail('El producto ya no está disponible.');
       if ((p.stock || 0) < item.cantidad) fail('Stock insuficiente de ' + p.name + '. Disponible: ' + (p.stock || 0) + '.');
       const price = Number(input.buyerType === 'retail' ? p.retailPrice || p.retail || 0 : p.wholesalePrice || p.wholesale || 0);
       if (price < 0 || !Number.isFinite(price)) fail('Precio inválido.');
@@ -46,11 +46,11 @@
       let order;
       if (options.orderId) {
         order = await localDB.saleOrders.get(options.orderId);
-        if (!order || order.business_id !== DEFAULT_BUSINESS_ID || order.status !== 'PENDING') fail('La orden ya fue cobrada o cancelada.');
+        if (!order || !window.PosLocalIdentity.matches(order) || order.status !== 'PENDING') fail('La orden ya fue cobrada o cancelada.');
         input = order.input;
       }
       if (flow() !== (order ? 'CENTRALIZED' : 'DIRECT')) fail('El flujo de venta cambió. Revisa la configuración de Caja.');
-      const sessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: 'abierta' }).toArray();
+      const sessions = await window.PosLocalIdentity.cashSessions('abierta');
       if (sessions.length !== 1) fail(MSG_SIN_CAJA);
       const session = sessions[0];
       const calc = await quote(input);
@@ -62,15 +62,15 @@
       let client = null, dueTS = null;
       if (method === 'credit') {
         client = input.clientId ? (await localDB.clients.toArray()).find(c => String(c.id) === String(input.clientId)) : null;
-        if (!client || client.business_id !== DEFAULT_BUSINESS_ID || client.active === false) fail('Selecciona un cliente activo para vender a crédito.');
-        const clientSales = (await localDB.sales.toArray()).filter(s => s.business_id === DEFAULT_BUSINESS_ID && String(s.clienteId) === String(client.id) && s.metodo === 'Crédito' && !s.anulada);
-        const payments = (await localDB.abonos.toArray()).filter(p => p.business_id === DEFAULT_BUSINESS_ID && p.tipo === 'cliente' && !p.anulado);
+        if (!client || !window.PosLocalIdentity.matches(client) || client.active === false) fail('Selecciona un cliente activo para vender a crédito.');
+        const clientSales = (await localDB.sales.toArray()).filter(s => window.PosLocalIdentity.matches(s) && String(s.clienteId) === String(client.id) && s.metodo === 'Crédito' && !s.anulada);
+        const payments = (await localDB.abonos.toArray()).filter(p => window.PosLocalIdentity.matches(p) && p.tipo === 'cliente' && !p.anulado);
         const debt = r2(Number(client.deudaSinFactura || 0) + clientSales.reduce((sum,s) => sum + Math.max(0, r2(s.total - payments.filter(p => String(p.facturaId) === String(s.id)).reduce((v,p) => v + p.monto,0))),0));
         if (r2(debt + calc.total) > Number(client.creditLimit || 0)) fail('El cliente supera el límite de crédito disponible');
         client.debt = r2(debt + calc.total);
         const date = new Date(); date.setDate(date.getDate() + input.creditDays); dueTS = date.getTime();
       }
-      const previous = (await localDB.sales.toArray()).filter(s => s.business_id === DEFAULT_BUSINESS_ID);
+      const previous = (await localDB.sales.toArray()).filter(s => window.PosLocalIdentity.matches(s));
       const numero = Math.max(0, ...previous.map(s => Number(s.numero) || 0)) + 1;
       const id = Date.now() + Math.random(), now = Date.now();
       const sale = { id, business_id: DEFAULT_BUSINESS_ID, numero, fecha: new Date(now).toLocaleString(), fechaTS: now, vendedor: input.seller || currentUser.displayName, cajero: currentUser.displayName, detalle: input.detail || '-', metodo: method === 'credit' ? 'Crédito' : 'Contado', medioPago: method, cliente: client?.name || '-', clienteId: client?.id || null, cajaSessionId: session.id, estadoCaja: method === 'cash' ? 'confirmado' : method === 'credit' ? 'no_aplica' : 'pendiente', vencimiento: dueTS ? new Date(dueTS).toLocaleDateString() : null, vencimientoTS: dueTS, subtotal: calc.subtotal, descuentoPct: input.discountPercent, descuentoMonto: calc.discount, total: calc.total, tarifa: input.buyerType === 'retail' ? 'Menudeo' : 'Mayoreo', items: calc.items, plazo: dueTS ? input.creditDays + ' días' : '-', anulada: false, ordenId: order?.id || null };
@@ -101,15 +101,15 @@
     try { await initApp(); actualizarCatalogo(); actualizarTablaInventario(); renderDashboard(); await loadOrders(); }
     finally { loading = false; renderCajaView(); }
   }
-  async function loadOrders() { orders = await localDB.saleOrders.where('business_id').equals(DEFAULT_BUSINESS_ID).toArray(); }
+  async function loadOrders() { orders = await window.PosLocalIdentity.saleOrders(); }
   async function nextOrderDisplayNumber() {
-    const existing = await localDB.saleOrders.where('business_id').equals(DEFAULT_BUSINESS_ID).toArray();
+    const existing = await window.PosLocalIdentity.saleOrders();
     const highest = existing.reduce((value, order) => Math.max(value, Number(order.displayNumber) || 0), existing.length);
     return highest + 1;
   }
   async function orderDisplayNumber(order) {
     if (Number.isInteger(Number(order.displayNumber)) && Number(order.displayNumber) > 0) return Number(order.displayNumber);
-    const all = await localDB.saleOrders.where('business_id').equals(DEFAULT_BUSINESS_ID).toArray();
+    const all = await window.PosLocalIdentity.saleOrders();
     const used = new Set(all.map(item => Number(item.displayNumber)).filter(value => Number.isInteger(value) && value > 0));
     const legacy = all.filter(item => !used.has(Number(item.displayNumber))).sort((a, b) => Number(a.createdAt) - Number(b.createdAt) || String(a.id).localeCompare(String(b.id)));
     let candidate = 1;
@@ -125,12 +125,12 @@
     if (busy) return;
     busy = true;
     try {
-      const openSessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: 'abierta' }).toArray();
+      const openSessions = await window.PosLocalIdentity.cashSessions('abierta');
       if (openSessions.length !== 1) fail(MSG_SIN_CAJA);
       const input = cartInput();
       await localDB.transaction('rw', tables(), async () => {
         if (flow() !== 'CENTRALIZED') fail('El flujo de venta cambió.');
-        const sessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: 'abierta' }).toArray();
+        const sessions = await window.PosLocalIdentity.cashSessions('abierta');
         if (sessions.length !== 1) fail(MSG_SIN_CAJA);
         const calc = await quote(input);
         const order = { id: crypto.randomUUID(), displayNumber: await nextOrderDisplayNumber(), business_id: DEFAULT_BUSINESS_ID, cajaSessionId: sessions[0].id, status: 'PENDING', createdAt: Date.now(), input, estimatedTotal: calc.total };
@@ -148,7 +148,7 @@
       try {
         await localDB.transaction('rw', tables(), async () => {
           const order = await localDB.saleOrders.get(id);
-          if (!order || order.business_id !== DEFAULT_BUSINESS_ID || order.status !== 'PENDING') fail('La orden ya fue cobrada o cancelada.');
+      if (!order || !window.PosLocalIdentity.matches(order) || order.status !== 'PENDING') fail('La orden ya fue cobrada o cancelada.');
           order.status = 'CANCELLED'; order.cancelledAt = Date.now(); order.cancelledBy = currentUser.displayName;
           await localDB.saleOrders.put(order); await audit('CANCELAR_ORDEN', 'Orden ' + id);
         });
@@ -163,7 +163,7 @@
     try {
       if (cajaActual?.estado !== 'abierta') fail(MSG_SIN_CAJA);
       selected = await localDB.saleOrders.get(id);
-      if (!selected || selected.business_id !== DEFAULT_BUSINESS_ID || selected.status !== 'PENDING') fail('La orden ya fue cobrada o cancelada.');
+      if (!selected || !window.PosLocalIdentity.matches(selected) || selected.status !== 'PENDING') fail('La orden ya fue cobrada o cancelada.');
       preview = await quote(selected.input);
       el('localOrderTitle').textContent = 'Cobrar orden #' + await orderDisplayNumber(selected);
       el('localOrderSummary').textContent = 'Subtotal ' + sysConfig.currency + preview.subtotal.toFixed(2) + ' · Descuento ' + sysConfig.currency + preview.discount.toFixed(2);
@@ -218,10 +218,10 @@
     try {
       await localDB.transaction('rw', tables(), async () => {
         const sale = (await localDB.sales.toArray()).find(s => String(s.id) === String(id));
-        if (!sale || sale.business_id !== DEFAULT_BUSINESS_ID || sale.anulada || sale.estadoCaja !== 'pendiente') fail('El pago ya no está pendiente.');
+      if (!sale || !window.PosLocalIdentity.matches(sale) || sale.anulada || sale.estadoCaja !== 'pendiente') fail('El pago ya no está pendiente.');
         sale.estadoCaja = 'confirmado'; sale.usuarioConfirmacionCaja = currentUser.displayName; sale.fechaConfirmacionCaja = new Date().toLocaleString();
         await localDB.sales.put(sale);
-        const sessions = await localDB.cajaSessions.where('business_id').equals(DEFAULT_BUSINESS_ID).toArray();
+        const sessions = await window.PosLocalIdentity.cashSessions();
         for (const session of sessions) {
           let changed = false;
           for (const movement of session.movimientos) if (String(movement.saleId) === String(sale.id) && !movement.anulado && movement.estado === 'pendiente') { movement.estado = 'confirmado'; movement.usuarioConfirmacion = currentUser.displayName; movement.fechaConfirmacion = sale.fechaConfirmacionCaja; changed = true; }
@@ -258,8 +258,8 @@
     }
     for (const order of historicalOrders) {
       const row = document.createElement('tr'); row.dataset.localOrder = order.id; row.dataset.priority = '0';
-      for (const value of [new Date(order.createdAt).toLocaleString(), 'Orden de sesi�n anterior � sin factura', order.input.seller, mediosPagoVenta[order.input.suggestedMethod], sysConfig.currency + order.estimatedTotal.toFixed(2), 'Pendiente de resoluci�n']) { const td = document.createElement('td'); td.textContent = value; row.append(td); }
-      const td = document.createElement('td'); const detail = document.createElement('button'); detail.type = 'button'; detail.className = 'btn btn-sm btn-secondary'; detail.textContent = 'Detalle'; detail.addEventListener('click', () => showAlert('Orden #' + order.id + ' de una sesi�n anterior. El cobro se registrar� en la sesi�n actual de Caja.')); td.append(detail); const charge = document.createElement('button'); charge.type = 'button'; charge.className = 'btn btn-sm btn-success'; charge.textContent = 'Cobrar'; charge.disabled = !isAdmin('cajaView'); charge.addEventListener('click', () => startCharge(order.id)); td.append(charge); const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-sm btn-secondary'; cancel.textContent = 'Cancelar'; cancel.disabled = !isAdmin('cajaView'); cancel.addEventListener('click', () => cancelOrder(order.id)); td.append(cancel); row.append(td); historicalBody?.append(row);
+      for (const value of [new Date(order.createdAt).toLocaleString(), 'Orden de sesión anterior · sin factura', order.input.seller, mediosPagoVenta[order.input.suggestedMethod], sysConfig.currency + order.estimatedTotal.toFixed(2), 'Pendiente de resolución']) { const td = document.createElement('td'); td.textContent = value; row.append(td); }
+      const td = document.createElement('td'); const detail = document.createElement('button'); detail.type = 'button'; detail.className = 'btn btn-sm btn-secondary'; detail.textContent = 'Detalle'; detail.addEventListener('click', () => showAlert('Orden #' + order.id + ' de una sesión anterior. El cobro se registrará en la sesión actual de Caja.')); td.append(detail); const charge = document.createElement('button'); charge.type = 'button'; charge.className = 'btn btn-sm btn-success'; charge.textContent = 'Cobrar'; charge.disabled = !isAdmin('cajaView'); charge.addEventListener('click', () => startCharge(order.id)); td.append(charge); const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-sm btn-secondary'; cancel.textContent = 'Cancelar'; cancel.disabled = !isAdmin('cajaView'); cancel.addEventListener('click', () => cancelOrder(order.id)); td.append(cancel); row.append(td); historicalBody?.append(row);
     }
   }
   el('saveConnectedSalesFlow').addEventListener('click', async () => {
@@ -267,8 +267,8 @@
     const requested = el('connectedSalesFlow').value; busy = true;
     try {
       await localDB.transaction('rw', tables(), async () => {
-        const sessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: 'abierta' }).count();
-        const pending = await localDB.saleOrders.where({ business_id: DEFAULT_BUSINESS_ID, status: 'PENDING' }).count();
+        const sessions = (await window.PosLocalIdentity.cashSessions('abierta')).length;
+        const pending = (await window.PosLocalIdentity.saleOrders('PENDING')).length;
         if (requested !== flow() && (sessions || pending)) fail('Cierra Caja y resuelve las órdenes pendientes antes de cambiar el flujo.');
         if (!['DIRECT','CENTRALIZED'].includes(requested)) fail('Selecciona un flujo válido.');
         const config = { ...sysConfig, ...JSON.parse(localStorage.getItem(configStorageKey) || '{}') };

@@ -11,6 +11,13 @@ async function start() {
   const repo = require('./src/repositories/auth').createAuthRepository(pool, authConfig);
   const authentication = { repo, config: authConfig, auth: require('./src/services/auth').createAuthService(repo, authConfig), users: require('./src/services/users').createUsersService(repo) };
   const app = createApp({ config, checkDatabase: createHealthCheck(pool, config.healthTimeout), authentication });
+  try {
+    const pending = await app.locals.businessImageStore.recoverBusinessFiles(async businessId =>
+      (await repo.rows(pool, 'SELECT 1 AS present FROM businesses WHERE id = ?', [businessId])).length > 0);
+    if (pending) console.warn('Quedó pendiente la limpieza recuperable de archivos de negocios eliminados.');
+  } catch {
+    console.warn('No se pudo completar la revisión recuperable de archivos eliminados.');
+  }
   const server = app.listen(config.port, config.host);
   try {
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });

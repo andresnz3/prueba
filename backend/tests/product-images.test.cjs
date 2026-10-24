@@ -33,6 +33,18 @@ test('almacen privado, cuota, archivos faltantes y aislamiento de directorios',a
   await assert.rejects(store.assertOwned('2',image),error=>error.publicCode==='IMAGE_REFERENCE_INVALID');
   await store.remove('1',image); await assert.rejects(store.assertOwned('1',image),error=>error.publicCode==='IMAGE_REFERENCE_INVALID');
 });
+test('imagen histórica usa una referencia persistente idempotente por lote y registro',async t => {
+  const root=await imageDirectory(); t.after(()=>removeImages(root));
+  const buffer=await normalize(await photo(),'image/png');
+  const firstStore=createImageStore({root,quota:buffer.length*3});
+  const first=await firstStore.saveMigration('7',buffer,'batch-1:products:id:p1');
+  const retry=await firstStore.saveMigration('7',buffer,'batch-1:products:id:p1');
+  assert.equal(retry,first);
+  assert.deepEqual(await createImageStore({root,quota:buffer.length*3}).read('7',first),buffer);
+  const other=await firstStore.saveMigration('8',buffer,'batch-1:products:id:p1');
+  assert.notEqual(other,first);
+  await assert.rejects(firstStore.assertOwned('8',first),error=>error.publicCode==='IMAGE_REFERENCE_INVALID');
+});
 test('config exige ruta privada absoluta en produccion y fuera del repositorio',() => {
   assert.throws(()=>readImageConfig({},'production'),/IMAGE_STORAGE_DIR/);
   assert.throws(()=>readImageConfig({IMAGE_STORAGE_DIR:'uploads'},'development'));

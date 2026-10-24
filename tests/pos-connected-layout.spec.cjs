@@ -15,6 +15,8 @@ async function connectedFixture(page, closed = false, loseResponse = false, prod
     if(path === '/api/auth/me') body = {user,csrfToken:'a'.repeat(43),expiresAt:new Date(Date.now()+3600000).toISOString()};
     else if(path === '/api/auth/modules/sales/enter') body = {module:'sales',allowed:true};
     else if(path === '/api/auth/access/sales') body = {module:'sales',allowed:true};
+    else if(path === '/api/sales/next-invoice') body = {businessId:'1',invoiceNumber:result ? '000002' : '000001'};
+    else if(path === '/api/cash/current') body = {cash:closed ? null : {id:'1',businessId:'1',status:'OPEN',openingAmount:'100.00',openedAt:new Date().toISOString(),openedBy:'Fixture'}};
     else if(path === '/api/business-settings/sales-flow') body = {businessId:'1',salesFlow:'DIRECT'};
     else if(path === '/api/sales/clients') { const offset=Number(new URL(route.request().url()).searchParams.get('offset')||0); body = {clients:fixtureClients.slice(offset,offset+100)}; }
     else if(path === '/api/auth/access/clients' || path === '/api/auth/modules/clients/enter') body = {module:'clients',allowed:true};
@@ -28,7 +30,7 @@ async function connectedFixture(page, closed = false, loseResponse = false, prod
       body = {quote:{businessId:'1',quoteToken:'a'.repeat(64),paymentMethod:'CASH',subtotal:'10.00',discount:'1.00',total:'9.00',items:[{productId:'1',name:product.name,quantity:'1.000',total:'9.00'}]}};
     } else if(path === '/api/sales' && route.request().method() === 'POST') {
       writes.push(route.request().postDataJSON());
-      result = {kind:'SALE',sale:{id:'1',businessId:'1',invoiceNumber:'000001',status:'COMPLETED',seller:'Fixture',createdAt:new Date().toISOString(),paymentMethod:'CASH',cashStatus:'CONFIRMED',priceType:'RETAIL',subtotal:'10.00',discount:'1.00',discountPercent:'10.0000',total:'9.00',tax:'0.00',cashReceived:'100.00',changeAmount:'91.00',cashSessionId:'1',items:[{productId:'1',name:product.name,barcode:product.barcode,quantity:'1.000',unitPrice:'10.00',subtotal:'10.00'}]}};
+      result = {kind:'SALE',sale:{id:'1',businessId:'1',invoiceNumber:'000001',status:'COMPLETED',seller:'Fixture',createdAt:new Date().toISOString(),paymentMethod:'CASH',cashStatus:'CONFIRMED',priceType:'RETAIL',subtotal:'10.00',discount:'1.00',discountPercent:'10.0000',total:'9.00',tax:'0.00',cashReceived:'100.00',changeAmount:'91.00',cashSessionId:'1',items:[{productId:'1',name:product.name,barcode:product.barcode,quantity:'1.000',unitPrice:'10.00',subtotal:'10.00',total:'9.00'}]}};
       if(loseResponse) return route.abort('failed');
       body=result;
     } else if(path.startsWith('/api/operations/') && path.endsWith('/resolve')) body=result;

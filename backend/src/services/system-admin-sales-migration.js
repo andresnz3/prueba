@@ -5,6 +5,8 @@ const {
   packageForSalesImport, normalizeSale, normalizeName, fingerprintSale, sourceSaleKey,
   migrationInvoice, formatMoney, formatQuantity, formatRate, labelSale
 } = require('./system-admin-sales-migration-values');
+const { loadSourceOrigins } = require('./migration-sales-origin');
+const { migrationBatchContext, applySourceBusinessKey } = require('./migration-batch-capability');
 
 const MAX_WARNING_DETAILS = 50;
 
@@ -87,13 +89,15 @@ function formatPercent(value) {
 }
 
 function createSystemAdminSalesMigration({ repo, requireSystemAdmin }) {
-  async function assertTarget(db, targetBusinessId, lock = false) {
+  async function assertTarget(db, targetBusinessId, lock = false, batchContext = null) {
     const rows = await repo.rows(db,
-      'SELECT id, name, status FROM businesses WHERE id = ?' + (lock ? ' FOR UPDATE' : ''),
+      'SELECT b.id,b.name,b.status,c.state AS migrationState,c.batch_id AS batchId,c.source_business_key AS sourceBusinessKey FROM businesses b LEFT JOIN business_migration_controls c ON c.business_id=b.id WHERE b.id = ?' + (lock ? ' FOR UPDATE' : ''),
       [targetBusinessId]);
     const business = rows[0];
     if (!business) throw httpError(404, 'BUSINESS_NOT_FOUND');
-    if (business.status !== 'ACTIVE') throw httpError(409, 'MIGRATION_TARGET_INACTIVE');
+    if (batchContext) {
+      if (business.status !== 'INACTIVE' || business.migrationState !== 'PENDING' || String(business.batchId) !== batchContext.batchId || business.sourceBusinessKey !== batchContext.sourceBusinessKey) throw httpError(409, 'MIGRATION_TARGET_REQUIRED');
+    } else if (business.status !== 'ACTIVE') throw httpError(409, 'MIGRATION_TARGET_INACTIVE');
     return business;
   }
 
@@ -187,9 +191,10 @@ function createSystemAdminSalesMigration({ repo, requireSystemAdmin }) {
 
   async function assess(db, targetBusinessId, imported, options = {}) {
     const state = { warnings: [], warningCount: 0 };
+    const batchContext = options.batchContext || null;
     const [basicReady, inventoryReady, schemaReady] = await Promise.all([
-      hasPriorStage(db, targetBusinessId, 'MIGRATION_BASIC_IMPORT', imported),
-      hasPriorStage(db, targetBusinessId, 'MIGRATION_INVENTORY_IMPORT', imported, false),
+      batchContext ? Promise.resolve(batchContext.catalogReady === true) : hasPriorStage(db, targetBusinessId, 'MIGRATION_BASIC_IMPORT', imported),
+      batchContext ? Promise.resolve(batchContext.catalogReady === true) : hasPriorStage(db, targetBusinessId, 'MIGRATION_INVENTORY_IMPORT', imported, false),
       schemaAvailable(db)
     ]);
     const mappings = await loadMappings(db, targetBusinessId);
@@ -235,10 +240,18 @@ function createSystemAdminSalesMigration({ repo, requireSystemAdmin }) {
     const imported = packageForSalesImport(packageValue);
     const business = await assertTarget(repo.pool, targetBusinessId);
     const result = await assess(repo.pool, targetBusinessId, imported, { readReferences: true });
+    const existingSources = result.gates.schema ? await loadSourceOrigins(repo, repo.pool, targetBusinessId) : [];
+    const differentSources = existingSources.filter(source => source.sourceBusinessKey !== imported.sourceBusinessKey);
     return {
       ok: true,
       eligible: result.eligible,
       sourceBusinessName: imported.sourceBusinessName,
+      sourceOriginConflict: {
+        required: differentSources.length > 0,
+        incomingSourceBusinessName: imported.sourceBusinessName,
+        incomingSourceBusinessKey: imported.sourceBusinessKey,
+        existingSources: differentSources
+      },
       targetBusinessName: business.name,
       gates: result.gates,
       sales: result.counts,
@@ -246,19 +259,23 @@ function createSystemAdminSalesMigration({ repo, requireSystemAdmin }) {
     };
   }
 
-  async function migrate(auth, targetBusinessId, packageValue) {
+  async function migrate(auth, targetBusinessId, packageValue, options = {}) {
     requireSystemAdmin(auth);
     if (typeof targetBusinessId !== 'string' || !/^[1-9]\d{0,19}$/.test(targetBusinessId)) throw httpError(400, 'INVALID_INPUT');
-    const imported = packageForSalesImport(packageValue);
+    const batchContext = migrationBatchContext(options);
+    const imported = applySourceBusinessKey(packageForSalesImport(packageValue), batchContext);
     if (!await schemaAvailable(repo.pool)) throw httpError(503, 'MIGRATION_SALES_SCHEMA_REQUIRED');
 
     return repo.transaction(async db => {
-      const business = await assertTarget(db, targetBusinessId, true);
-      const result = await assess(db, targetBusinessId, imported, { readReferences: true });
+      const business = await assertTarget(db, targetBusinessId, true, batchContext);
+      const result = await assess(db, targetBusinessId, imported, { readReferences: true, batchContext });
       if (!result.gates.schema) throw httpError(503, 'MIGRATION_SALES_SCHEMA_REQUIRED');
       if (!result.gates.basic) throw httpError(409, 'MIGRATION_BASIC_REQUIRED');
       if (!result.gates.inventory) throw httpError(409, 'MIGRATION_INVENTORY_REQUIRED');
       if (!result.gates.targetUser) throw httpError(409, 'MIGRATION_TARGET_USER_REQUIRED');
+      const existingSources = await loadSourceOrigins(repo, db, targetBusinessId);
+      const differentSources = existingSources.filter(source => source.sourceBusinessKey !== imported.sourceBusinessKey);
+      if (differentSources.length && options.confirmDifferentSource !== true) throw httpError(409, 'MIGRATION_SALES_ORIGIN_CONFIRMATION_REQUIRED');
 
       const created = { sales: 0 };
       const skipped = { sales: 0 };
@@ -277,11 +294,19 @@ function createSystemAdminSalesMigration({ repo, requireSystemAdmin }) {
         const invoice = migrationInvoice(imported.sourceBusinessKey, sale.sourceSaleKey, sale.localInvoice);
         const sourceDetail = sale.detail || '';
         const detail = sale.localInvoice ? ('Factura local: ' + sale.localInvoice + (sourceDetail ? ' · ' + sourceDetail : '')).slice(0, 500) : (sourceDetail || null);
-        const inserted = await repo.rows(db,
-          "INSERT INTO sales (business_id, user_id, client_id, cash_session_id, invoice_number, sale_type, payment_method, subtotal, discount, discount_percent, tax, total, status, cash_status, sale_price_type, detail, due_at, cancelled_at, cancelled_by, cancel_reason, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NOT_APPLICABLE', ?, ?, ?, ?, NULL, ?, ?)",
-          [targetBusinessId, String(result.mappings.user.id), sale.clientId, invoice, sale.saleType, sale.paymentMethod,
-            formatMoney(sale.subtotal), formatMoney(sale.discount), formatPercent(sale.discountPercent), formatMoney(sale.tax), formatMoney(sale.total),
-            sale.status, sale.priceType, detail, sale.dueAt, sale.canceledAt, sale.cancelReason, sale.createdAt]);
+        const source = imported.sales[index] || {};
+        const insertSql = batchContext
+          ? "INSERT INTO sales (business_id,user_id,client_id,cash_session_id,invoice_number,sale_type,payment_method,subtotal,discount,discount_percent,tax,total,status,is_historical,cash_status,sale_price_type,detail,due_at,cancelled_at,cancelled_by,cancel_reason,source_actor,source_cancelled_by,created_at) VALUES (?,?,?,NULL,?,?,?,?,?,?,?,?,?,TRUE,'NOT_APPLICABLE',?,?,?,?,NULL,?,?,?,?)"
+          : "INSERT INTO sales (business_id,user_id,client_id,cash_session_id,invoice_number,sale_type,payment_method,subtotal,discount,discount_percent,tax,total,status,cash_status,sale_price_type,detail,due_at,cancelled_at,cancelled_by,cancel_reason,created_at) VALUES (?,?,?,NULL,?,?,?,?,?,?,?,?,?,'NOT_APPLICABLE',?,?,?,?,NULL,?,?)";
+        const insertValues = [targetBusinessId, String(result.mappings.user.id), sale.clientId, invoice, sale.saleType, sale.paymentMethod,
+          formatMoney(sale.subtotal), formatMoney(sale.discount), formatPercent(sale.discountPercent), formatMoney(sale.tax), formatMoney(sale.total),
+          sale.status, sale.priceType, detail, sale.dueAt, sale.canceledAt, sale.cancelReason];
+        if (batchContext) insertValues.push(
+          typeof source.__sourceActor === 'string' ? source.__sourceActor.slice(0, 180) : null,
+          typeof source.__sourceCancelledBy === 'string' ? source.__sourceCancelledBy.slice(0, 180) : null
+        );
+        insertValues.push(sale.createdAt);
+        const inserted = await repo.rows(db, insertSql, insertValues);
         const saleId = String(inserted.insertId);
         for (const item of sale.items) {
           await repo.rows(db,
@@ -302,6 +327,8 @@ function createSystemAdminSalesMigration({ repo, requireSystemAdmin }) {
         targetBusinessName: business.name,
         sourceBusinessName: imported.sourceBusinessName,
         sourceBusinessId: imported.sourceBusinessId,
+        sourceBusinessKey: imported.sourceBusinessKey,
+        confirmedDifferentSource: differentSources.length > 0 && options.confirmDifferentSource === true,
         packageExportedAt: imported.exportedAt,
         summary,
         warnings

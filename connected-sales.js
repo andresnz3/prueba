@@ -3,13 +3,14 @@
 (() => {
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
-  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0;
+  const financialKinds = ['PURCHASE', 'CANCEL_PURCHASE', 'EXPENSE', 'CANCEL_EXPENSE', 'SUPPLIER_PAYMENT', 'CUSTOMER_PAYMENT_VOID', 'SUPPLIER_PAYMENT_VOID', 'CASH_MANUAL'];
+  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, displayedCashSessions = [], salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0;
   const state = () => window.PosRuntime.salesInput();
   const scope = () => { const s = state(); return 'posOperation_' + encodeURIComponent(window.POS_API_BASE_URL) + '_' + s.businessId + '_' + s.userId; };
   function pending() {
     const value = localStorage.getItem(scope());
     if (!value) return null;
-    try { const result = JSON.parse(value); if (/^[a-f0-9-]{36}$/.test(result.key) && ['SALE', 'CANCEL', 'OPEN_CASH', 'CLOSE_CASH', 'PREPARE_ORDER', 'ORDER_CHARGE', 'ORDER_CANCEL', 'PAYMENT_CONFIRM', 'CUSTOMER_PAYMENT'].includes(result.kind)) return result; } catch { /* Invalid marker stays blocked until checked. */ }
+    try { const result = JSON.parse(value); if (/^[a-f0-9-]{36}$/.test(result.key) && [...financialKinds, 'SALE', 'CANCEL', 'OPEN_CASH', 'CLOSE_CASH', 'PREPARE_ORDER', 'ORDER_CHARGE', 'ORDER_CANCEL', 'PAYMENT_CONFIRM', 'CUSTOMER_PAYMENT'].includes(result.kind)) return result; } catch { /* Invalid marker stays blocked until checked. */ }
     throw new Error('No se pudo leer la referencia de la operación pendiente.');
   }
   function notice(text = '') { el('saleOperationMessage').textContent = text; el('saleOperationMessage').classList.toggle('hidden', !text); el('recoverSaleBtn').classList.toggle('hidden', !text); }
@@ -28,7 +29,9 @@
   }
   function mappedSale(sale) {
     const credit = sale.paymentMethod === 'CREDIT';
-    return { id: sale.id, businessId: sale.businessId, numero: sale.invoiceNumber, vendedor: sale.seller, fecha: new Date(sale.createdAt).toLocaleString(), fechaTS: Date.parse(sale.createdAt), detalle: sale.detail || '-', metodo: credit ? 'Crédito' : 'Contado', medioPago: sale.paymentMethod.toLowerCase(), cliente: credit ? sale.clientName : '-', clienteId: sale.clientId, vencimiento: sale.dueAt ? new Date(sale.dueAt).toLocaleDateString() : null, vencimientoTS: sale.dueAt ? Date.parse(sale.dueAt) : null, saldoPendiente: credit && sale.status === 'COMPLETED' ? Number(sale.total) : 0, tarifa: sale.priceType === 'RETAIL' ? 'Menudeo' : 'Mayoreo', subtotal: Number(sale.subtotal), descuentoPct: Number(sale.discountPercent), descuentoMonto: Number(sale.discount), total: Number(sale.total), anulada: sale.status === 'CANCELLED', motivoAnulacion: sale.cancelReason, conectado: true, estadoCaja: sale.cashStatus === 'PENDING' ? 'pendiente' : sale.cashStatus === 'CONFIRMED' ? 'confirmado' : 'no_aplica', cajaSessionId: sale.cashSessionId, items: sale.items.map(item => ({ id: item.productId, name: item.name, barcode: item.barcode, cantidad: Number(item.quantity), connectedSubtotal: Number(item.subtotal), retailPrice: Number(item.unitPrice), wholesalePrice: Number(item.unitPrice) })) };
+    const originalInvoice = sale.originalInvoiceNumber === null || sale.originalInvoiceNumber === undefined ? '' : String(sale.originalInvoiceNumber).trim();
+    const displayInvoice = /^\d+$/.test(originalInvoice) ? originalInvoice.padStart(6, '0') : originalInvoice;
+    return { id: sale.id, businessId: sale.businessId, numero: sale.invoiceNumber, numeroVisual: sale.isHistorical ? displayInvoice || null : String(sale.invoiceNumber).padStart(6, '0'), historicaConectada: sale.isHistorical === true, origenHistorico: sale.isHistorical ? (sale.sourceBusinessName || (sale.sourceBusinessKey ? 'Origen ' + sale.sourceBusinessKey.slice(0, 8) : 'Origen sin identificar')) : null, sourceBusinessKey: sale.sourceBusinessKey || null, sourceSaleId: sale.sourceSaleId || null, vendedor: sale.seller, fecha: new Date(sale.createdAt).toLocaleString(), fechaTS: Date.parse(sale.createdAt), detalle: sale.detail || '-', metodo: credit ? 'Crédito' : 'Contado', medioPago: sale.paymentMethod.toLowerCase(), cliente: credit ? sale.clientName : '-', clienteId: sale.clientId, vencimiento: sale.dueAt ? new Date(sale.dueAt).toLocaleDateString() : null, vencimientoTS: sale.dueAt ? Date.parse(sale.dueAt) : null, saldoPendiente: credit && sale.status === 'COMPLETED' ? Number(sale.total) : 0, tarifa: sale.priceType === 'RETAIL' ? 'Menudeo' : 'Mayoreo', subtotal: Number(sale.subtotal), descuentoPct: Number(sale.discountPercent), descuentoMonto: Number(sale.discount), total: Number(sale.total), anulada: sale.status === 'CANCELLED', motivoAnulacion: sale.cancelReason, conectado: true, estadoCaja: sale.cashStatus === 'PENDING' ? 'pendiente' : sale.cashStatus === 'CONFIRMED' ? 'confirmado' : 'no_aplica', cajaSessionId: sale.cashSessionId, items: sale.items.map(item => ({ id: item.productId, name: item.name, barcode: item.barcode, cantidad: Number(item.quantity), connectedSubtotal: Number(item.subtotal), retailPrice: Number(item.unitPrice), wholesalePrice: Number(item.unitPrice) })) };
   }
   const historyMoney = value => 'C$' + Number(value || 0).toFixed(2);
   function historyBound(day, exclusive = false) {
@@ -98,9 +101,26 @@
     }
   }
   async function loadHistory() {
-    const rows = (await pages('sales')).map(mappedSale).reverse();
+    const [salesPage, historicalOrders] = await Promise.all([pages('sales'), api(client => client.historicalOrders())]);
+    const rows = salesPage.map(mappedSale).reverse();
     historySales = rows;
     window.PosRuntime.setSales(rows);
+    const historicalOrdersBody = el('historicalOrdersTableBody');
+    if (historicalOrdersBody) {
+      if (!historicalOrders.length) fillEmpty(historicalOrdersBody, 6, 'Sin órdenes históricas.');
+      else {
+        historicalOrdersBody.replaceChildren();
+        for (const order of historicalOrders) {
+          const row = document.createElement('tr');
+          const items = order.items.map(item => item.name + ' × ' + Number(item.quantity) + (item.priceSnapshotAvailable && item.estimatedSubtotal !== null ? ' · C$' + item.estimatedSubtotal : ' · Precio histórico no disponible')).join('; ');
+          const status = order.status === 'CANCELLED' ? 'Anulada' : order.status === 'COMPLETED' ? 'Completada' : 'Pendiente';
+          for (const value of [order.id, new Date(order.createdAt).toLocaleString(), status, order.seller || 'No identificado', items, historyMoney(order.estimatedTotal)]) {
+            const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+          }
+          historicalOrdersBody.append(row);
+        }
+      }
+    }
     await refreshHistorySummary(rows);
   }
   async function refreshNextInvoiceNumber() {
@@ -117,11 +137,40 @@
     }
   }
   async function completed(result, recovered = false) {
+    if (result.kind === 'CASH_MANUAL') {
+      el('cajaMovimientoMonto').value = ''; el('cajaMovimientoConcepto').value = '';
+      if (window.PosConnected.canManageModule('cajaView')) await load('cajaView');
+      showAlert((result.movement.direction === 'IN' ? 'Entrada' : 'Retiro') + ' de efectivo registrado.');
+      document.dispatchEvent(new Event('connected:report-data-changed'));
+      return;
+    }
+    if (result.kind === 'CUSTOMER_PAYMENT_VOID') {
+      el('statementModal').classList.add('hidden');
+      if (!el('clientsView').classList.contains('hidden')) await window.PosClients.load('clientsView');
+      showAlert('Abono revertido. El saldo fue restituido.' + (result.payment.refundCashSessionId ? ' La devolución se registró en la caja actual; los cierres anteriores se conservan.' : ' No se modificó el efectivo físico.'));
+      document.dispatchEvent(new Event('connected:report-data-changed'));
+      return;
+    }
+    if (['PURCHASE', 'CANCEL_PURCHASE', 'SUPPLIER_PAYMENT', 'SUPPLIER_PAYMENT_VOID'].includes(result.kind)) {
+      await window.PosPurchases.operationCompleted(result, recovered);
+      document.dispatchEvent(new Event('connected:report-data-changed'));
+      return;
+    }
+    if (result.kind === 'EXPENSE') {
+      await window.PosExpenses.operationCompleted(result, recovered);
+      document.dispatchEvent(new Event('connected:report-data-changed'));
+      return;
+    }
     if (result.sale || result.order) await refreshNextInvoiceNumberAfterOperation();
     if (result.kind === 'CONFIRM_PAYMENT' && result.payment) {
       const payment = result.payment, method = payment.paymentMethod === 'CARD' ? 'Tarjeta' : 'Transferencia';
       showAlert(method + ' confirmado para la factura #' + payment.invoiceNumber + ' por ' + result.movement.confirmedBy + '. No suma al efectivo físico esperado.');
       if (!el('clientsView').classList.contains('hidden')) await window.PosClients.load('clientsView');
+    } else if (result.kind === 'CONFIRM_PAYMENT' && result.supplierPayment) {
+      const payment = result.supplierPayment, method = payment.paymentMethod === 'CARD' ? 'Tarjeta' : 'Transferencia';
+      showAlert(method + ' confirmado para el pago de ' + (result.movement.supplierName || 'proveedor') + (payment.invoiceNumber ? ' · factura ' + payment.invoiceNumber : '') + ' por ' + result.movement.confirmedBy + '. No reduce el efectivo físico esperado.');
+      if (!el('payablesView').classList.contains('hidden')) await window.PosPurchases.load('payablesView');
+      if (!el('suppliersView').classList.contains('hidden')) await window.PosPurchases.load('suppliersView');
     } else if (result.kind === 'CONFIRM_PAYMENT' && result.sale) {
       window.PosRuntime.publishSale(mappedSale(result.sale)); activeOrderId = null; quote = quoteInput = null;
       showAlert((result.movement.paymentMethod === 'CARD' ? 'Tarjeta' : 'Transferencia') + ' confirmado por ' + (result.movement.confirmedBy || result.sale.cashier) + ' el ' + new Date(result.movement.confirmedAt).toLocaleString() + '. No suma al efectivo físico esperado.');
@@ -156,10 +205,16 @@
     if (result.cash) el('cierreCajaModal').classList.add('hidden');
     if (window.PosConnected.canManageModule('cajaView')) await load('cajaView');
     if (result.cash) showAlert(result.kind === 'OPEN_CASH' ? 'Caja abierta.' : 'Caja cerrada.');
-    if (result.sale || result.payment || result.cash || result.order) document.dispatchEvent(new Event('connected:report-data-changed'));
+    if (result.sale || result.payment || result.supplierPayment || result.cash || result.order) document.dispatchEvent(new Event('connected:report-data-changed'));
   }
-  const uncertain = error => error.status >= 500 || ['NETWORK_ERROR', 'INVALID_RESPONSE', 'STALE_REQUEST', 'INVALID_SESSION'].includes(error.code);
+  // These explicit schema rejections roll back the transaction and never commit money.
+  const uncertain = error => !['SUPPLIER_PAYMENT_MIGRATION_REQUIRED', 'PROCUREMENT_MIGRATION_REQUIRED', 'SALES_MIGRATION_REQUIRED'].includes(error.code) && (error.status >= 500 || ['NETWORK_ERROR', 'INVALID_RESPONSE', 'STALE_REQUEST', 'INVALID_SESSION'].includes(error.code));
   async function perform(kind, data, action) {
+    // Serialize check + marker creation across tabs without queuing another operation.
+    if (globalThis.navigator?.locks) return navigator.locks.request(scope(), { ifAvailable: true }, lock => lock ? performWithMarker(kind, data, action) : showAlert('Hay una operación financiera en curso en otra pestaña. Espera su resultado o comprueba la operación pendiente.'));
+    return performWithMarker(kind, data, action);
+  }
+  async function performWithMarker(kind, data, action) {
     if (busy) return;
     if (pending()) { showPending(); showAlert('Comprueba la operación pendiente antes de iniciar otra.'); return; }
     busy = true; const marker = { key: crypto.randomUUID(), kind }; const storage = scope();
@@ -173,7 +228,7 @@
       if (!uncertain(error)) localStorage.removeItem(storage);
       if (error.code === 'STALE_REQUEST') return;
       if (uncertain(error)) {
-        for (const id of ['connectedCheckoutModal','anularVentaModal','cierreCajaModal']) el(id).classList.add('hidden');
+        for (const id of ['connectedCheckoutModal','anularVentaModal','cierreCajaModal','purchaseModal','paymentInvoiceModal','statementModal','cancelConnectedPurchaseModal']) el(id).classList.add('hidden');
         notice('Resultado desconocido. Comprueba esta operación antes de intentar cobrar nuevamente; podría estar confirmada.');
       }
       if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
@@ -190,7 +245,7 @@
     busy = true; const storage = scope();
     try {
       // Locking resolver commits a tombstone if absent, rejecting any delayed request.
-      const result = await api(client => client.resolveOperation(marker.key));
+      const result = await api(client => financialKinds.includes(marker.kind) ? client.resolveFinancialOperation(marker.key, marker.kind) : client.resolveOperation(marker.key));
       localStorage.removeItem(storage); notice(); await completed(result, true);
     } catch (error) { window.PosConnected.handleError(error); showPending(); }
     finally { busy = false; }
@@ -317,6 +372,33 @@
     await perform('ORDER_CANCEL', {}, (client, input) => client.cancelOrder(id, input));
   }
   const money = value => 'C$' + Number(value || 0).toFixed(2);
+  function cashLoadStatus(message = '', loading = false) {
+    const status = el('cashLoadStatus'), label = el('cashLoadMessage'), retry = el('retryCashLoadBtn');
+    if (!status || !label || !retry) return;
+    label.textContent = message;
+    status.classList.toggle('hidden', !message);
+    status.classList.toggle('is-error', Boolean(message) && !loading);
+    retry.classList.toggle('hidden', !message || loading);
+    retry.disabled = loading;
+    for (const id of ['abrirCajaBtn', 'registrarEntradaBtn', 'registrarSalidaBtn', 'cerrarCajaBtn']) {
+      const button = el(id);
+      if (button) button.disabled = Boolean(message);
+    }
+  }
+  function clearCashDataForRetry() {
+    currentCash = null;
+    displayedCashSessions = [];
+    window.PosRuntime.setCash([]);
+    for (const id of ['cajaAbrirBox', 'cajaAbiertaBox', 'cajaCentralBox']) el(id)?.classList.add('hidden');
+    fillEmpty(el('cajaHistorialBody'), 8, 'Vuelve a intentar cargar Caja.');
+    fillEmpty(el('cajaMovimientosBody'), 7, 'Vuelve a intentar cargar Caja.');
+    fillEmpty(el('cajaOperacionesBody'), 7, 'Vuelve a intentar cargar Caja.');
+    fillEmpty(el('cajaPendientesHistoricosBody'), 7, 'Vuelve a intentar cargar Caja.');
+    for (const id of ['cajaCentralVentas', 'cajaCentralCobros', 'cajaCentralEsperado', 'cajaCentralDiferencia']) {
+      const value = el(id);
+      if (value) value.textContent = '—';
+    }
+  }
   function fillEmpty(body, columns, message) {
     const row = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = columns; cell.className = 'text-center'; cell.textContent = message; row.append(cell); body.replaceChildren(row);
   }
@@ -350,9 +432,9 @@
       }
     }
     pendingOrderDetails = new Map([...overview.pendingOrders, ...(overview.pendingHistoricalOrders || [])].map(order => [order.id, order]));
-    const paymentRows = payments => payments.map(payment => ({ kind: 'payment', id: payment.id, date: payment.createdAt, reference: (payment.kind === 'CUSTOMER_PAYMENT' ? 'Abono factura #' : 'Factura #') + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta pendiente' : 'Transferencia pendiente', amount: payment.amount }));
+    const paymentRows = payments => payments.map(payment => ({ kind: 'payment', id: payment.id, date: payment.createdAt, reference: payment.kind === 'SUPPLIER_PAYMENT' ? 'Pago a proveedor · ' + (payment.supplierName || 'Proveedor') + (payment.invoiceNumber ? ' · Factura ' + payment.invoiceNumber : '') : (payment.kind === 'CUSTOMER_PAYMENT' ? 'Abono factura #' : 'Factura #') + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta pendiente' : 'Transferencia pendiente', amount: payment.amount }));
     const orderRows = orders => orders.map(order => ({ kind: 'order', id: order.id, date: order.createdAt, reference: 'Orden pendiente' + (order.clientName ? ' · ' + order.clientName : ''), user: order.seller, method: order.clientId ? 'Crédito' : 'Por cobrar', amount: order.estimatedTotal }));
-    const saleRows = sales => (sales || []).map(sale => ({ kind: 'sale', id: sale.id, date: sale.createdAt, reference: 'Factura #' + sale.invoiceNumber, user: sale.seller, method: sale.paymentMethod === 'CARD' ? 'Tarjeta' : sale.paymentMethod === 'TRANSFER' ? 'Transferencia' : sale.paymentMethod === 'CREDIT' ? 'Crédito' : 'Efectivo', amount: sale.amount }));
+    const saleRows = sales => (sales || []).map(sale => ({ kind: 'sale', id: sale.id, date: sale.createdAt, reference: 'Factura #' + (sale.isHistorical ? (sale.originalInvoiceNumber || 'original no disponible') : sale.invoiceNumber), user: sale.seller, method: sale.paymentMethod === 'CARD' ? 'Tarjeta' : sale.paymentMethod === 'TRANSFER' ? 'Transferencia' : sale.paymentMethod === 'CREDIT' ? 'Crédito' : 'Efectivo', amount: sale.amount, isHistorical: sale.isHistorical === true }));
     const collectionRows = payments => (payments || []).map(payment => ({ kind: 'collection', id: payment.id, date: payment.createdAt, reference: 'Abono factura #' + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta' : payment.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Efectivo', amount: payment.amount }));
     const renderOperationRows = (body, payments, orders, historical = false, additionalRows = []) => {
       if (!body) return;
@@ -365,7 +447,7 @@
          const row = document.createElement('tr'); row.dataset.priority = item.kind === 'payment' || item.kind === 'order' ? '0' : '1';
         row.dataset.tableDate = window.PosTables.dateKey(item.date);
         for (const value of [new Date(item.date).toLocaleString(), item.reference, item.user, item.method, money(item.amount), item.kind === 'payment' ? 'Pendiente de confirmación' : (historical ? 'Pendiente histórico · sin factura' : 'Orden pendiente · sin factura ni descuento de inventario')]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
-        if (item.kind === 'sale') row.cells[5].textContent = 'Venta registrada';
+        if (item.kind === 'sale') row.cells[5].textContent = item.isHistorical ? 'Histórica · solo consulta' : 'Venta registrada';
         if (item.kind === 'collection') row.cells[5].textContent = 'Cobro registrado';
          const actions = document.createElement('td');
          const actionGroup = document.createElement('div'); actionGroup.className = 'cash-operation-actions';
@@ -399,9 +481,25 @@
     }
   }
   function mappedCash(value) {
-    return { connectedCloseData: { ...value, openedAt: new Date(value.openedAt).toLocaleString(), closedAt: value.closedAt ? new Date(value.closedAt).toLocaleString() : new Date().toLocaleString(), closedBy: value.closedBy || value.closingBy }, id: value.id, businessId: value.businessId, estado: value.status === 'OPEN' ? 'abierta' : 'cerrada', efectivoInicial: Number(value.openingAmount), efectivoEsperado: Number(value.expectedAmount), efectivoReal: Number(value.countedAmount), diferencia: Number(value.difference), usuarioApertura: value.openedBy, usuarioCierre: value.closedBy, fechaApertura: new Date(value.openedAt).toLocaleString(), fechaAperturaTS: Date.parse(value.openedAt), fechaCierre: value.closedAt ? new Date(value.closedAt).toLocaleString() : null, fechaCierreTS: value.closedAt ? Date.parse(value.closedAt) : null, movimientos: (value.movements || []).map(m => ({ id: m.id, tipo: m.direction === 'IN' ? 'entrada' : 'salida', medioPago: m.payment_method, monto: Number(m.amount), concepto: m.description, usuario: m.user_name, fecha: new Date(m.created_at).toLocaleString(), fechaTS: Date.parse(m.created_at), estado: m.status === 'PENDING' ? 'pendiente' : m.status === 'CONFIRMED' ? 'confirmado' : 'void' })), connectedSales: (value.movements || []).filter(m => m.type === 'SALE' && m.status === 'CONFIRMED').reduce((sum, m) => sum + Number(m.amount), 0), connectedExpected: Number(value.expectedAmount) };
+    const optionalAmount = candidate => candidate === null || candidate === undefined ? null : Number(candidate);
+    const openedAt = new Date(value.openedAt).toLocaleString(), closedAt = value.closedAt ? new Date(value.closedAt).toLocaleString() : null;
+    return { connectedCloseData: { ...value, openedAt, closedAt, closedBy: value.closedBy || null }, id: value.id, businessId: value.businessId, isHistorical: value.isHistorical === true, sourceStatus: value.sourceStatus || null, estado: value.status === 'OPEN' ? 'abierta' : 'cerrada', efectivoInicial: Number(value.openingAmount), efectivoEsperado: optionalAmount(value.expectedAmount), efectivoReal: optionalAmount(value.countedAmount), diferencia: optionalAmount(value.difference), usuarioApertura: value.openedBy, usuarioCierre: value.closedBy || (value.isHistorical ? 'No registrado' : null), fechaApertura: openedAt, fechaAperturaTS: Date.parse(value.openedAt), fechaCierre: closedAt || (value.isHistorical ? 'No registrado' : null), fechaCierreTS: value.closedAt ? Date.parse(value.closedAt) : null, movimientos: (value.movements || []).map(m => ({ id: m.id, tipo: m.direction === 'IN' ? 'entrada' : 'salida', medioPago: m.payment_method, monto: Number(m.amount), concepto: m.description, usuario: m.user_name, fecha: new Date(m.created_at).toLocaleString(), fechaTS: Date.parse(m.created_at), estado: m.status === 'PENDING' ? 'pendiente' : m.status === 'CONFIRMED' ? 'confirmado' : 'void' })), connectedSales: (value.movements || []).filter(m => m.type === 'SALE' && m.status === 'CONFIRMED').reduce((sum, m) => sum + Number(m.amount), 0), connectedExpected: optionalAmount(value.expectedAmount) };
   }
-  function renderCash(overview) { renderCajaViewBase(); if (overview) renderCentral(overview); const range = window.PosPeriodFilters?.range('cash'); for (const id of ['cajaMovimientosBody', 'cajaHistorialBody', 'cajaOperacionesBody', 'cajaPendientesHistoricosBody']) window.PosPeriodFilters?.filterTable(id, range); }
+  function renderCash(overview) {
+    renderCajaViewBase();
+    const latest = displayedCashSessions.find(value => value.estado === 'cerrada');
+    const hint = el('cajaEfectivoInicialHint');
+    if (hint && latest?.isHistorical && latest.efectivoEsperado === null) hint.textContent = 'La caja anterior es un registro histórico sin importe de cierre informado. Ingresa el efectivo real con el que comienza este turno.';
+    for (const [index, session] of displayedCashSessions.filter(value => value.estado === 'cerrada').entries()) {
+      if (session.diferencia === null) {
+        const cell = el('cajaHistorialBody')?.rows[index]?.cells[6];
+        if (cell) cell.style.color = 'var(--text-muted)';
+      }
+    }
+    if (overview) renderCentral(overview);
+    const range = window.PosPeriodFilters?.range('cash');
+    for (const id of ['cajaMovimientosBody', 'cajaHistorialBody', 'cajaOperacionesBody', 'cajaPendientesHistoricosBody']) window.PosPeriodFilters?.filterTable(id, range);
+  }
   async function load(view) {
     if (activeScope !== scope()) { activeScope = scope(); quote = quoteInput = null; }
     showPending();
@@ -413,9 +511,22 @@
     if (view === 'clientsView') await window.PosClients.load(view);
     if (view === 'historyView') { markHistorySummaryLoading(); await loadHistory(); }
     if (view === 'cajaView') {
-      const sessions = await pages('cashSessions');
-      currentCash = sessions.find(value => value.status === 'OPEN') || null;
-      window.PosRuntime.setCash(sessions.map(mappedCash)); renderCash(await api(client => client.cashOverview()));
+      cashLoadStatus('Cargando el historial de Caja…', true);
+      clearCashDataForRetry();
+      try {
+        const [sessions, overview] = await Promise.all([pages('cashSessions'), api(client => client.cashOverview())]);
+        currentCash = sessions.find(value => value.status === 'OPEN') || null;
+        displayedCashSessions = sessions.map(mappedCash);
+        window.PosRuntime.setCash(displayedCashSessions);
+        renderCash(overview);
+        cashLoadStatus();
+        return true;
+      } catch (failure) {
+        clearCashDataForRetry();
+        cashLoadStatus(failure.message ? 'No se pudo cargar Caja. ' + failure.message : 'No se pudieron cargar las sesiones y movimientos de Caja. Reintenta la carga.');
+        if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
+        return false;
+      }
     }
   }
   async function openCash() {
@@ -433,7 +544,8 @@
     if (!currentCash) return;
     await perform('CLOSE_CASH', { countedAmount: value }, (client, input) => client.closeCash(currentCash.id, input));
   }
-  for (const id of ['registrarEntradaBtn', 'registrarSalidaBtn']) { el(id).disabled = true; el(id).title = 'Movimientos manuales pendientes de integración'; }
+  for (const id of ['registrarEntradaBtn', 'registrarSalidaBtn']) { el(id).disabled = false; el(id).title = 'Movimiento de efectivo confirmado en la caja abierta'; }
+  el('retryCashLoadBtn')?.addEventListener('click', () => { void load('cajaView'); });
   el('descuentoPct').step = '0.0001';
   el('confCurrency').disabled = true; el('confCurrency').title = 'Moneda conectada C$. Configuración monetaria por negocio pendiente.';
   document.addEventListener('pos:period-changed', event => {
@@ -458,7 +570,7 @@
     if (action === 'cancel-order') cancelOrder(id);
     if (action === 'order-detail') {
       const order = pendingOrderDetails.get(id); if (!order) return;
-      const detail = order.items.map(item => item.name + ' × ' + Number(item.quantity) + ' · C$' + item.estimatedSubtotal).join('\n');
+      const detail = order.items.map(item => item.name + ' × ' + Number(item.quantity) + (item.priceSnapshotAvailable && item.estimatedSubtotal !== null ? ' · C$' + item.estimatedSubtotal : ' · Precio histórico no disponible')).join('\n');
       showAlert('Orden #' + order.id + ' · ' + order.seller + '\n' + detail + '\nEstimado al preparar: C$' + order.estimatedTotal + '. Precio y stock se volverán a validar al cobrar.');
     }
   };
@@ -474,5 +586,20 @@
     finally { button.disabled = false; }
   });
   window.addEventListener('storage', event => { if (event.key === activeScope) showPending(); });
-  window.PosSales = Object.freeze({ checkout, confirm, cancel, openCash, closeCash, closeDialog, load, renderCash, viewInvoice, payReceivable: (id, data) => perform('CUSTOMER_PAYMENT', data, (client, input) => client.payReceivable(id, input)) });
+  function reversePayment(type, id, method, status) {
+    const title = type === 'customer' ? 'Revertir abono de cliente' : 'Revertir pago a proveedor';
+    window.showAnularRegistro(title, status === 'PENDING' ? 'Se liberará el saldo reservado. No afecta efectivo.' : method === 'CASH' ? 'Se registrará la compensación en la caja actual. Los cierres anteriores se conservan.' : 'La compensación por el mismo medio debe realizarse fuera del POS.', reason => {
+      const submit = externalRefundConfirmed => perform(type === 'customer' ? 'CUSTOMER_PAYMENT_VOID' : 'SUPPLIER_PAYMENT_VOID', { reason, externalRefundConfirmed }, (client, input) => client.reverseFinancialPayment(type, id, input));
+      if (status === 'POSTED' && method !== 'CASH') window.showConfirm('¿Confirmas que el importe ya fue devuelto por el mismo medio fuera del POS? Esta acción solo registra la reversión contable.', () => submit(true));
+      else submit(false);
+    });
+  }
+  function manualCash(direction) {
+    const amount = el('cajaMovimientoMonto').value, reason = el('cajaMovimientoConcepto').value.trim();
+    window.PosValidation.clear(el('cajaMovimientoMonto').parentElement); window.PosValidation.clear(el('cajaMovimientoConcepto').parentElement);
+    if (!/^\d+(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) { window.PosValidation.field('cajaMovimientoMonto', 'Ingresa un monto mayor que cero, con hasta dos decimales.'); return; }
+    if (!reason || reason.length > 500) { window.PosValidation.field('cajaMovimientoConcepto', 'Ingresa el motivo, hasta 500 caracteres.'); return; }
+    return perform('CASH_MANUAL', { direction, amount, reason }, (client, input) => client.manualCashMovement(input));
+  }
+  window.PosSales = Object.freeze({ manualCash, reversePayment, checkout, confirm, cancel, openCash, closeCash, closeDialog, load, renderCash, viewInvoice, performFinancial: perform, payReceivable: (id, data) => perform('CUSTOMER_PAYMENT', data, (client, input) => client.payReceivable(id, input)) });
 })();

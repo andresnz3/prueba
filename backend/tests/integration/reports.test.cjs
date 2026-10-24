@@ -52,6 +52,9 @@ test('Integración MySQL reportes conectados de solo lectura', async t => {
   await admin.login(business, 'reportsadmin', password); await seller.login(business, 'reportsseller', password); await other.login(businessOther, 'reportsadminb', password);
 
   const productId = String((await rows(pool, 'INSERT INTO products (business_id, barcode, name, category, cost, retail_price, wholesale_price, stock, min_stock) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [business, 'REPORTS-PRODUCT', 'Producto de reportes', 'General', '2.00', '10.00', '9.00', '7.500', '1.000'])).insertId);
+  const inventoryBatchId = randomUUID();
+  await rows(pool, "INSERT INTO migration_import_batches (id,business_id,source_business_key,source_business_name,package_sha256,package_version,status,actor_business_id,actor_user_id,manifest,stage_results) VALUES (?,?,?,?,?,2,'COMPLETED',?,?,JSON_OBJECT(),JSON_OBJECT())", [inventoryBatchId, business, 'e'.repeat(64), 'Paquete Kardex', 'f'.repeat(64), business, adminId]);
+  await rows(pool, 'INSERT INTO migration_zero_inventory_events (business_id,batch_id,source_record_key,product_id,source_type,quantity,stock_after,unit_cost,reason,source_actor,source_payload,occurred_at) VALUES (?,?,?,?,?,0.000,?,?,?,?,?,?)', [business, inventoryBatchId, 'id:inventory-zero-report', productId, 'INITIAL', '7.500', '2.00', 'Evento inicial sin cambio', 'Responsable histórico', JSON.stringify({ quantity: '0.000' }), '2026-10-07 09:00:00.000']);
   const clientId = String((await rows(pool, 'INSERT INTO clients (business_id, name, credit_limit) VALUES (?, ?, ?)', [business, 'Cliente con deuda', '100.00'])).insertId);
   const cashId = String((await rows(pool, "INSERT INTO cash_sessions (business_id, opened_by, opening_amount, opened_at, status, closed_by, counted_amount, expected_amount, difference, closed_at) VALUES (?, ?, '50.00', '2026-10-07 08:00:00.000', 'CLOSED', ?, '75.00', '74.00', '-1.00', '2026-10-07 18:00:00.000')", [business, adminId, adminId])).insertId);
   await rows(pool, "INSERT INTO expenses (business_id, user_id, cash_session_id, description, category, amount, payment_method, receipt_reference, status, created_at) VALUES (?, ?, NULL, 'Internet del local', 'Servicios Básicos', '5.00', 'BANK', 'R-5', 'POSTED', '2026-10-07 15:00:00.000')", [business, adminId]);
@@ -65,6 +68,13 @@ test('Integración MySQL reportes conectados de solo lectura', async t => {
   const selectedCredit = await sale({ invoice: '900002', amount: '20.00', method: 'CREDIT', date: '2026-10-07 13:00:00.000', credit: true, quantity: '3.000' });
   await sale({ invoice: '900003', amount: '50.00', method: 'CASH', date: '2026-10-07 14:00:00.000', status: 'CANCELLED' });
   await sale({ invoice: '900004', amount: '9.00', method: 'CASH', date: '2026-10-06 12:00:00.000' });
+  const historicalSourceKey = 'a'.repeat(64), historicalSaleKey = 'b'.repeat(64), historicalInvoice = 'MIG-900005-' + 'c'.repeat(28);
+  const historicalSaleId = String((await rows(pool, "INSERT INTO sales (business_id,user_id,client_id,cash_session_id,invoice_number,sale_type,payment_method,subtotal,discount,discount_percent,tax,total,status,cash_status,sale_price_type,detail,due_at,created_at) VALUES (?, ?, NULL, NULL, ?, 'CASH', 'CASH', '40.00', '0.00', '0.0000', '0.00', '40.00', 'COMPLETED', 'NOT_APPLICABLE', 'RETAIL', ?, NULL, '2026-10-07 17:00:00.000')", [business, adminId, historicalInvoice, 'Factura local: 900005 · Fixture histórica'])).insertId);
+  await rows(pool, 'INSERT INTO sale_items (business_id,sale_id,product_id,product_name,barcode,quantity,unit_price,subtotal,total,cost_at_sale) VALUES (?,?,?,?,?,?,?,?,?,?)', [business, historicalSaleId, productId, 'Producto de reportes', 'REPORTS-PRODUCT', '2.000', '20.00', '40.00', '40.00', '2.00']);
+  await rows(pool, 'INSERT INTO migration_sales_references (business_id,source_business_key,source_sale_key,source_sale_id,fingerprint,sale_id) VALUES (?,?,?,?,?,?)', [business, historicalSourceKey, historicalSaleKey, 'venta-local-900005', 'd'.repeat(64), historicalSaleId]);
+  await rows(pool, 'INSERT INTO migration_source_records (business_id,batch_id,entity_type,source_record_key,source_fingerprint,record_status,target_table,target_record_id,source_payload) VALUES (?,?,?,?,?,\'PROJECTED\',\'sales\',?,?)', [business, inventoryBatchId, 'sales', 'id:venta-local-900005', 'c'.repeat(64), historicalSaleId, JSON.stringify({ id: 'venta-local-900005', metodo: 'Contado', medioPago: 'Tarjeta de crédito' })]);
+  await rows(pool, 'INSERT INTO audit_logs (business_id,user_id,action,entity,entity_id,details,created_at) VALUES (?,NULL,?,?,?,?,UTC_TIMESTAMP(3))', [business, 'MIGRATION_SALES_IMPORT', 'businesses', business, JSON.stringify({ sourceBusinessKey: historicalSourceKey, sourceBusinessName: 'Paquete histórico de reportes', summary: { created: { sales: 1 }, skipped: { sales: 0 } } })]);
+  await rows(pool, "INSERT INTO cash_movements (business_id,cash_session_id,user_id,type,direction,amount,sale_id,description,status,source_method,created_at) VALUES (?,?,?,'SALE','IN','40.00',?,'Venta histórica tarjeta','CONFIRMED','CARD','2026-10-07 17:01:00.000')", [business, cashId, adminId, historicalSaleId]);
   const paymentId = String((await rows(pool, "INSERT INTO customer_payments (business_id, user_id, client_id, sale_id, cash_session_id, amount, payment_method, status, created_at) VALUES (?, ?, ?, ?, ?, '5.00', 'CASH', 'POSTED', '2026-10-07 15:00:00.000')", [business, adminId, clientId, selectedCredit, cashId])).insertId);
   await rows(pool, "INSERT INTO cash_movements (business_id, cash_session_id, user_id, type, direction, amount, sale_id, description, status, created_at) VALUES (?, ?, ?, 'SALE', 'IN', '15.00', ?, 'Pago con tarjeta', 'PENDING', '2026-10-07 12:01:00.000')", [business, cashId, adminId, selectedCard]);
   await rows(pool, "INSERT INTO cash_movements (business_id, cash_session_id, user_id, type, direction, amount, customer_payment_id, description, status, created_at) VALUES (?, ?, ?, 'CUSTOMER_PAYMENT', 'IN', '5.00', ?, 'Abono', 'CONFIRMED', '2026-10-07 15:00:00.000')", [business, cashId, adminId, paymentId]);
@@ -79,15 +89,26 @@ test('Integración MySQL reportes conectados de solo lectura', async t => {
     const response = await admin.request(path); assert.equal(response.status, 200, JSON.stringify(response.data));
     const report = response.data.report;
     assert.equal(report.businessId, business);
-    assert.equal(report.sales.total, '35.00'); assert.equal(report.sales.cost, '10.00'); assert.equal(report.sales.grossProfit, '25.00'); assert.equal(report.sales.netProfit, '20.00'); assert.equal(report.expenses.total, '5.00'); assert.equal(report.expenses.count, 1); assert.deepEqual(report.expenses.byCategory.map(row => [row.category, row.count, row.total]), [['Servicios Básicos', 1, '5.00']]); assert.equal(report.expenses.history[0].description, 'Internet del local'); assert.equal(report.sales.count, 2); assert.equal(report.sales.historyCount, 3);
-    assert.deepEqual(report.sales.paymentMethods.map(row => [row.method, row.count, row.total]), [['CARD', 1, '15.00'], ['CREDIT', 1, '20.00']]);
-    assert.equal(report.sales.sellers[0].seller, 'Reportes Admin'); assert.equal(report.sales.sellers[0].total, '35.00');
-    assert.deepEqual(report.sales.topProducts.map(row => [row.name, row.quantity, row.total]), [['Producto de reportes', 5, '35.00']]); assert.equal(report.sales.unitsSold, 5);
-    assert.deepEqual(report.sales.history.map(row => row.invoiceNumber).sort(), ['900001', '900002', '900003']);
+    assert.equal(report.sales.total, '75.00'); assert.equal(report.sales.cost, '14.00'); assert.equal(report.sales.grossProfit, '61.00'); assert.equal(report.sales.netProfit, '56.00'); assert.equal(report.expenses.total, '5.00'); assert.equal(report.expenses.count, 1); assert.deepEqual(report.expenses.byCategory.map(row => [row.category, row.count, row.total]), [['Servicios Básicos', 1, '5.00']]); assert.equal(report.expenses.history[0].description, 'Internet del local'); assert.equal(report.sales.count, 3); assert.equal(report.sales.historyCount, 4);
+    assert.deepEqual(report.sales.paymentMethods.map(row => [row.method, row.count, row.total]), [['CARD', 2, '55.00'], ['CREDIT', 1, '20.00']]);
+    assert.equal(report.sales.sellers[0].seller, 'Reportes Admin'); assert.equal(report.sales.sellers[0].total, '75.00');
+    assert.deepEqual(report.sales.topProducts.map(row => [row.name, row.quantity, row.total]), [['Producto de reportes', 7, '75.00']]); assert.equal(report.sales.unitsSold, 7);
+    assert.deepEqual(report.sales.history.map(row => row.invoiceNumber).sort(), ['900001', '900002', '900003', '900005']);
+    const historical = report.sales.history.find(row => row.isHistorical);
+    assert.deepEqual({ invoiceNumber: historical.invoiceNumber, sourceBusinessName: historical.sourceBusinessName }, { invoiceNumber: '900005', sourceBusinessName: 'Paquete histórico de reportes' });
+    assert.equal(historical.paymentMethod, 'CARD');
+    assert.ok(report.sales.history.every(row => row.invoiceNumber !== historicalInvoice));
+    const salesHistoryResponse = await admin.request('/sales?limit=100&offset=0'); assert.equal(salesHistoryResponse.status, 200);
+    const historicalSale = salesHistoryResponse.data.sales.find(row => row.id === historicalSaleId);
+    assert.equal(historicalSale.paymentMethod, 'CARD'); assert.equal(historicalSale.businessId, business);
+    const otherSalesHistory = await other.request('/sales?limit=100&offset=0'); assert.equal(otherSalesHistory.status, 200);
+    assert.ok(otherSalesHistory.data.sales.every(row => row.id !== historicalSaleId));
     assert.equal(report.cash.closures.length, 1); assert.equal(report.cash.closures[0].difference, '-1.00');
-    assert.equal(report.cash.movements.length, 6); assert.ok(report.cash.movements.some(row => row.paymentMethod === 'CARD' && row.status === 'PENDING'));
+    assert.equal(report.cash.movements.length, 7); assert.ok(report.cash.movements.some(row => row.paymentMethod === 'CARD' && row.status === 'PENDING'));
+    assert.equal(report.cash.movements.find(row => row.description === 'Venta histórica tarjeta').paymentMethod, 'CARD');
     assert.equal(report.cash.periodIn, '9.00'); assert.equal(report.cash.periodOut, '2.00'); assert.equal(report.cash.currentExpected, '32.00');
     assert.equal(report.inventory.activeProducts, 1); assert.equal(report.inventory.stockUnits, 7.5); assert.equal(report.inventory.stockCostValue, '15.00');
+    assert.ok(report.inventory.movements.some(row => row.historicalEvent && row.type === 'INITIAL' && row.quantity === 0 && row.stockAfter === 7.5), 'el evento histórico de cantidad cero debe aparecer en Kardex sin alterar el stock del reporte');
     assert.equal(report.receivables.indebtedClients, 1); assert.equal(report.receivables.balance, '15.00'); assert.equal(report.receivables.overdue, '15.00');
     assert.equal(report.receivables.clients[0].clientName, 'Cliente con deuda'); assert.equal(report.receivables.clients[0].balance, '15.00');
     assert.doesNotMatch(JSON.stringify(report), /"(?:id|clientId|productId|cashSessionId|userId)"\s*:/i);
@@ -96,7 +117,7 @@ test('Integración MySQL reportes conectados de solo lectura', async t => {
   await t.test('una venta MySQL recién creada aparece en Reportes y en los rangos Hoy y Todo', async () => {
     const beforeResponse = await admin.request('/reports/connected'); assert.equal(beforeResponse.status, 200);
     const before = beforeResponse.data.report.sales;
-    const [dbBefore] = await rows(pool, "SELECT COUNT(*) AS count, COALESCE(SUM(total), 0.00) AS total FROM sales WHERE business_id = ? AND status = 'COMPLETED'", [business]);
+    const [dbBefore] = await rows(pool, "SELECT COUNT(*) AS count, COALESCE(SUM(s.total), 0.00) AS total FROM sales s WHERE s.business_id = ? AND s.status = 'COMPLETED'", [business]);
     assert.equal(Number(dbBefore.count), before.count); assert.equal(Number(dbBefore.total), Number(before.total));
     const input = { items: [{ productId, quantity: '1.000' }], priceType: 'RETAIL', discountPercent: '0', paymentMethod: 'CARD' };
     const quote = await admin.request('/sales/quote', 'POST', input); assert.equal(quote.status, 200, JSON.stringify(quote.data));
@@ -111,7 +132,7 @@ test('Integración MySQL reportes conectados de solo lectura', async t => {
     assert.equal(all.data.report.businessId, business);
     assert.equal(all.data.report.sales.count, before.count + 1);
     assert.equal(Number(all.data.report.sales.total), Number(before.total) + Number(sale.total));
-    const [dbAfter] = await rows(pool, "SELECT COUNT(*) AS count, COALESCE(SUM(total), 0.00) AS total FROM sales WHERE business_id = ? AND status = 'COMPLETED'", [business]);
+    const [dbAfter] = await rows(pool, "SELECT COUNT(*) AS count, COALESCE(SUM(s.total), 0.00) AS total FROM sales s WHERE s.business_id = ? AND s.status = 'COMPLETED'", [business]);
     assert.equal(all.data.report.sales.count, Number(dbAfter.count)); assert.equal(Number(all.data.report.sales.total), Number(dbAfter.total));
     assert.ok(all.data.report.sales.history.some(row => row.invoiceNumber === sale.invoiceNumber));
     const today = new Date(), fromDate = new Date(today.getFullYear(), today.getMonth(), today.getDate()), untilDate = new Date(fromDate);

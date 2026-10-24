@@ -51,6 +51,15 @@ function makeKeys(value) {
   });
 }
 
+test('el medio de pago explícito tiene prioridad sobre la condición Contado', () => {
+  const raw = { ...structuredClone(sourcePackage.data.sales[0]), metodo: 'Contado', medioPago: 'card' };
+  const imported = packageForSalesImport({ ...sourcePackage, data: { ...sourcePackage.data, sales: [raw] } });
+  const sale = normalizeSale(raw, 0, imported);
+  assert.equal(sale.error, undefined);
+  assert.equal(sale.paymentMethod, 'CARD');
+  assert.equal(sale.saleType, 'CASH');
+});
+
 test('la huella detecta cambios de fecha, detalle e importes de las líneas', () => {
   const baseline = makeKeys(sourcePackage)[0];
   const changed = structuredClone(sourcePackage);

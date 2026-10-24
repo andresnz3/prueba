@@ -17,6 +17,7 @@ function createAuthService(repo, config) {
       if (matches.length > 1) throw httpError(409, 'USERNAME_AMBIGUOUS');
       const [user] = matches;
       if (!user.active) throw httpError(403, 'USER_INACTIVE');
+      if (typeof repo.businessMigrationState === 'function' && await repo.businessMigrationState(db, user.business_id) === 'PENDING') throw httpError(403, 'BUSINESS_MIGRATION_PENDING');
       if (user.business_status !== 'ACTIVE') throw httpError(403, 'BUSINESS_INACTIVE');
       const token = randomToken();
       const expires = new Date(Date.now() + config.sessionSeconds * 1000);
@@ -44,7 +45,7 @@ function createAuthService(repo, config) {
     });
   }
   async function canAccess(auth, module, db = repo.pool) {
-    if (auth.role === 'ADMIN' || module === 'sales') return true;
+    if (auth.role === 'ADMIN' || module === 'sales' || module === 'settings') return true;
     const [grant] = await repo.rows(db, 'SELECT a.id FROM session_authorizations a JOIN users u ON u.business_id = a.business_id AND u.id = a.granted_by_user_id WHERE a.business_id = ? AND a.session_id = ? AND a.module = ? AND a.expires_at > UTC_TIMESTAMP(3) AND u.active = TRUE AND u.role = \'ADMIN\'', [auth.business_id, auth.session_id, module]);
     return Boolean(grant);
   }

@@ -134,6 +134,7 @@ test('MySQL migra ventas historicas sin operaciones financieras y de forma atomi
 
   const salesPreview = await service.previewSalesMigration(admin, targetBusiness, updatedPackage);
   assert.equal(salesPreview.eligible, true);
+  assert.equal(salesPreview.sourceOriginConflict.required, false);
   assert.equal(salesPreview.gates.inventory, true);
   assert.equal(salesPreview.sales.couldMigrate, 3, salesPreview.warnings.map(warning => warning.replace(/\([^)]*\)/g, '(dato de prueba)')).join('; '));
   assert.equal(salesPreview.sales.toSkip, 1);
@@ -216,6 +217,34 @@ test('MySQL migra ventas historicas sin operaciones financieras y de forma atomi
     const [count] = await rows(pool, 'SELECT COUNT(*) AS count FROM ' + table + ' WHERE business_id = ?', [targetBusiness]);
     assert.equal(Number(count.count), table === 'inventory_movements' ? 1 : 0, table + ' no debe recibir efectos de migracion de ventas');
   }
+
+  const otherSourcePackage = structuredClone(updatedPackage);
+  otherSourcePackage.business = { name: 'Otro paquete local' };
+  otherSourcePackage.exportedAt = '2026-10-15T12:00:00.000Z';
+  otherSourcePackage.data.sales = [structuredClone(updatedPackage.data.sales[0])];
+  await service.migrateBasic(admin, targetBusiness, otherSourcePackage, false);
+  await service.migrateInventory(admin, targetBusiness, otherSourcePackage);
+  const otherSourcePreview = await service.previewSalesMigration(admin, targetBusiness, otherSourcePackage);
+  assert.equal(otherSourcePreview.sourceOriginConflict.required, true);
+  assert.equal(otherSourcePreview.sourceOriginConflict.incomingSourceBusinessName, 'Otro paquete local');
+  assert.deepEqual(otherSourcePreview.sourceOriginConflict.existingSources.map(source => source.sourceBusinessName), ['Local ventas historicas']);
+  await assert.rejects(service.migrateSales(admin, targetBusiness, otherSourcePackage), { publicCode: 'MIGRATION_SALES_ORIGIN_CONFIRMATION_REQUIRED' });
+  const otherSourceImport = await service.migrateSales(admin, targetBusiness, otherSourcePackage, { confirmDifferentSource: true });
+  assert.deepEqual(otherSourceImport.created, { sales: 1 });
+  const duplicateLocalInvoice = await rows(pool,
+    'SELECT s.id, s.invoice_number, s.detail, r.source_business_key, r.source_sale_id FROM sales s JOIN migration_sales_references r ON r.business_id = s.business_id AND r.sale_id = s.id WHERE s.business_id = ? AND s.detail LIKE ? ORDER BY r.source_business_key',
+    [targetBusiness, 'Factura local: F-100%']);
+  assert.equal(duplicateLocalInvoice.length, 2);
+  assert.notEqual(duplicateLocalInvoice[0].source_business_key, duplicateLocalInvoice[1].source_business_key);
+  assert.notEqual(duplicateLocalInvoice[0].invoice_number, duplicateLocalInvoice[1].invoice_number);
+  assert.ok(duplicateLocalInvoice.every(sale => sale.invoice_number.startsWith('MIG-F-100-')));
+  const [confirmedOriginAudit] = await rows(pool,
+    "SELECT details FROM audit_logs WHERE business_id = ? AND action = 'MIGRATION_SALES_IMPORT' ORDER BY id DESC LIMIT 1",
+    [targetBusiness]);
+  const originAudit = typeof confirmedOriginAudit.details === 'string' ? JSON.parse(confirmedOriginAudit.details) : confirmedOriginAudit.details;
+  assert.equal(originAudit.sourceBusinessName, 'Otro paquete local');
+  assert.ok(duplicateLocalInvoice.some(sale => sale.source_business_key === originAudit.sourceBusinessKey));
+  assert.equal(originAudit.confirmedDifferentSource, true);
 });
 
 test('el JSON real permite vista previa e importación aislada sin efectos operativos', async t => {

@@ -108,6 +108,7 @@ test('prepara la exportación XLSX con encabezados, autofiltro, anchos y moneda 
   expect(await page.evaluate(() => window.__tableExportCapture.filename)).toBe(download.suggestedFilename());
 });
 
+
 test('los botones muestran Exportar Excel y usan estilo verde consistente', async ({ page }) => {
   await prepareTable(page, { withXlsx: true });
   const tableButton = page.locator('#table-fixture .data-table-export');
@@ -116,7 +117,7 @@ test('los botones muestran Exportar Excel y usan estilo verde consistente', asyn
   const tableStyle = await tableButton.evaluate(button => ({ background: getComputedStyle(button).backgroundColor, color: getComputedStyle(button).color }));
   expect(tableStyle).toEqual({ background: 'rgb(22, 101, 52)', color: 'rgb(255, 255, 255)' });
 
-  const exportButtons = page.locator('button.report-export-button, #dashboardView button.btn-export-excel');
+  const exportButtons = page.locator('button.report-export-button.local-report-only, #dashboardView button.btn-export-excel');
   await expect(exportButtons).toHaveText(['Exportar Excel de Ventas', 'Exportar Excel de Vendedores', 'Exportar Excel del Dashboard']);
   await expect(exportButtons).toHaveClass([/btn-export-excel/, /btn-export-excel/, /btn-export-excel/]);
   const exportStyles = await exportButtons.evaluateAll(buttons => buttons.map(button => ({ background: getComputedStyle(button).backgroundColor, color: getComputedStyle(button).color })));

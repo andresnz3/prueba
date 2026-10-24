@@ -355,6 +355,8 @@
     if (!resolved.length) return false;
     const workbook = window.XLSX.utils.book_new();
     const sheetNames = new Set();
+    const includesConnectedReports = resolved.some(table => table.closest('#reportesView'));
+    appendLeadingSheet(workbook, sheetNames, options.leadingSheet || (includesConnectedReports ? businessIdentitySheet() : null));
     resolved.forEach((table, index) => {
       const config = exportSheet(table, tableName(table));
       const baseName = safeSheetName(tableName(table), index);
@@ -399,6 +401,7 @@
     if (typeof window.XLSX === 'undefined' || !Array.isArray(sheets) || !sheets.some(sheet => Array.isArray(sheet?.rows) && sheet.rows.length)) return false;
     const workbook = window.XLSX.utils.book_new();
     const names = new Set();
+    appendLeadingSheet(workbook, names, options.leadingSheet);
     sheets.filter(sheet => Array.isArray(sheet?.rows) && sheet.rows.length).forEach((sheet, index) => {
       const name = safeSheetName(sheet.name, index);
       let unique = name, suffix = 2;
@@ -427,7 +430,34 @@
     window.XLSX.writeFile(workbook, `${fileName}_${fileDate()}.xlsx`);
     return true;
   }
+  function appendLeadingSheet(workbook, names, sheet) {
+    if (!sheet || !Array.isArray(sheet.rows) || !sheet.rows.length) return;
+    const base = safeSheetName(sheet.name || 'Negocio', 0);
+    let name = base, suffix = 2;
+    while (names.has(name)) {
+      const marker = ` ${suffix++}`;
+      name = `${base.slice(0, 31 - marker.length)}${marker}`;
+    }
+    names.add(name);
+    window.XLSX.utils.book_append_sheet(workbook, window.XLSX.utils.aoa_to_sheet(sheet.rows), name);
+  }
+  function businessIdentitySheet() {
+    const identity = window.PosRuntime?.businessIdentity?.();
+    if (!identity) return null;
+    return {
+      name: 'Negocio',
+      rows: [
+        ['Dato', 'Valor'], ['Nombre comercial', identity.name], ['Razón social', identity.legalName],
+        ['RUC', identity.ruc], ['Dirección', identity.address], ['Teléfono', identity.phone],
+        ['Moneda', identity.currency], ['Encabezado del comprobante', identity.ticketHeader],
+        ['Pie del comprobante', identity.ticketFooter]
+      ]
+    };
+  }
   const tableConfigs = [
+    ['connectedPurchasesTableBody', { label: 'Compras conectadas', fileName: 'compras_conectadas', dateColumn: 0, ignoreColumns: [6] }],
+    ['connectedPayablesTableBody', { label: 'Cuentas por pagar conectadas', fileName: 'cuentas_por_pagar_conectadas', dateColumn: 2, ignoreColumns: [4] }],
+    ['connectedSuppliersTableBody', { label: 'Proveedores conectados', fileName: 'proveedores_conectados', ignoreColumns: [5] }],
     ['repVentasHistorialBody', { label: 'Historial de ventas', fileName: 'ventas_conectadas', dateColumn: 0, sumColumns: false }],
     ['repCxCPagosBody', { label: 'Abonos a cuentas por cobrar', fileName: 'abonos_cuentas_por_cobrar', dateColumn: 0 }],
     ['repCajaMetodosBody', { label: 'Ventas de caja por medio de pago', fileName: 'caja_ventas_por_metodo' }],
@@ -466,7 +496,7 @@
       const body = document.getElementById(bodyId);
       if (!body) continue;
       if (!connected && body.closest('.connected-procurement-content, .connected-report-only, .connected-dashboard-only')) continue;
-      if (connected && body.closest('.local-report-only, .local-dashboard-only')) continue;
+      if (connected && body.closest('.local-report-only, .local-dashboard-only, .local-procurement-content')) continue;
       if (bodyId === 'clientsTableBody') document.getElementById('connectedClientsControls')?.classList.remove('hidden');
       setupDataTable(body, options);
     }

@@ -39,26 +39,25 @@ test('usuario normal no ve el panel ni puede eliminar negocios por el API', asyn
   await expect(page.locator('#salesView')).toBeVisible();
 });
 
-test('andres elimina un negocio vacío con confirmación exacta y el servidor protege el negocio 1', async ({ page }) => {
+test('andres confirma la eliminación con usuarios y configuración y el servidor protege el negocio 1', async ({ page }) => {
   await open(page); await login(page, 'andres');
   await page.locator('#navSystemAdminBtn').click(); await expect(page.locator('#systemAdminView')).toBeVisible();
   const businessName = 'Negocio eliminable ' + randomBytes(4).toString('hex');
   const username = 'delete_' + randomBytes(5).toString('hex');
   const businessId = await page.evaluate(async ({ businessName, username, password }) => {
     const api = new window.PosApiClient(window.POS_API_BASE_URL); await api.me();
-    const business = await api.createAdminBusiness(businessName);
+    const business = await api.createAdminBusiness(businessName, 'CONECTADO_BASICO');
     await api.createAdminUser(business.id, { username, fullName: 'Usuario eliminable', password, role: 'ADMIN' });
     return business.id;
   }, { businessName, username, password });
   const database = process.env.POS_INTEGRATION_DATABASE, config = readConfig();
-  if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === config.database.database) throw new Error('Base temporal de eliminación insegura');
+  if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === config.database.database) throw new Error('Temporary deletion database required');
   const pool = createDatabasePool({ ...config.database, database });
-  try { await pool.execute('INSERT INTO business_settings (business_id, business_name) VALUES (?, ?)', [businessId, businessName]); }
+  try { await pool.execute('INSERT INTO business_settings (business_id,business_name) VALUES (?,?)', [businessId, businessName]); }
   finally { await pool.end(); }
   await page.locator('#systemAdminRefreshBtn').click();
   const systemRow = page.locator('#systemAdminBusinessesBody tr[data-business-id="1"]');
   await systemRow.getByRole('button', { name: 'Eliminar' }).click();
-  await expect(page.locator('#systemAdminDeleteModal')).toBeVisible();
   await expect(page.locator('#systemAdminDeleteError')).toHaveText('No se puede eliminar el negocio principal del sistema.');
   await expect(page.locator('#systemAdminDeleteConfirmBtn')).toBeDisabled();
   await page.locator('#systemAdminDeleteCancelBtn').click();
@@ -78,8 +77,10 @@ test('andres elimina un negocio vacío con confirmación exacta y el servidor pr
   await expect(businessRow).toBeVisible();
   await businessRow.getByRole('button', { name: 'Eliminar' }).click();
   await expect(page.locator('#systemAdminDeleteModal')).toBeVisible();
-  await expect(page.locator('#systemAdminDeleteTitle')).toHaveText('Eliminar negocio');
-  await expect(page.locator('#systemAdminDeleteMessage')).toHaveText('Para eliminar «' + businessName + '», escribe exactamente ELIMINAR. Esta acción no se puede deshacer.');
+  await expect(page.locator('#systemAdminDeleteMessage')).toHaveText('Vas a eliminar definitivamente \u00ab' + businessName + '\u00bb (ID ' + businessId + '). Esta acci\u00f3n no se puede deshacer. Escribe exactamente ELIMINAR para continuar.');
+  await expect(page.locator('#systemAdminDeleteSummary')).toContainText('Usuarios: 1');
+  await expect(page.locator('#systemAdminDeleteSummary')).toContainText('Configuración del negocio: 1');
+  await expect(page.locator('#systemAdminDeleteConfirmBtn')).toBeEnabled();
   await page.locator('#systemAdminDeleteInput').fill('ELIMINAR ');
   await page.locator('#systemAdminDeleteConfirmBtn').click();
   await expect(page.locator('#systemAdminDeleteError')).toHaveText('Debes escribir exactamente ELIMINAR para confirmar.');
@@ -91,40 +92,49 @@ test('andres elimina un negocio vacío con confirmación exacta y el servidor pr
   await expect(page.locator('#systemAdminMessage')).toHaveText('Negocio eliminado correctamente.');
   const verifyPool = createDatabasePool({ ...config.database, database });
   try {
-    const [businesses] = await verifyPool.execute('SELECT id FROM businesses WHERE id = ?', [businessId]);
-    const [users] = await verifyPool.execute('SELECT id FROM users WHERE business_id = ?', [businessId]);
-    const [settings] = await verifyPool.execute('SELECT id FROM business_settings WHERE business_id = ?', [businessId]);
-    expect(businesses).toHaveLength(0); expect(users).toHaveLength(0); expect(settings).toHaveLength(0);
+    const [businesses] = await verifyPool.execute('SELECT id FROM businesses WHERE id=?', [businessId]);
+    const [users] = await verifyPool.execute('SELECT id FROM users WHERE business_id=?', [businessId]);
+    const [settings] = await verifyPool.execute('SELECT id FROM business_settings WHERE business_id=?', [businessId]);
+    const [audit] = await verifyPool.execute("SELECT id FROM audit_logs WHERE business_id=1 AND action='DELETE_BUSINESS' AND entity_id=?", [businessId]);
+    expect(businesses).toHaveLength(0); expect(users).toHaveLength(0); expect(settings).toHaveLength(0); expect(audit).toHaveLength(1);
   } finally { await verifyPool.end(); }
 });
 
-test('andres no puede eliminar un negocio con productos registrados', async ({ page }) => {
+test('andres elimina desde el panel un negocio con productos sin alterar la confirmación exacta', async ({ page }) => {
   await open(page); await login(page, 'andres');
   await page.locator('#navSystemAdminBtn').click(); await expect(page.locator('#systemAdminView')).toBeVisible();
-  const businessName = 'Negocio con datos ' + randomBytes(4).toString('hex');
+  const businessName = 'Negocio con productos ' + randomBytes(4).toString('hex');
   const businessId = await page.evaluate(async businessName => {
     const api = new window.PosApiClient(window.POS_API_BASE_URL); await api.me();
-    return (await api.createAdminBusiness(businessName)).id;
+    return (await api.createAdminBusiness(businessName, 'CONECTADO_BASICO')).id;
   }, businessName);
   const database = process.env.POS_INTEGRATION_DATABASE, config = readConfig();
-  if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === config.database.database) throw new Error('Base temporal de eliminación insegura');
+  if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === config.database.database) throw new Error('Temporary deletion database required');
   const pool = createDatabasePool({ ...config.database, database });
-  try { await pool.execute('INSERT INTO products (business_id, barcode, name, category) VALUES (?, ?, ?, ?)', [businessId, 'DEL-' + randomBytes(4).toString('hex'), 'Producto protegido', 'Pruebas']); }
+  try { await pool.execute('INSERT INTO products (business_id,barcode,name,category) VALUES (?,?,?,?)', [businessId, 'DEL-' + randomBytes(4).toString('hex'), 'Producto eliminable', 'Pruebas']); }
   finally { await pool.end(); }
   await page.locator('#systemAdminRefreshBtn').click();
   const businessRow = page.locator('#systemAdminBusinessesBody tr[data-business-id="' + businessId + '"]');
   await businessRow.getByRole('button', { name: 'Eliminar' }).click();
+  await expect(page.locator('#systemAdminDeleteSummary')).toContainText('Productos: 1');
+  await expect(page.locator('#systemAdminDeleteConfirmBtn')).toBeEnabled();
+  const stalePool = createDatabasePool({ ...config.database, database });
+  try { await stalePool.execute('INSERT INTO products (business_id,barcode,name,category) VALUES (?,?,?,?)', [businessId, 'LATE-' + randomBytes(4).toString('hex'), 'Producto agregado después de revisar', 'Pruebas']); }
+  finally { await stalePool.end(); }
   await page.locator('#systemAdminDeleteInput').fill('ELIMINAR');
   await page.locator('#systemAdminDeleteConfirmBtn').click();
-  await expect(page.locator('#systemAdminDeleteError')).toHaveText('No se puede eliminar porque el negocio ya tiene información registrada. Puede suspenderlo.');
-  await expect(page.locator('#systemAdminDeleteModal')).toBeVisible();
-  await expect(businessRow).toBeVisible();
-  const protectedResult = await page.evaluate(async businessId => {
-    const api = new window.PosApiClient(window.POS_API_BASE_URL); await api.me();
-    try { await api.deleteAdminBusiness(businessId, 'ELIMINAR'); return { code: null, status: 0 }; }
-    catch (failure) { return { code: failure.code, status: failure.status }; }
-  }, businessId);
-  expect(protectedResult).toEqual({ code: 'BUSINESS_HAS_DATA', status: 409 });
+  await expect(page.locator('#systemAdminDeleteSummary')).toContainText('Productos: 2');
+  await expect(page.locator('#systemAdminDeleteInput')).toHaveValue('');
+  await expect(page.locator('#systemAdminDeleteError')).toHaveText('La información cambió. Revisa el resumen actualizado y escribe ELIMINAR otra vez.');
+  await page.locator('#systemAdminDeleteInput').fill('ELIMINAR');
+  await page.locator('#systemAdminDeleteConfirmBtn').click();
+  await expect(page.locator('#systemAdminBusinessesBody tr[data-business-id="' + businessId + '"]')).toHaveCount(0);
+  const verifyPool = createDatabasePool({ ...config.database, database });
+  try {
+    const [businesses] = await verifyPool.execute('SELECT id FROM businesses WHERE id=?', [businessId]);
+    const [products] = await verifyPool.execute('SELECT id FROM products WHERE business_id=?', [businessId]);
+    expect(businesses).toHaveLength(0); expect(products).toHaveLength(0);
+  } finally { await verifyPool.end(); }
 });
 
 test('andres administra otro negocio sin sustituir su sesión y vuelve al panel del sistema', async ({ page }) => {
@@ -135,6 +145,7 @@ test('andres administra otro negocio sin sustituir su sesión y vuelve al panel 
   await expect(page.locator('#systemAdminTitle')).toHaveText('Administración del sistema');
   const businessName = 'Panel UI ' + randomBytes(4).toString('hex');
   await page.locator('#systemAdminBusinessName').fill(businessName);
+  await page.locator('#systemAdminBusinessPlan').selectOption('CONECTADO_BASICO');
   await page.locator('#systemAdminBusinessForm button[type=submit]').click();
   const businessRow = page.locator('#systemAdminBusinessesBody tr').filter({ hasText: businessName });
   await expect(businessRow).toBeVisible(); await expect(businessRow).toContainText('Activo');
@@ -205,6 +216,14 @@ test('andres administra otro negocio sin sustituir su sesión y vuelve al panel 
   await expect(page.locator('#supportSessionBanner')).toBeHidden();
   const returnedSession = await page.evaluate(async () => new window.PosApiClient(window.POS_API_BASE_URL).me());
   expect(returnedSession.user.username).toBe('andres'); expect(returnedSession.user.businessId).toBe('1'); expect(returnedSession.support).toBeNull();
+  const deletionPreview = await page.evaluate(async businessId => {
+    const api = new window.PosApiClient(window.POS_API_BASE_URL); await api.me();
+    return api.adminBusinessDeletionPreview(businessId);
+  }, createdBusinessId);
+  await page.evaluate(async ({ businessId, previewToken }) => {
+    const api = new window.PosApiClient(window.POS_API_BASE_URL); await api.me();
+    await api.deleteAdminBusiness(businessId, 'ELIMINAR', previewToken);
+  }, { businessId: createdBusinessId, previewToken: deletionPreview.previewToken });
 });
 
 test('andres gestiona planes, pagos USD y recordatorios sin exponerlos a usuarios normales', async ({ page }) => {
@@ -215,8 +234,9 @@ test('andres gestiona planes, pagos USD y recordatorios sin exponerlos a usuario
   const businessName = 'Plan de prueba ' + randomBytes(4).toString('hex');
   const fixture = await page.evaluate(async businessName => {
     const api = new window.PosApiClient(window.POS_API_BASE_URL); await api.me();
-    const business = await api.createAdminBusiness(businessName);
-    return { businessId: business.id, today: (await api.adminBilling()).today };
+    const baseline = (await api.adminBilling()).summary;
+    const business = await api.createAdminBusiness(businessName, 'CONECTADO_BASICO');
+    return { businessId: business.id, today: (await api.adminBilling()).today, baseline };
   }, businessName);
   await page.locator('#systemAdminRefreshBtn').click();
   const row = page.locator('#systemAdminBillingBody tr[data-business-id="' + fixture.businessId + '"]');
@@ -248,8 +268,8 @@ test('andres gestiona planes, pagos USD y recordatorios sin exponerlos a usuario
   await expect(renewedRow.locator('td').nth(4)).toContainText('USD 125.50');
   await renewedRow.locator('select').selectOption('LOCAL');
   await renewedRow.getByRole('button', { name: 'Guardar plan y fecha' }).click();
-  await expect(page.locator('#systemAdminBillingLocal')).toHaveText('1');
-  await expect(page.locator('#systemAdminBillingMonthly')).toHaveText('0');
+  await expect(page.locator('#systemAdminBillingLocal')).toHaveText(String(fixture.baseline.localPlans + 1));
+  await expect(page.locator('#systemAdminBillingMonthly')).toHaveText(String(fixture.baseline.monthlyPlans));
   await expect(page.locator('#systemAdminBillingReminder')).toBeHidden();
   const history = await page.evaluate(async businessId => {
     const api = new window.PosApiClient(window.POS_API_BASE_URL); await api.me();

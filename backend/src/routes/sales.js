@@ -33,6 +33,7 @@ function salesRoutes(authentication, service, customers) {
     const options = page(req.query, ['maxId']); if (req.query.maxId !== undefined) options.maxId = v.id(req.query.maxId);
     res.json({ sales: await service.list(req.auth, options) });
   });
+  router.get('/sales/orders/history', async (req, res) => { v.body(req.query, ['limit', 'offset'], []); res.json({ orders: await service.listHistoricalOrders(req.auth, page(req.query)) }); });
   router.get('/sales/:id', async (req, res) => { v.body(req.query, []); res.json({ sale: await service.get(req.auth, v.id(req.params.id)) }); });
   router.post('/sales/:id/cancel', async (req, res) => res.json(await service.cancel(req.auth, v.id(req.params.id), values.cancel(req.body))));
   router.post('/operations/:key/resolve', async (req, res) => { v.body(req.body, []); res.json(await service.resolveOperation(req.auth, values.operationKey(req.params.key))); });

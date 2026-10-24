@@ -3,7 +3,9 @@ async function checkCartCheckout(page) {
   const button = page.locator('#processSaleBtn');
   // A normal wheel gesture must reach the action; automatic click scrolling
   // would conceal clipping by a non-scrollable ancestor.
-  await page.locator('#cartPanel').hover();
+  // Keep the wheel away from focused numeric controls: Chromium would step
+  // the discount instead of scrolling the page.
+  await page.locator('#cartPanel').hover({ position: { x: 8, y: 8 } });
   await page.mouse.wheel(0, 2400);
   await expect.poll(async () => button.evaluate(element => {
     const rect = element.getBoundingClientRect();

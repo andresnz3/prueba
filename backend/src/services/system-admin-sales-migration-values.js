@@ -276,7 +276,7 @@ function normalizeSale(raw, index, imported) {
     if (subtotal > MAX_MONEY_CENTS || tax > MAX_MONEY_CENTS || discount > MAX_MONEY_CENTS || total < 0n || total > MAX_MONEY_CENTS || discount > subtotal + tax) throw new SaleDataError('importes de venta inválidos');
 
     const rawSaleType = first(raw, ['saleType', 'tipoVenta', 'sale_type', 'tipo']);
-    let paymentMethod = normalizedPaymentMethod(first(raw, ['paymentMethod', 'metodoPago', 'metodo', 'payment_method', 'medioPago']), rawSaleType);
+    let paymentMethod = normalizedPaymentMethod(first(raw, ['paymentMethod', 'medioPago', 'medio_pago', 'metodoPago', 'payment_method', 'metodo']), rawSaleType);
     const typeToken = token(rawSaleType || '');
     let saleType = /CREDIT|CREDITO|FIADO/.test(typeToken) || paymentMethod === 'CREDIT' ? 'CREDIT' : 'CASH';
     const status = normalizedStatus(first(raw, ['status', 'estado', 'saleStatus']) ?? cancellationStatus(first(raw, ['anulada', 'cancelled', 'cancelado'])));
@@ -287,7 +287,9 @@ function normalizeSale(raw, index, imported) {
       const localInvoice = sourceText(rawLocalInvoice == null ? null : String(rawLocalInvoice), 100);
     const canceledAt = status === 'CANCELLED' ? sqlDate(first(raw, ['cancelledAt', 'fechaAnulacion', 'cancelDate']) || createdAt, true) : null;
     const cancelReason = status === 'CANCELLED' ? (sourceText(first(raw, ['cancelReason', 'motivoAnulacion']), 500) || 'Anulada en el paquete local') : null;
-    const dueAt = sqlDate(first(raw, ['dueAt', 'fechaVencimiento', 'vencimiento']), false);
+    // v2 keeps the canonical timestamp separately; vencimiento may be a
+    // localized display string (for example "30 días") and is not a date.
+    const dueAt = sqlDate(first(raw, ['dueAt', 'due_at', 'fechaVencimiento', 'fecha_vencimiento', 'vencimientoTS', 'vencimiento']), false);
     const discountPercentValue = discountPercent ?? (subtotal > 0n ? (discount * 1000000n + subtotal / 2n) / subtotal : 0n);
     const discountPercentText = (discountPercentValue / 10000n).toString() + '.' + (discountPercentValue % 10000n).toString().padStart(4, '0');
 

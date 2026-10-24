@@ -96,7 +96,7 @@ function supplier(value) {
 
 function packageForImport(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      value.type !== 'pos_local_migration_package' || value.version !== 1 ||
+      value.type !== 'pos_local_migration_package' || ![1, 2].includes(value.version) ||
       !value.data || typeof value.data !== 'object' || Array.isArray(value.data) ||
       !value.business || typeof value.business !== 'object' || Array.isArray(value.business)) invalidPackage();
   const products = records(value.data, 'products').map(product);

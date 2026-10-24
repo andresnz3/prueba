@@ -35,7 +35,7 @@ test('Gastos conectados se registran y anulan en MySQL desde su vista', async ({
   await login(page);
   await page.locator('#navGastosBtn').click();
   await expect(page.locator('#gastosView')).toBeVisible();
-  await expect(page.locator('#connectedExpenseStatus')).toContainText('MySQL');
+  await expect(page.locator('#connectedExpenseStatus')).toContainText('Gastos actualizados.');
 
   const description = 'Gasto UI ' + randomBytes(4).toString('hex');
   await page.locator('#gastoCategoria').selectOption('Otro');

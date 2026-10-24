@@ -1,15 +1,16 @@
 'use strict';
 const { Router } = require('express');
+const express = require('express');
 const v = require('../middleware/validation');
 const { authMiddleware } = require('../middleware/authentication');
 const { createSystemAdminService } = require('../services/system-admin');
 const { httpError } = require('../middleware/errors');
 const { cookies, createSupportToken, verifySupportToken } = require('../services/tokens');
 
-function systemAdminRoutes({ repo, config }) {
+function systemAdminRoutes({ repo, config }, imageStore) {
   const router = Router();
   const middleware = authMiddleware(repo, config);
-  const service = createSystemAdminService(repo);
+  const service = createSystemAdminService(repo, { imageStore });
   router.use('/admin', middleware.authenticateOwner, (req, res, next) => {
     const allowed = service.isSystemAdmin(req.auth);
     if (!allowed && !config.production) {
@@ -27,6 +28,60 @@ function systemAdminRoutes({ repo, config }) {
   });
   router.use('/system-admin', middleware.authenticateOwner, (req, res, next) =>
     service.isSystemAdmin(req.auth) ? next() : next(httpError(403, 'SYSTEM_ADMIN_REQUIRED')));
+  const migrationPackageBody = express.raw({ type: 'application/vnd.pos.local-migration+json', limit: '32mb', inflate: false });
+  function archiveRequest(req) {
+    if (!Buffer.isBuffer(req.body)) throw httpError(415, 'UNSUPPORTED_BODY');
+    let body;
+    try { body = JSON.parse(req.body.toString('utf8')); } catch { throw httpError(400, 'INVALID_JSON'); }
+    const data = v.body(body, ['targetBusinessId', 'package', 'packageFileSha256', 'confirmed'], ['targetBusinessId', 'package']);
+    if (data.packageFileSha256 !== undefined && (typeof data.packageFileSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(data.packageFileSha256))) throw httpError(400, 'INVALID_INPUT');
+    return data;
+  }
+  router.post('/system-admin/migration/targets', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['name', 'planCode']);
+    res.status(201).json({ business: await service.createMigrationTarget(req.auth, v.text(data.name, 160), data.planCode) });
+  });
+  router.get('/system-admin/migration/targets/:businessId/inspect', async (req, res) => {
+    if (Object.keys(req.query).length) v.invalid();
+    res.json(await service.inspectExistingMigrationTarget(req.auth, v.id(req.params.businessId)));
+  });
+  router.post('/system-admin/migration/targets/:businessId/prepare', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['confirmed'], ['confirmed']);
+    if (typeof data.confirmed !== 'boolean') v.invalid();
+    res.status(201).json(await service.prepareExistingMigrationTarget(req.auth, v.id(req.params.businessId), data.confirmed));
+  });
+  router.post('/system-admin/migration/archive/preview', middleware.csrf, migrationPackageBody, async (req, res) => {
+    const data = archiveRequest(req);
+    res.json(await service.previewFullMigration(req.auth, v.id(data.targetBusinessId), data.package, data.packageFileSha256 || null));
+  });
+  router.post('/system-admin/migration/archive', middleware.csrf, migrationPackageBody, async (req, res) => {
+    const data = archiveRequest(req);
+    if (typeof data.confirmed !== 'boolean') v.invalid();
+    res.status(201).json(await service.archiveFullMigration(req.auth, v.id(data.targetBusinessId), data.package, data.confirmed, data.packageFileSha256 || null));
+  });
+  router.post('/system-admin/migration/archive/:businessId/:batchId/review', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['entity', 'sourceRecordKey', 'decision', 'attestBelongsToSource']);
+    if (data.attestBelongsToSource !== undefined && typeof data.attestBelongsToSource !== 'boolean') v.invalid();
+    res.json(await service.reviewMigrationIdentityRecord(req.auth, v.id(req.params.businessId), req.params.batchId,
+      v.text(data.entity, 40), v.text(data.sourceRecordKey, 120), v.text(data.decision, 12), data.attestBelongsToSource === true));
+  });
+  router.get('/system-admin/migration/archive/:businessId/:batchId', async (req, res) => {
+    if (Object.keys(req.query).length) v.invalid();
+    res.json(await service.migrationBatchStatus(req.auth, v.id(req.params.businessId), req.params.batchId));
+  });
+  router.post('/system-admin/migration/archive/:businessId/:batchId/project/catalog', middleware.csrf, async (req, res) => {
+    v.body(req.body, []);
+    res.json(await service.projectMigrationCatalog(req.auth, v.id(req.params.businessId), req.params.batchId));
+  });
+  router.post('/system-admin/migration/archive/:businessId/:batchId/project/operations', middleware.csrf, async (req, res) => {
+    v.body(req.body, []);
+    res.json(await service.projectMigrationOperations(req.auth, v.id(req.params.businessId), req.params.batchId));
+  });
+  router.get('/system-admin/migration/archive/:businessId/:batchId/records', async (req, res) => {
+    const allowed = new Set(['offset', 'limit']);
+    if (Object.keys(req.query).some(key => !allowed.has(key))) v.invalid();
+    res.json(await service.migrationBatchRecords(req.auth, v.id(req.params.businessId), req.params.batchId, req.query));
+  });
   router.post('/system-admin/migration/basic', middleware.csrf, async (req, res) => {
     const data = v.body(req.body, ['targetBusinessId', 'package', 'confirmSystemBusiness'], ['targetBusinessId', 'package']);
     if (data.confirmSystemBusiness !== undefined && typeof data.confirmSystemBusiness !== 'boolean') v.invalid();
@@ -41,17 +96,39 @@ function systemAdminRoutes({ repo, config }) {
     const data = v.body(req.body, ['targetBusinessId', 'package']);
     res.status(201).json(await service.migrateInventory(req.auth, v.id(data.targetBusinessId), data.package));
   });
+  router.post('/system-admin/migration/credit/preview', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['targetBusinessId', 'package']);
+    res.json(await service.previewCreditMigration(req.auth, v.id(data.targetBusinessId), data.package));
+  });
+  router.post('/system-admin/migration/credit', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['targetBusinessId', 'package', 'confirmDifferentSource'], ['targetBusinessId', 'package']);
+    if (data.confirmDifferentSource !== undefined && typeof data.confirmDifferentSource !== 'boolean') v.invalid();
+    res.status(201).json(await service.migrateCreditMigration(req.auth, v.id(data.targetBusinessId), data.package, { confirmDifferentSource: data.confirmDifferentSource === true }));
+  });
   router.post('/system-admin/migration/sales/preview', middleware.csrf, async (req, res) => {
     const data = v.body(req.body, ['targetBusinessId', 'package']);
     res.json(await service.previewSalesMigration(req.auth, v.id(data.targetBusinessId), data.package));
   });
   router.post('/system-admin/migration/sales', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['targetBusinessId', 'package', 'confirmDifferentSource'], ['targetBusinessId', 'package']);
+    if (data.confirmDifferentSource !== undefined && typeof data.confirmDifferentSource !== 'boolean') v.invalid();
+    res.status(201).json(await service.migrateSales(req.auth, v.id(data.targetBusinessId), data.package, { confirmDifferentSource: data.confirmDifferentSource === true }));
+  });
+  router.post('/system-admin/migration/purchases/preview', middleware.csrf, async (req, res) => {
     const data = v.body(req.body, ['targetBusinessId', 'package']);
-    res.status(201).json(await service.migrateSales(req.auth, v.id(data.targetBusinessId), data.package));
+    res.json(await service.previewPurchasesMigration(req.auth, v.id(data.targetBusinessId), data.package));
+  });
+  router.post('/system-admin/migration/purchases', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['targetBusinessId', 'package']);
+    res.status(201).json(await service.migratePurchases(req.auth, v.id(data.targetBusinessId), data.package));
   });
   router.get('/admin/businesses', async (req, res) => {
     if (Object.keys(req.query).length) v.invalid();
     res.json({ businesses: await service.listBusinesses(req.auth) });
+  });
+  router.get('/admin/businesses/:id/deletion-preview', async (req, res) => {
+    if (Object.keys(req.query).length) v.invalid();
+    res.json(await service.previewBusinessDeletion(req.auth, v.id(req.params.id)));
   });
   router.get('/admin/billing', async (req, res) => {
     if (Object.keys(req.query).length) v.invalid();
@@ -90,9 +167,13 @@ function systemAdminRoutes({ repo, config }) {
     if (Object.keys(req.query).length) v.invalid();
     res.json({ users: await service.listBusinessUsers(req.auth, v.id(req.params.id)) });
   });
+  router.get('/admin/businesses/:id/user-capacity', async (req, res) => {
+    if (Object.keys(req.query).length) v.invalid();
+    res.json({ capacity: await service.businessUserCapacity(req.auth, v.id(req.params.id)) });
+  });
   router.post('/admin/businesses', middleware.csrf, async (req, res) => {
-    const data = v.body(req.body, ['name']);
-    res.status(201).json({ business: await service.createBusiness(req.auth, v.text(data.name, 160)) });
+    const data = v.body(req.body, ['name', 'planCode']);
+    res.status(201).json({ business: await service.createBusiness(req.auth, v.text(data.name, 160), data.planCode) });
   });
   router.patch('/admin/businesses/:id/status', middleware.csrf, async (req, res) => {
     const data = v.body(req.body, ['status']);
@@ -100,14 +181,12 @@ function systemAdminRoutes({ repo, config }) {
     res.json({ business: await service.setBusinessStatus(req.auth, v.id(req.params.id), data.status) });
   });
   router.delete('/admin/businesses/:id', middleware.csrf, async (req, res) => {
-    const data = v.body(req.body, ['confirmation']);
+    const data = v.body(req.body, ['confirmation', 'previewToken'], ['confirmation']);
     if (data.confirmation !== 'ELIMINAR') throw httpError(400, 'BUSINESS_DELETE_CONFIRMATION_REQUIRED');
-    await service.deleteBusiness(req.auth, v.id(req.params.id), data.confirmation);
-    res.status(204).end();
+    res.json(await service.deleteBusiness(req.auth, v.id(req.params.id), data.confirmation, data.previewToken));
   });
   router.post('/admin/businesses/:id/users', middleware.csrf, async (req, res) => {
-    const data = v.body(req.body, ['username', 'fullName', 'password', 'role']);
-    const input = { username: v.username(data.username), fullName: v.text(data.fullName, 160), password: v.password(data.password, true), role: v.role(data.role) };
+    const input = v.newUser(req.body);
     res.status(201).json({ user: await service.createBusinessUser(req.auth, v.id(req.params.id), input) });
   });
   router.patch('/admin/users/:id/status', middleware.csrf, async (req, res) => {

@@ -36,3 +36,16 @@ The browser currently uses one fixed `DEFAULT_BUSINESS_ID` and has no authentica
 ## Estado tras la fase 5.2
 
 En modo conectado products e inventory_movements utilizan los IDs BIGINT y business_id de la sesion MySQL. El modo local conserva Dexie y su identificador anterior. schema.sql no se modifica: uniqueness, CHECK y claves compuestas existentes se reutilizan. El campo supplier del formulario Dexie no tiene equivalente en products; esta deshabilitado en conectado mientras se define la futura relacion de proveedores. El resto de las operaciones financieras no esta integrado.
+
+## Ejecutor de migraciones para MySQL y Contabo
+
+Para una nueva base, crea una base vacia y configura DB_NAME del backend para ese destino. Revisa el plan de solo lectura y aplica la instalacion completa:
+
+npm.cmd run migrate:all --prefix backend -- --plan --target pos_nueva --confirm-target pos_nueva --install-base-schema
+npm.cmd run migrate:all --prefix backend -- --apply --target pos_nueva --confirm-target pos_nueva --install-base-schema
+
+El plan verifica que el destino MySQL 8.0.16+ este vacio, sin ejecutar DDL. La aplicacion importa solo las tablas de schema.sql (omite su CREATE DATABASE/USE fijo a pos_multitenant) y ejecuta 001-017. Para bases existentes, omite --install-base-schema. El destino debe coincidir exactamente con DB_NAME. El ejecutor conserva checksums y estados en schema_migrations y se detiene ante dependencias faltantes, esquema parcial o drift. Adopta migraciones previas sin ledger solo si las firmas completas coinciden. En Contabo se usa el mismo proceso desde backend con un usuario limitado al destino y respaldo reciente. pos_multitenant requiere --allow-principal y autorizacion expresa. La migracion 017 amplia el plan conectado Estandar; su aplicacion en una base existente requiere autorizacion explicita y no se realizo durante esta tarea.
+
+La migracion 015 almacena eventos historicos de inventario con cantidad cero sin cambiar el stock. La 016 permite conservar ordenes historicas cuando el origen no guardo el precio de cada linea, marcandolo como desconocido en lugar de inferir precios actuales. La 016 se probo solo en bases temporales durante la continuacion real v1→v2; su aplicacion en una base principal requiere un plan y autorizacion propios.
+
+El 23 de octubre de 2026, tras autorización explícita, respaldo completo con restauración temporal verificada y plan que mostró 001–015 aplicadas/solo 016 pendiente, se aplicó 016 a `pos_multitenant` con el ejecutor oficial. La verificación posterior confirmó 001–016 aplicadas y 34 tablas con 2,714 filas previas intactas. Respaldo: `C:\Users\andre\Documents\POS-Backups\pos_multitenant-pre-016-20261023T182140.392Z-58fce0ff.sql` (SHA-256 `a23302aae8e2684ed08936e67aadfc1c78dd5f18cef3498431baaaca56573773`).

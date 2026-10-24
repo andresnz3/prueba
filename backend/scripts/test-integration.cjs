@@ -1,49 +1,153 @@
 'use strict';
-const { readFileSync } = require('node:fs');
-const { resolve } = require('node:path');
+const { resolve, basename } = require('node:path');
 const { spawn } = require('node:child_process');
 const mysql = require('mysql2/promise');
 const { randomBytes } = require('node:crypto');
 const { runBrowserTests } = require('./test-connected.cjs');
 const { readConfig } = require('../src/config/environment');
-async function main() {
-  const config = readConfig();
+const { MIGRATIONS, planNewInstall, installBaseSchema, migrate } = require('../src/services/schema-migrations');
+
+const integrationFiles = [
+  'tests/integration/schema-migrations.test.cjs',
+  'tests/integration/migration-016-compatibility.test.cjs',
+  'tests/integration/migration-017-compatibility.test.cjs',
+  'tests/integration/business-plans.test.cjs',
+  'tests/integration/business-settings.test.cjs',
+  'tests/integration/financial.test.cjs',
+  'tests/integration/auth.test.cjs',
+  'tests/integration/inventory.test.cjs',
+  'tests/integration/system-admin-inventory-migration.test.cjs',
+  'tests/integration/system-admin-sales-migration.test.cjs',
+  'tests/integration/system-admin-purchases-migration.test.cjs',
+  'tests/integration/system-admin-credit-migration.test.cjs',
+  'tests/integration/system-admin-migration-archive.test.cjs',
+  'tests/integration/system-admin-migration-real-continuation.test.cjs',
+  'tests/integration/system-admin-migration-projection.test.cjs',
+  'tests/integration/system-admin-migration-onboarding.test.cjs',
+  'tests/integration/business-deletion.test.cjs',
+  'tests/integration/migration-history.test.cjs',
+  'tests/integration/product-images.test.cjs',
+  'tests/integration/sales.test.cjs',
+  'tests/integration/cash-support-history.test.cjs',
+  'tests/integration/customers.test.cjs',
+  'tests/integration/expenses.test.cjs',
+  'tests/integration/procurement.test.cjs',
+  'tests/integration/reports.test.cjs'
+];
+
+function databaseName(config) {
   const name = 'pos_auth_test_' + randomBytes(12).toString('hex');
   if (!/^pos_auth_test_[a-f0-9]{24}$/.test(name) || name === config.database.database) throw new Error('Nombre de pruebas inseguro');
-  const connection = await mysql.createConnection({ ...config.database, database: undefined, connectionLimit: undefined });
+  return name;
+}
+
+async function seedSystemAdminFixture(connection) {
+  const [business] = await connection.query('INSERT INTO businesses (name) VALUES (?)', ['Migration 005 preservation fixture']);
+  const [user] = await connection.query('INSERT INTO users (business_id,username,full_name,password_hash,role) VALUES (?,?,?,?,?)', [business.insertId, 'migration005_fixture', 'Migration fixture', 'not-a-login-hash', 'ADMIN']);
+  const [supplier] = await connection.query('INSERT INTO suppliers (business_id,name) VALUES (?,?)', [business.insertId, 'Migration 005 supplier']);
+  await connection.query("INSERT INTO supplier_payments (business_id,user_id,supplier_id,amount,payment_method,status) VALUES (?,?,?,'3.17','CARD','POSTED')", [business.insertId, user.insertId, supplier.insertId]);
+}
+
+async function prepareDatabase(connection, config, { empty = false, throughVersion = null } = {}) {
+  const name = databaseName(config);
   let created = false;
+  let isolated;
   try {
-    await connection.query('CREATE DATABASE \x60' + name + '\x60 CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci');
+    await connection.query('CREATE DATABASE `' + name + '` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci');
     created = true;
-    await connection.query('USE \x60' + name + '\x60');
-    const schema = readFileSync(resolve(__dirname, '../../database/schema.sql'), 'utf8');
-    // Importar solo CREATE TABLE; nunca CREATE DATABASE/USE del esquema principal.
-    const tables = schema.slice(schema.indexOf('CREATE TABLE businesses'));
-    for (const sql of tables.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
-    const migration = readFileSync(resolve(__dirname, '../../database/migrations/001_authorization_grantor.sql'), 'utf8');
-    await connection.query(migration);
-    const salesMigration = readFileSync(resolve(__dirname, '../../database/migrations/002_sales_operations.sql'), 'utf8');
-    for (const sql of salesMigration.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
-    const cashWorkflowMigration = readFileSync(resolve(__dirname, '../../database/migrations/003_connected_cash_workflow.sql'), 'utf8');
-    for (const sql of cashWorkflowMigration.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
-    const creditMigration = readFileSync(resolve(__dirname, '../../database/migrations/004_connected_credit_accounts.sql'), 'utf8');
-    for (const sql of creditMigration.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
-    const systemAdminBillingMigration = readFileSync(resolve(__dirname, '../../database/migrations/006_system_admin_billing.sql'), 'utf8');
-    for (const sql of systemAdminBillingMigration.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
-    const inventoryInitialMigration = readFileSync(resolve(__dirname, '../../database/migrations/007_inventory_initial_migration.sql'), 'utf8');
-    for (const sql of inventoryInitialMigration.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
-    const localSalesMigration = readFileSync(resolve(__dirname, '../../database/migrations/008_local_sales_migration.sql'), 'utf8');
-    for (const sql of localSalesMigration.split(';').map(s => s.trim()).filter(Boolean)) await connection.query(sql);
-    console.log('Integracion: base temporal ' + name);
-    if (process.argv[2] === '--browser') {
-      process.exitCode = await runBrowserTests({ config, database: name, playwrightArgs: process.argv.slice(3) });
-      return;
-    }
-    const child = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/integration/auth.test.cjs', 'tests/integration/inventory.test.cjs', 'tests/integration/system-admin-inventory-migration.test.cjs', 'tests/integration/system-admin-sales-migration.test.cjs', 'tests/integration/product-images.test.cjs', 'tests/integration/sales.test.cjs', 'tests/integration/invoice-sequence.test.cjs', 'tests/integration/customers.test.cjs', 'tests/integration/expenses.test.cjs', 'tests/integration/procurement.test.cjs', 'tests/integration/reports.test.cjs', 'tests/integration/system-admin-billing.test.cjs'], { cwd: resolve(__dirname, '..'), stdio: 'inherit', windowsHide: true, env: { ...process.env, NODE_ENV: 'test', POS_INTEGRATION_DATABASE: name } });
-    process.exitCode = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('exit', code => resolveExit(code ?? 1)); });
+    isolated = await mysql.createConnection({ ...config.database, database: name, connectionLimit: undefined });
+    const initialPlan = await planNewInstall(isolated, name);
+    if (initialPlan.baseTables < 1 || initialPlan.migrations.length !== MIGRATIONS.length) throw new Error('El plan inicial de migraciones está incompleto');
+    await installBaseSchema(isolated, name);
+    if (!empty) await seedSystemAdminFixture(isolated);
+    await migrate(isolated, name, 'apply', throughVersion ? { throughVersion } : undefined);
+    return name;
+  } catch (error) {
+    if (isolated) { await isolated.end(); isolated = undefined; }
+    if (created) await connection.query('DROP DATABASE `' + name + '`');
+    throw error;
   } finally {
-    if (created) { await connection.query('DROP DATABASE \x60' + name + '\x60'); console.log('Base temporal eliminada'); }
+    if (isolated) await isolated.end();
+  }
+}
+
+async function runFile(connection, config, file, { throughVersion = null } = {}) {
+  const name = await prepareDatabase(connection, config, { empty: ['auth.test.cjs', 'business-deletion.test.cjs', 'business-plans.test.cjs'].includes(basename(file)), throughVersion });
+  console.log('Integración aislada: ' + file + ' [' + name + ']');
+  try {
+    const child = spawn(process.execPath, ['--test', '--test-concurrency=1', file], {
+      cwd: resolve(__dirname, '..'),
+      stdio: 'inherit',
+      windowsHide: true,
+      env: { ...process.env, NODE_ENV: 'test', POS_INTEGRATION_DATABASE: name }
+    });
+    return await new Promise((resolveExit, reject) => {
+      child.once('error', reject);
+      child.once('exit', code => resolveExit(code ?? 1));
+    });
+  } finally {
+    await connection.query('DROP DATABASE `' + name + '`');
+    console.log('Base temporal eliminada: ' + name);
+  }
+}
+
+function selectedIntegrationFiles(args) {
+  const filters = [
+    ['--migration-archive-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/system-admin-migration-archive.test.cjs', 'tests/integration/system-admin-migration-onboarding.test.cjs']],
+    ['--migration-projection-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/system-admin-migration-archive.test.cjs', 'tests/integration/system-admin-migration-projection.test.cjs', 'tests/integration/system-admin-migration-onboarding.test.cjs']],
+    ['--migration-continuation-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/system-admin-migration-real-continuation.test.cjs']],
+      ['--migration-016-only', ['tests/integration/migration-016-compatibility.test.cjs']],
+    ['--migration-017-only', ['tests/integration/migration-017-compatibility.test.cjs']],
+    ['--business-plans-only', ['tests/integration/business-plans.test.cjs']],
+    ['--auth-only', ['tests/integration/auth.test.cjs']],
+    ['--migration-onboarding-only', ['tests/integration/system-admin-migration-onboarding.test.cjs']],
+    ['--migration-history-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/system-admin-migration-archive.test.cjs', 'tests/integration/system-admin-migration-onboarding.test.cjs', 'tests/integration/migration-history.test.cjs']],
+    ['--financial-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/financial.test.cjs']],
+    ['--procurement-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/procurement.test.cjs']],
+    ['--settings-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/business-settings.test.cjs']],
+    ['--cash-support-only', ['tests/integration/cash-support-history.test.cjs']],
+    ['--reports-only', ['tests/integration/reports.test.cjs']],
+    ['--business-deletion-only', ['tests/integration/business-deletion.test.cjs']]
+  ];
+  let selected = integrationFiles;
+  for (const [flag, files] of filters) if (args.includes(flag)) selected = selected.filter(file => files.includes(file));
+  if (args.includes('--operational-only')) selected = selected.filter(file => !file.includes('migration.test.cjs'));
+  return selected;
+}
+
+async function main() {
+  const config = readConfig();
+  const connection = await mysql.createConnection({ ...config.database, database: undefined, connectionLimit: undefined });
+  let exitCode = 0;
+  try {
+    if (process.argv[2] === '--browser') {
+      const name = await prepareDatabase(connection, config, { empty: true });
+      console.log('Integración de navegador: base temporal ' + name);
+      try {
+        exitCode = await runBrowserTests({ config, database: name, playwrightArgs: process.argv.slice(3) });
+      } finally {
+        await connection.query('DROP DATABASE `' + name + '`');
+        console.log('Base temporal eliminada: ' + name);
+      }
+      return exitCode;
+    }
+
+    const files = selectedIntegrationFiles(process.argv.slice(2));
+    if (!files.length) throw new Error('No hay suites de integración seleccionadas');
+    for (const file of files) {
+      const throughVersion = process.argv.includes('--migration-016-only') ? '015' : process.argv.includes('--migration-017-only') || file.endsWith('migration-017-compatibility.test.cjs') ? '016' : null;
+      const code = await runFile(connection, config, file, { throughVersion });
+      if (code !== 0) exitCode = 1;
+    }
+    return exitCode;
+  } finally {
     await connection.end();
   }
 }
-main().catch(() => { console.error('Fallo la integracion. Requiere MySQL accesible y permisos CREATE/DROP sobre pos_auth_test_*. No se modifico la base principal.'); process.exitCode = 1; });
+
+main().then(code => { process.exitCode = code; }).catch(error => {
+  const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
+  const message = typeof error?.message === 'string' ? error.message.replace(/(password|passwd|secret|token)\s*[:=]\s*\S+/ig, '$1=[redacted]') : 'Error sin detalle';
+  console.error('Falló la integración (' + code + '): ' + message + '. Requiere MySQL accesible y permisos CREATE/DROP sobre pos_auth_test_*. No se modificó la base principal.');
+  process.exitCode = 1;
+});

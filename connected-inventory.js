@@ -30,7 +30,7 @@
     preview.src = photoPreview; preview.style.display = 'block';
   }
   const blockedForms = new Set(['paymentForm', 'payablePaymentForm']);
-  const blockedButtons = new Set(['confirmCashBtn', 'confirmCashCorrectionBtn', 'registrarEntradaBtn', 'registrarSalidaBtn']);
+  const blockedButtons = new Set(['confirmCashBtn', 'confirmCashCorrectionBtn']);
   // Capture impide ejecutar los handlers locales cuando el modulo aun no tiene API.
   document.addEventListener('submit', event => {
     if (!blockedForms.has(event.target.id)) return;

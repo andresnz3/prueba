@@ -23,12 +23,13 @@ async function runBrowserTests({ config, database, playwrightArgs = [] }) {
   let web, apiServer;
   try {
     const passwordHash = await hashPassword(fixturePassword);
-    const business = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Browser fixture A'])).insertId);
-    const businessB = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Browser fixture B'])).insertId);
+    const business = String((await rows(pool, "INSERT INTO businesses (name, status) VALUES (?, 'ACTIVE')", ['Browser fixture A'])).insertId);
+    const businessB = String((await rows(pool, "INSERT INTO businesses (name, status) VALUES (?, 'ACTIVE')", ['Browser fixture B'])).insertId);
+    for (const businessId of [business, businessB]) await rows(pool, "INSERT INTO business_subscriptions (business_id,plan_code) VALUES (?,'CONECTADO_BASICO')", [businessId]);
     for (const [businessId, username, role] of [[business, 'browseradmin', 'ADMIN'], [business, 'andres', 'ADMIN'], [business, 'browserseller', 'VENDEDOR'], [businessB, 'otheradmin', 'ADMIN']]) await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessId, username, username, passwordHash, role]);
     let apiUrl;
     const root = resolve(__dirname, '../..');
-    const publicFiles = new Set(['index.html', 'app.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'connected-expenses.js', 'connected-purchases.js', 'connected-reports.js', 'dashboard-period.js', 'period-filters.js', 'connected-dashboard.js', 'local-cash-flow.js', 'local-migration-preview.js', 'local-migration-export.js']);
+    const publicFiles = new Set(['index.html', 'app.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'connected-expenses.js', 'connected-purchases.js', 'connected-reports.js', 'dashboard-period.js', 'period-filters.js', 'connected-dashboard.js', 'local-cash-flow.js', 'local-migration-preview.js', 'local-migration-export.js', 'connected-migration-history.js']);
     web = createServer((req, res) => {
       const name = new URL(req.url, 'http://localhost').pathname.slice(1) || 'index.html';
       if (name === 'api-config.js') { res.setHeader('Content-Type', 'application/javascript'); res.end('window.POS_API_BASE_URL = ' + JSON.stringify(apiUrl) + ';'); return; }

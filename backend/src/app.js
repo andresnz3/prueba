@@ -15,9 +15,10 @@ function createApp({ config, checkDatabase, authentication }) {
       callback(httpError(403, 'ORIGIN_NOT_ALLOWED'));
     }, methods: authentication ? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] : ['GET'], credentials: Boolean(authentication), allowedHeaders: ['Content-Type', 'X-CSRF-Token'], maxAge: 600
   }));
-  let inventory;
+  let inventory, store;
   if (authentication) {
-    const store = require('./services/product-images').createImageStore(config.images || require('./config/images').readImageConfig());
+    store = require('./services/product-images').createImageStore(config.images || require('./config/images').readImageConfig());
+    app.locals.businessImageStore = store;
     inventory = require('./services/inventory').createInventoryService(authentication,store);
     // Binario acotado: autenticar y validar CSRF antes de leer la fotografia.
     app.use('/api/product-images',require('./routes/product-images').productImageRoutes(authentication,inventory));
@@ -25,10 +26,14 @@ function createApp({ config, checkDatabase, authentication }) {
   app.use(express.json({ limit: config.jsonLimit, strict: true, inflate: false }));
   app.use('/api', healthRoutes(checkDatabase));
   if (authentication) {
-    app.use('/api', require('./routes/system-admin').systemAdminRoutes(authentication));
+    app.use('/api', require('./routes/financial').financialRoutes(authentication));
+    app.use('/api', require('./routes/migration-history').migrationHistoryRoutes(authentication));
+    app.use('/api', require('./routes/system-admin').systemAdminRoutes(authentication,store));
     app.use('/api', require('./routes/inventory').inventoryRoutes(authentication,inventory));
     const customers = require('./services/customer-accounts').createCustomerService(authentication);
     const sales = require('./services/sales').createSalesService({ ...authentication, creditSnapshot: customers.creditSnapshot });
+    const businessSettings = require('./services/business-settings').createBusinessSettingsService({ ...authentication, imageStore: store });
+    app.use('/api', require('./routes/business-settings').businessSettingsRoutes(authentication, businessSettings));
     app.use('/api', require('./routes/sales').salesRoutes(authentication, sales, customers));
     const procurement = require('./services/procurement').createProcurementService(authentication);
     app.use('/api', require('./routes/procurement').procurementRoutes(authentication, procurement));

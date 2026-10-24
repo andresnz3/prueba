@@ -6,3 +6,7 @@ node_modules/
 !backend/package-lock.json
 
 /test-results-connected/
+/prueba-compras.json
+
+.codex/
+test-results/

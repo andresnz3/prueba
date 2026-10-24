@@ -1677,7 +1677,7 @@ test("no permite guardar un producto con nombre compuesto solo por espacios", as
   await expect(page.locator("#customAlertModal")).toBeVisible();
   await expect(page.locator("#customAlertMessage")).toContainText("nombre del producto es obligatorio");
   await expect(page.locator("#productModal")).toBeVisible();
-  await expect(page.locator("#inventoryTableBody tr")).toHaveCount(0);
+  await expect(page.locator("#inventoryTableBody tr:not(:has(td[colspan]))")).toHaveCount(0);
 });
 
 test("inventario muestra correctamente productos activos, bajos y agotados", async ({ page }) => {
@@ -2032,12 +2032,12 @@ test("compra a crédito guarda proveedor, factura y vencimiento", async ({ page 
   await expect(purchaseRow).toContainText("C$16.00");
   await expect(purchaseRow).toContainText("CRÉDITO");
   await expect(purchaseRow).toContainText("Pendiente C$16.00");
-  await expect(purchaseRow).toContainText("Vence:");
+  await expect(purchaseRow).toContainText("Vence");
 
   await page.locator("#customAlertModal .close-modal-btn").click();
   await purchaseRow.getByRole("button", { name: "Ver Factura" }).click();
   await expect(page.locator("#ticketContent")).toContainText("FACT-CREDIT-001");
-  await expect(page.locator("#ticketContent")).toContainText("Vence:");
+  await expect(page.locator("#ticketContent")).toContainText("Vence");
   const expectedDueDate = await page.evaluate(() => {
     const date = new Date();
     date.setDate(date.getDate() + 15);
@@ -2298,7 +2298,7 @@ test("CLIENTES: editar cliente actualiza datos y mantiene la deuda protegida", a
   const clientRow = page.locator("#clientsTableBody tr").filter({
     hasText: "Cliente antes de editar"
   });
-  const clientId = (await clientRow.locator("td").first().innerText()).split("\n")[0];
+  const clientId = await clientRow.getAttribute("data-client-id");
   await clientRow.getByRole("button", { name: "Editar" }).click();
   await expect(page.locator("#clientDebt")).toHaveAttribute("readonly", "");
   await expect(page.locator("#clientDebtHint")).toContainText("La deuda solo cambia");
@@ -2311,7 +2311,7 @@ test("CLIENTES: editar cliente actualiza datos y mantiene la deuda protegida", a
   const editedRow = page.locator("#clientsTableBody tr").filter({
     hasText: "Cliente después de editar"
   });
-  await expect(editedRow.locator("td").first()).toContainText(clientId);
+  await expect(editedRow).toHaveAttribute("data-client-id",clientId);
   await expect(editedRow).toContainText("33334444");
   await expect(editedRow).toContainText("C$700.00");
   await expect(editedRow).toContainText("C$600.00");
@@ -2384,7 +2384,7 @@ test("CLIENTES: el alta rápida asocia cliente con venta a crédito y actualiza 
 
   await expect(page.locator("#ticketModal")).toBeVisible();
   await expect(page.locator("#ticketContent")).toContainText("Cliente venta a crédito");
-  await expect(page.locator("#ticketContent")).toContainText("Saldo Pendiente");
+  await expect(page.locator("#ticketContent")).toContainText("Saldo pendiente");
   await page.locator("#newSaleBtn").click();
 
   await abrirClientes(page);
@@ -2412,7 +2412,7 @@ test("CLIENTES: no permite una venta a crédito superior al límite disponible",
   const clientRow = page.locator("#clientsTableBody tr").filter({
     hasText: "Cliente con límite bajo"
   });
-  const clientId = (await clientRow.locator("td").first().innerText()).split("\n")[0];
+  const clientId = await clientRow.getAttribute("data-client-id");
   await page.locator("#navSalesBtn").click();
   await expect(page.locator("#salesView")).toBeVisible();
   await page.locator('input[name="paymentMethod"][value="credit"]').check();
@@ -2483,7 +2483,7 @@ test("CLIENTES: historial muestra venta a crédito y permite abonar a su factura
   const clientRow = page.locator("#clientsTableBody tr").filter({
     hasText: "Cliente con historial"
   });
-  const clientId = (await clientRow.locator("td").first().innerText()).split("\n")[0];
+  const clientId = await clientRow.getAttribute("data-client-id");
 
   await page.locator("#navSalesBtn").click();
   await page.locator('input[name="paymentMethod"][value="credit"]').check();
@@ -3112,12 +3112,12 @@ test.describe("CAJA:", () => {
       await expect(paidInvoice).toContainText("Pendiente C$0.00");
       await expect(paidInvoice.getByRole("button", { name: "Abonar" })).toHaveCount(0);
       await page.locator("#customAlertModal .close-modal-btn").click();
-      await expect(page.locator("#payablesTableBody")).toContainText("No hay cuentas por pagar pendientes");
+      await expect(page.locator("#payablesTableBody")).toContainText("No hay facturas pendientes con vencimiento en este período.");
 
       await page.reload();
       await iniciarSesion(page);
       await page.locator("#navPayablesBtn").click();
-      await expect(page.locator("#payablesTableBody")).toContainText("No hay cuentas por pagar pendientes");
+      await expect(page.locator("#payablesTableBody")).toContainText("No hay facturas pendientes con vencimiento en este período.");
       await page.locator("#navSuppliersBtn").click();
       const supplierRow = page.locator("#suppliersTableBody tr").filter({
         hasText: "Proveedor pagos límite"
@@ -3572,7 +3572,7 @@ test.describe("CAJA:", () => {
     const clientRow = page.locator("#clientsTableBody tr").filter({
       hasText: "Cliente para integración Caja"
     });
-    const clientId = (await clientRow.locator("td").first().innerText()).split("\n")[0];
+    const clientId = await clientRow.getAttribute("data-client-id");
 
     await abrirCajaDesdeUI(page, "50.00");
     await venderProductoDesdeUI(page, "CAJA-SALES-001");

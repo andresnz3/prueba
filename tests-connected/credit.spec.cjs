@@ -24,7 +24,7 @@ test('clientes MySQL: crear, editar, inactivar y excluir de la lista de credito'
   const clientTable=page.locator('#clientsTableBody').locator('xpath=parent::table'), row=page.locator('#clientsTableBody tr[data-client-id="'+client.id+'"]'); await expect(clientTable.locator('thead tr:first-child th').first()).toHaveText('Cliente'); await expect(clientTable.locator('thead tr:first-child th')).toHaveCount(7); await expect(row.locator('td')).toHaveCount(7); await expect(row.locator('td').first()).toHaveText(name); await row.getByRole('button',{name:'Editar'}).click(); await page.locator('#clientPhone').fill('555-EDIT'); await page.locator('#clientForm button[type=submit]').click(); await expect(row).toContainText('555-EDIT');
   await row.getByRole('button',{name:'Inactivar'}).click(); await expect(row).toContainText('Inactivo');
   await page.locator('#navSalesBtn').click(); await page.locator('input[name=paymentMethod][value=credit]').check(); await expect(page.locator('#creditClientSelect option')).not.toContainText(name);
-  expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,queue:0});
+  expect(await page.evaluate(() => localDB)).toBeNull();
 });
 test('venta a credito conectada factura, descuenta stock, crea CxC y abono tarjeta pendiente',async({page})=>{
   const product=await fixture(page), name='Cuenta '+randomUUID().slice(0,8), customer=await createClient(page,name);
@@ -32,7 +32,7 @@ test('venta a credito conectada factura, descuenta stock, crea CxC y abono tarje
   await page.locator('#barcodeInput').fill(product.barcode); await page.locator('#addBarcodeBtn').click(); await page.locator('#processSaleBtn').click(); await expect(page.locator('#connectedCheckoutModal')).toBeVisible(); await expect(page.locator('#connectedCheckoutTitle')).toHaveText('Confirmar venta a crédito'); await expect(page.locator('#connectedCheckoutPaymentMethod')).toHaveText('Crédito'); await expect(page.locator('#connectedCheckoutDetail')).toContainText(name); await expect(page.locator('#connectedCashGroup')).toHaveClass(/hidden/); await expect(page.locator('#connectedCashChangePreview')).toHaveClass(/hidden/);
   await page.locator('#confirmConnectedSaleBtn').click(); await expect(page.locator('#ticketModal')).toBeVisible(); await expect(page.locator('#ticketContent')).toContainText('FACTURA DE CR');
   const sale=(await call(page,'sales')).find(value=>value.paymentMethod==='CREDIT'&&value.clientId===customer.id); expect(sale).toBeTruthy(); expect(Number((await call(page,'product',product.id)).stock)).toBe(19);
-  expect((await call(page,'currentCash',true)).expectedAmount).toBe('100.00'); await expect(page.locator('#ticketContent')).toContainText('Saldo Pendiente');
+  expect((await call(page,'currentCash',true)).expectedAmount).toBe('100.00'); await expect(page.locator('#ticketContent')).toContainText('Saldo pendiente');
   await page.locator('#newSaleBtn').click(); await page.locator('#navClientsBtn').click();
   await expect(page.locator('#connectedReceivablesPanel')).toBeHidden();
   const clientRow=page.locator('#clientsTableBody tr[data-client-id="'+customer.id+'"]');
@@ -51,5 +51,5 @@ test('venta a credito conectada factura, descuenta stock, crea CxC y abono tarje
   await page.locator('#navCajaBtn').click(); const pending=page.locator('#cajaOperacionesBody tr').filter({hasText:'Abono factura #'+sale.invoiceNumber}); await expect(pending).toContainText('Tarjeta pendiente'); await pending.locator('button[data-action=confirm-payment]').click(); await expect(page.locator('#customAlertMessage')).toContainText('Tarjeta confirmado para la factura #'+sale.invoiceNumber); await page.locator('#customAlertModal .close-modal-btn').click();
   expect((await call(page,'currentCash',true)).expectedAmount).toBe('100.00'); const receivable=(await call(page,'receivables',0,name)).find(value=>value.id===sale.id); expect(receivable.paid).toBe('2.00'); expect(receivable.balance).toBe('8.00');
   const endingCash=await call(page,'currentCash',true); await call(page,'closeCash',endingCash.id,{operationKey:randomUUID(),countedAmount:endingCash.expectedAmount});
-  expect(await page.evaluate(async()=>({sales:await localDB.sales.count(),queue:await localDB.sync_queue.count()}))).toEqual({sales:0,queue:0});
+  expect(await page.evaluate(() => localDB)).toBeNull();
 });

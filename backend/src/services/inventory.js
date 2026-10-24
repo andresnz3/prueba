@@ -94,8 +94,16 @@ function createInventoryService({ repo, auth, config }, imageStore) {
   function movements(session, options) {
     return work(session, 'inventory', async (db, current) => {
       if (options.productId) await find(db, current, options.productId);
-      const data = await repo.rows(db, 'SELECT m.*, u.full_name AS responsible FROM inventory_movements m LEFT JOIN users u ON u.business_id = m.business_id AND u.id = m.user_id WHERE m.business_id = ?' + (options.productId ? ' AND m.product_id = ?' : '') + (options.maxId ? ' AND m.id <= ?' : '') + ' ORDER BY m.id DESC LIMIT ? OFFSET ?', [current.business_id, ...(options.productId ? [options.productId] : []), ...(options.maxId ? [options.maxId] : []), options.limit, options.offset]);
-      return data.map(row => ({ id: String(row.id), businessId: String(row.business_id), productId: String(row.product_id), userId: row.user_id === null ? null : String(row.user_id), userName: row.responsible || 'Sistema', type: row.type, quantity: row.quantity, stockAfter: row.stock_after, unitCost: row.unit_cost, reason: row.reason || '', createdAt: row.created_at }));
+      const [eventTable] = await repo.rows(db, "SELECT COUNT(*) AS available FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='migration_zero_inventory_events'", []);
+      const base = 'SELECT m.business_id,CAST(m.id AS CHAR) AS id,m.id AS numeric_id,m.product_id,m.user_id,u.full_name AS responsible,m.source_actor,m.source_reference_type,m.source_reference_id,m.is_historical,m.type,m.quantity,m.stock_after,m.unit_cost,m.reason,m.created_at,0 AS historical_event FROM inventory_movements m LEFT JOIN users u ON u.business_id=m.business_id AND u.id=m.user_id WHERE m.business_id=?';
+      let data;
+      if (Number(eventTable.available) > 0) {
+        const filters = (options.productId ? ' AND product_id = ?' : '') + (options.maxId ? ' AND (historical_event=1 OR numeric_id <= ?)' : '');
+        data = await repo.rows(db, 'SELECT * FROM (' + base + ' UNION ALL SELECT z.business_id,CONCAT(\'historical-zero-\',z.id) AS id,z.id AS numeric_id,z.product_id,NULL AS user_id,NULL AS responsible,z.source_actor,z.source_reference_type,z.source_reference_id,1 AS is_historical,z.source_type AS type,z.quantity,z.stock_after,z.unit_cost,z.reason,z.occurred_at AS created_at,1 AS historical_event FROM migration_zero_inventory_events z WHERE z.business_id=?) ledger WHERE business_id=?' + filters + ' ORDER BY created_at DESC,numeric_id DESC,historical_event DESC LIMIT ? OFFSET ?', [current.business_id, current.business_id, current.business_id, ...(options.productId ? [options.productId] : []), ...(options.maxId ? [options.maxId] : []), options.limit, options.offset]);
+      } else {
+        data = await repo.rows(db, 'SELECT m.*,u.full_name AS responsible FROM inventory_movements m LEFT JOIN users u ON u.business_id=m.business_id AND u.id=m.user_id WHERE m.business_id=?' + (options.productId ? ' AND m.product_id=?' : '') + (options.maxId ? ' AND m.id<=?' : '') + ' ORDER BY m.created_at DESC,m.id DESC LIMIT ? OFFSET ?', [current.business_id, ...(options.productId ? [options.productId] : []), ...(options.maxId ? [options.maxId] : []), options.limit, options.offset]);
+      }
+      return data.map(row => ({ id: String(row.id), businessId: String(row.business_id), productId: String(row.product_id), userId: row.user_id === null ? null : String(row.user_id), userName: row.source_actor || row.responsible || 'Sistema', isHistorical: Boolean(row.is_historical), historicalEvent: Boolean(row.historical_event), sourceActor: row.source_actor || null, sourceReferenceType: row.source_reference_type || null, sourceReferenceId: row.source_reference_id || null, type: row.type, quantity: row.quantity, stockAfter: row.stock_after, unitCost: row.unit_cost, reason: row.reason || '', createdAt: row.created_at }));
     });
   }
   async function uploadImage(session, body, mime) {
@@ -115,7 +123,9 @@ function createInventoryService({ repo, auth, config }, imageStore) {
   function readImage(session, image) {
     return work(session,'sales',async(db,current) => {
       const [row] = await repo.rows(db,'SELECT id, active FROM products WHERE business_id = ? AND image = ? AND deleted = FALSE ORDER BY active DESC LIMIT 1',[current.business_id,image]);
-      if (!row || (!row.active && !await auth.canAccess(current,'inventory',db))) throw httpError(404,'IMAGE_NOT_FOUND');
+      const [businessLogo] = await repo.rows(db,'SELECT id FROM business_settings WHERE business_id = ? AND logo = ? LIMIT 1',[current.business_id,image]);
+      const visibleProduct = row && (row.active || await auth.canAccess(current,'inventory',db));
+      if (!visibleProduct && !businessLogo) throw httpError(404,'IMAGE_NOT_FOUND');
       return imageStore.read(current.business_id,image);
     });
   }

@@ -4,7 +4,8 @@
 window.onerror = function(msg, url, lineNo) { console.error("Error detectado:", msg, "en línea:", lineNo); return false; };
 
 const connectedMode = new URLSearchParams(location.search).get('mode') === 'connected';
-let DEFAULT_BUSINESS_ID = '00000000-0000-0000-0000-000000000000';
+const LEGACY_LOCAL_BUSINESS_ID = '00000000-0000-0000-0000-000000000000';
+let DEFAULT_BUSINESS_ID = LEGACY_LOCAL_BUSINESS_ID;
 let CONNECTED_EFFECTIVE_BUSINESS_ID = null;
 function createPosDatabase(name) {
 const db = new Dexie(name);
@@ -39,7 +40,7 @@ let cajaActual = null, cajaHistorial = [], gastosHistory = [], abonosHistory = [
 let buyerType = "retail", paymentMethod = "cash", currentUser = null;
 let unlockedModuleId = null;
 let renderizandoCarrito = false;
-let saleNumber = 1, totalTemporal = 0, descuentoPct = 0, descuentoMonto = 0, pendingAdminView = null, tempImageBase64 = null, tempConfigLogoBase64 = null;
+let saleNumber = 1, totalTemporal = 0, descuentoPct = 0, descuentoMonto = 0, pendingAdminView = null, tempImageBase64 = null, tempConfigLogoBase64 = null, tempConfigLogoFile = null, tempConfigLogoPreviewUrl = null;
 let procesandoVenta = false;
 let ticketEsVentaNueva = false;
 let html5QrCode = null, isCameraActive = false;
@@ -47,8 +48,9 @@ let isProdCameraActive = false, prodHtml5QrCode = null;
 const GASTOS_CATEGORIES = ["Servicios Básicos", "Renta / Alquiler", "Transporte", "Sueldos", "Mantenimiento", "Insumos de Limpieza", "Otro"];
 
 let configStorageKey = connectedMode ? null : 'posSystemConfig';
+let legacyConnectedSettings = null, businessSettingsHasStored = false, businessSettingsSchemaReady = false;
 const defaultSystemConfig = () => ({
-    name: "POS DISTRIBUIDORA", ruc: "", address: "", phone: "", currency: "C$", header: "", footer: "¡Gracias por su compra!", tax: 0, minStock: 5, logo: null, salesFlow: "DIRECT"
+    name: "POS DISTRIBUIDORA", legalName: "", ruc: "", address: "", phone: "", currency: "C$", header: "", footer: "¡Gracias por su compra!", tax: 0, minStock: 5, logo: null, salesFlow: "DIRECT"
 });
 function readSystemConfig(key) {
     const defaults = defaultSystemConfig();
@@ -67,6 +69,66 @@ function readSystemConfig(key) {
     } catch { return defaults; }
 }
 let sysConfig = readSystemConfig(configStorageKey);
+function localBusinessRows(table, stateField, stateValue) {
+    if (connectedMode) return Promise.resolve([]);
+    return table.toArray().then(rows => rows.filter(row => {
+        const id = String(row?.business_id ?? row?.businessId ?? '').trim().toLowerCase();
+        return (id === String(DEFAULT_BUSINESS_ID).toLowerCase() || id === LEGACY_LOCAL_BUSINESS_ID) && (stateField === undefined || row[stateField] === stateValue);
+    }));
+}
+window.PosLocalIdentity = Object.freeze({
+    currentId() { return connectedMode ? null : DEFAULT_BUSINESS_ID; },
+    matches(row) {
+        if (connectedMode) return false;
+        const id = String(row?.business_id ?? row?.businessId ?? '').trim().toLowerCase();
+        return id === String(DEFAULT_BUSINESS_ID).toLowerCase() || id === LEGACY_LOCAL_BUSINESS_ID;
+    },
+    cashSessions(state) { return connectedMode ? Promise.resolve([]) : localBusinessRows(localDB.cajaSessions, state === undefined ? undefined : 'estado', state); },
+    saleOrders(status) { return connectedMode ? Promise.resolve([]) : localBusinessRows(localDB.saleOrders, status === undefined ? undefined : 'status', status); }
+});
+function createLocalBusinessId() {
+    if (typeof window.crypto?.randomUUID === 'function') return window.crypto.randomUUID().toLowerCase();
+    if (typeof window.crypto?.getRandomValues !== 'function') return '';
+    const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+function hasLocalControlCharacters(value) {
+    return Array.from(String(value)).some(character => {
+        const code = character.charCodeAt(0);
+        return code < 32 || code === 127;
+    });
+}
+function ensureLocalBusinessIdentity(config) {
+    if (connectedMode) return { config, id: '' };
+    const candidates = [config.localBusinessId, config.local_business_id, config.businessId, config.business_id]
+        .map(value => String(value || '').trim().toLowerCase())
+        .filter(value => value && value !== LEGACY_LOCAL_BUSINESS_ID && value.length <= 112 && !hasLocalControlCharacters(value));
+    const current = candidates[0] || '';
+    if (current) {
+        if (config.localBusinessId === current) return { config, id: current };
+        const updated = { ...config, localBusinessId: current };
+        try { localStorage.setItem('posSystemConfig', JSON.stringify(updated)); }
+        catch { /* Keep the established identity in memory; later settings save will persist it. */ }
+        return { config: updated, id: current };
+    }
+    const id = createLocalBusinessId();
+    if (!id) return { config, id: '' };
+    const updated = { ...config, localBusinessId: id };
+    try {
+        localStorage.setItem('posSystemConfig', JSON.stringify(updated));
+        return { config: updated, id };
+    } catch {
+        return { config, id: '' };
+    }
+}
+if (!connectedMode) {
+    const identity = ensureLocalBusinessIdentity(sysConfig);
+    sysConfig = identity.config;
+    if (identity.id) DEFAULT_BUSINESS_ID = identity.id;
+}
 
 let reporteDesdeTS = null, reporteHastaTS = null;
 
@@ -210,9 +272,10 @@ function setupAutocomplete(input, options) {
             event.preventDefault(); select(activeIndex >= 0 ? activeIndex : 0);
         }
     }
+    input.addEventListener('focus', refresh);
     input.addEventListener('input', onInput);
     input.addEventListener('keydown', onKeydown);
-    input.addEventListener('blur', () => setTimeout(() => { if (!list.contains(document.activeElement)) close(); }, 0));
+    input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input && !list.contains(document.activeElement)) close(); }, 0));
     document.addEventListener('pointerdown', event => { if (event.target !== input && !list.contains(event.target)) close(); });
     window.addEventListener('resize', position);
     document.addEventListener('scroll', position, true);
@@ -700,7 +763,67 @@ function renderPosView(viewId) {
     if(viewId === "configView") cargarVistaConfiguracion();
 }
 
-document.getElementById("confLogoInput")?.addEventListener("change", function(e) { const file = e.target.files[0]; if(file) { const reader = new FileReader(); reader.onload = function(evt) { tempConfigLogoBase64 = evt.target.result; const prev = document.getElementById("confLogoPreview"); if(prev) { prev.src = tempConfigLogoBase64; prev.style.display = "block"; } }; reader.readAsDataURL(file); } });
+document.getElementById("confLogoInput")?.addEventListener("change", function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (connectedMode) {
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size < 1 || file.size > 8 * 1024 * 1024) {
+            e.target.value = '';
+            tempConfigLogoFile = null;
+            if (tempConfigLogoPreviewUrl) URL.revokeObjectURL(tempConfigLogoPreviewUrl);
+            tempConfigLogoPreviewUrl = null;
+            cargarVistaConfiguracion();
+            showBusinessSettingsMessage('El logo debe ser JPEG, PNG o WebP y pesar como máximo 8 MiB.');
+            return;
+        }
+        if (tempConfigLogoPreviewUrl) URL.revokeObjectURL(tempConfigLogoPreviewUrl);
+        tempConfigLogoFile = file;
+        tempConfigLogoPreviewUrl = URL.createObjectURL(file);
+        const prev = document.getElementById("confLogoPreview");
+        if (prev) { prev.src = tempConfigLogoPreviewUrl; prev.crossOrigin = ''; prev.style.display = "block"; }
+        return;
+    }
+    const reader = new FileReader(); reader.onload = function(evt) { tempConfigLogoBase64 = evt.target.result; const prev = document.getElementById("confLogoPreview"); if(prev) { prev.src = tempConfigLogoBase64; prev.style.display = "block"; } }; reader.readAsDataURL(file);
+});
+
+function showBusinessSettingsMessage(message, title) {
+    const notice = document.getElementById("businessSettingsMessage");
+    if (!notice) return;
+    notice.replaceChildren();
+    if (title) {
+        const heading = document.createElement("strong");
+        heading.textContent = title;
+        const description = document.createElement("span");
+        description.textContent = message;
+        notice.append(heading, description);
+    } else notice.textContent = message;
+    notice.classList.remove("hidden");
+}
+
+function businessSettingsSavedLabels(settings, includeLogo = false) {
+    const labels = ["nombre comercial"];
+    if (settings.legalName) labels.push("razón social");
+    if (settings.ruc) labels.push("RUC");
+    if (settings.address) labels.push("dirección");
+    if (settings.phone) labels.push("teléfono");
+    if (settings.ticketHeader || settings.ticketFooter) labels.push("configuración de comprobantes");
+    if (includeLogo || settings.logo) labels.push("logo");
+    if (settings.minStockDefault !== undefined) labels.push("nivel mínimo de existencias");
+    return labels;
+}
+
+function showBusinessSettingsSaved(settings, includeLogo = false) {
+    const labels = businessSettingsSavedLabels(settings, includeLogo);
+    const summary = labels.length === 1
+        ? labels[0]
+        : `${labels.slice(0, -1).join(", ")} y ${labels[labels.length - 1]}`;
+    showBusinessSettingsMessage(
+        `Los datos de tu negocio, como ${summary}, ahora estarán disponibles cuando ingreses desde otro dispositivo.`,
+        "Información guardada correctamente"
+    );
+}
+
+document.getElementById("legacyImportConfirm")?.addEventListener("change", cargarVistaConfiguracion);
 document.getElementById("prodImageInput")?.addEventListener("change", function(e) {
     const file = e.target.files[0];
     if (connectedMode) { window.PosInventory.selectImage(file); return; }
@@ -716,16 +839,138 @@ document.getElementById("prodImageInput")?.addEventListener("change", function(e
 });
 
 function cargarVistaConfiguracion() {
-    document.getElementById("confName").value = sysConfig.name || ""; document.getElementById("confRuc").value = sysConfig.ruc || ""; document.getElementById("confAddress").value = sysConfig.address || ""; document.getElementById("confPhone").value = sysConfig.phone || ""; document.getElementById("confCurrency").value = sysConfig.currency || "C$"; document.getElementById("confHeader").value = sysConfig.header || ""; document.getElementById("confFooter").value = sysConfig.footer || ""; document.getElementById("confMinStock").value = sysConfig.minStock || 5;
-    tempConfigLogoBase64 = sysConfig.logo || null; const logoPrev = document.getElementById("confLogoPreview"); if (logoPrev) { if (tempConfigLogoBase64) { logoPrev.src = tempConfigLogoBase64; logoPrev.style.display = "block"; } else { logoPrev.style.display = "none"; } }
+    document.getElementById("confName").value = sysConfig.name || ""; document.getElementById("confLegalName").value = sysConfig.legalName || ""; document.getElementById("confRuc").value = sysConfig.ruc || ""; document.getElementById("confAddress").value = sysConfig.address || ""; document.getElementById("confPhone").value = sysConfig.phone || ""; document.getElementById("confCurrency").value = connectedMode ? "C$" : sysConfig.currency || "C$"; document.getElementById("confCurrency").readOnly = connectedMode; document.getElementById("confHeader").value = sysConfig.header || ""; document.getElementById("confFooter").value = sysConfig.footer || ""; document.getElementById("confMinStock").value = sysConfig.minStock ?? 5;
+    const connectedAdmin = connectedMode && currentUser?.role === "ADMIN";
+    const canEdit = !connectedMode || connectedAdmin && businessSettingsSchemaReady;
+    for (const id of ["confLogoInput", "confName", "confLegalName", "confRuc", "confAddress", "confPhone", "confHeader", "confFooter", "confMinStock"]) document.getElementById(id).disabled = connectedMode && !canEdit;
+    document.getElementById("confCurrency").disabled = connectedMode && !canEdit;
+    document.getElementById("saveConfigBtn").classList.toggle("hidden", connectedMode && !canEdit);
+    document.getElementById("resetConfigBtn")?.classList.toggle("hidden", connectedMode);
+    document.getElementById("businessSettingsMigrationNotice")?.classList.toggle("hidden", !connectedAdmin || businessSettingsSchemaReady);
+    const legacyPanel = document.getElementById("legacyBusinessSettings"), legacyDescription = document.getElementById("legacyBusinessSettingsDescription");
+    const legacyConfirm = document.getElementById("legacyImportConfirmWrap"), legacyImport = document.getElementById("importLegacySettingsBtn"), legacyConflict = document.getElementById("legacySettingsServerConflict");
+    legacyPanel?.classList.toggle("hidden", !connectedAdmin || !legacyConnectedSettings);
+    if (legacyConnectedSettings) {
+        if (legacyDescription) legacyDescription.textContent = "Encontramos información de tu negocio guardada anteriormente, como el nombre comercial, RUC, dirección y configuración de comprobantes. Puedes recuperarla para seguir utilizándola desde cualquier dispositivo.";
+        legacyConflict?.classList.toggle("hidden", !businessSettingsHasStored);
+        legacyConfirm?.classList.toggle("hidden", !canEdit || businessSettingsHasStored);
+        if (legacyImport) { legacyImport.classList.toggle("hidden", !canEdit || businessSettingsHasStored); legacyImport.disabled = !document.getElementById("legacyImportConfirm")?.checked; }
+        document.getElementById("exportLegacySettingsBtn")?.classList.toggle("hidden", !connectedAdmin);
+        document.getElementById("clearLegacySettingsBtn")?.classList.toggle("hidden", !connectedAdmin || legacyConnectedSettings.key === 'posSystemConfig');
+    }
+    const logoPrev = document.getElementById("confLogoPreview");
+    if (logoPrev && !tempConfigLogoFile) {
+        const source = sysConfig.logo ? (connectedMode ? window.PosConnected?.assetUrl(sysConfig.logo) : sysConfig.logo) : null;
+        if (source) { logoPrev.src = source; logoPrev.crossOrigin = connectedMode ? "use-credentials" : ""; logoPrev.style.display = "block"; }
+        else { logoPrev.removeAttribute("src"); logoPrev.style.display = "none"; }
+    }
 }
 
-window.guardarConfiguracion = function() {
-    if (!isAdmin('configView')) { showAlert("No tiene permisos."); return; }
+window.exportarConfiguracionLocal = function() {
+    if (!connectedMode || currentUser?.role !== 'ADMIN' || !legacyConnectedSettings) return;
+    const blob = new Blob([JSON.stringify(legacyConnectedSettings.values, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = 'configuracion-negocio-local.json'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
+window.eliminarConfiguracionLocal = function() {
+    if (!connectedMode || currentUser?.role !== 'ADMIN' || !legacyConnectedSettings || legacyConnectedSettings.key === 'posSystemConfig') return;
+    showConfirm('¿Eliminar esta copia guardada? La información del negocio no cambiará.', () => {
+        localStorage.removeItem(legacyConnectedSettings.key);
+        legacyConnectedSettings = null;
+        document.getElementById('legacyImportConfirm').checked = false;
+        cargarVistaConfiguracion();
+        showBusinessSettingsMessage('Se quitó la copia guardada. La información de tu negocio sigue disponible.');
+    });
+};
+
+window.importarConfiguracionLocal = async function() {
+    if (!connectedMode || currentUser?.role !== 'ADMIN' || !legacyConnectedSettings || businessSettingsHasStored) return;
+    if (!document.getElementById('legacyImportConfirm').checked) return;
+    const legacy = legacyConnectedSettings.values;
+    let legacyLogo = null;
+    if (legacy.logo) {
+        const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(legacy.logo);
+        if (!match) { showBusinessSettingsMessage('El logo de la copia no tiene un formato compatible. Descarga una copia y vuelve a elegir un archivo JPEG, PNG o WebP.'); return; }
+        if (match[2].length > 11184812) { showBusinessSettingsMessage('El logo supera el tamaño permitido de 8 MiB. No se guardó ningún dato.'); return; }
+        try {
+            const binary = atob(match[2]);
+            if (!binary.length || binary.length > 8 * 1024 * 1024) throw new Error('invalid size');
+            const bytes = new Uint8Array(binary.length);
+            for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+            legacyLogo = new File([bytes], 'logo-local', { type: match[1] });
+        } catch { showBusinessSettingsMessage('El logo no es válido o supera el tamaño permitido de 8 MiB. No se guardó ningún dato.'); return; }
+    }
+    if (legacy.name.trim().toLocaleLowerCase() !== String(sysConfig.name || '').trim().toLocaleLowerCase()) {
+        showBusinessSettingsMessage('Esta información no corresponde al negocio con el que iniciaste sesión. No se guardó ningún dato y la copia se conservó.');
+        return;
+    }
+    const button = document.getElementById('importLegacySettingsBtn'); button.disabled = true;
+    try {
+        const settings = await window.PosConnected.importLegacyBusinessSettings({
+            sourceBusinessName: legacy.name || '', legalName: legacy.legalName || '', ruc: legacy.ruc || '',
+            phone: legacy.phone || '', address: legacy.address || '', ticketHeader: legacy.header || '',
+            ticketFooter: legacy.footer || '', minStockDefault: Number(legacy.minStock ?? 5)
+        });
+        window.PosRuntime.setBusinessSettings(settings);
+        let logoSaved = true;
+        if (legacyLogo) {
+            try { window.PosRuntime.setBusinessSettings(await window.PosConnected.uploadBusinessLogo(legacyLogo)); }
+            catch { logoSaved = false; }
+        }
+        document.getElementById('legacyImportConfirm').checked = false;
+        cargarVistaConfiguracion();
+        if (logoSaved) showBusinessSettingsSaved(settings, Boolean(legacyLogo));
+        else showBusinessSettingsMessage('La información de tu negocio se guardó. El logo no se pudo guardar y la copia original se conservó. Puedes volver a cargar el logo desde el formulario.', 'Información guardada');
+    } catch (error) {
+        const messages = {
+            LEGACY_SETTINGS_BUSINESS_MISMATCH: 'Esta información no corresponde al negocio con el que iniciaste sesión. No se guardó ningún dato y la copia se conservó.',
+            BUSINESS_SETTINGS_EXISTS: 'Ya existe información guardada para este negocio. No se reemplazó ningún dato; la copia se conservó.',
+            BUSINESS_SETTINGS_MIGRATION_REQUIRED: 'No fue posible guardar la información en este momento. La copia se conservó; inténtalo más tarde o contacta al administrador.'
+        };
+        showBusinessSettingsMessage(messages[error.code] || 'No se pudo guardar la información. La copia original se conservó; inténtalo de nuevo más tarde.');
+    } finally { button.disabled = false; }
+};
+
+window.guardarConfiguracion = async function() {
+    if (!isAdmin('configView') || connectedMode && currentUser?.role !== "ADMIN") { showAlert("No tiene permisos."); return; }
     const minStockInput = document.getElementById("confMinStock");
     if (!minStockInput.checkValidity()) { minStockInput.reportValidity(); return; }
+    if (connectedMode) {
+        const data = {
+            businessName: document.getElementById("confName").value.trim(), legalName: document.getElementById("confLegalName").value.trim(),
+            ruc: document.getElementById("confRuc").value.trim(), address: document.getElementById("confAddress").value.trim(),
+            phone: document.getElementById("confPhone").value.trim(), ticketHeader: document.getElementById("confHeader").value.trim(),
+            ticketFooter: document.getElementById("confFooter").value.trim(), minStockDefault: Number(minStockInput.value)
+        };
+        try {
+            let saved = await window.PosConnected.updateBusinessSettings(data);
+            window.PosRuntime.setBusinessSettings(saved);
+            if (tempConfigLogoFile) {
+                try { saved = await window.PosConnected.uploadBusinessLogo(tempConfigLogoFile); }
+                catch {
+                    cargarVistaConfiguracion();
+                    showBusinessSettingsMessage('La información se guardó, pero no se pudo guardar el logo. Inténtalo de nuevo desde el formulario.', 'Información guardada');
+                    return;
+                }
+                window.PosRuntime.setBusinessSettings(saved);
+                tempConfigLogoFile = null;
+                if (tempConfigLogoPreviewUrl) URL.revokeObjectURL(tempConfigLogoPreviewUrl);
+                tempConfigLogoPreviewUrl = null;
+                document.getElementById("confLogoInput").value = "";
+            }
+            cargarVistaConfiguracion();
+            const brandName = document.getElementById("brandNameDisplay"); if (brandName) brandName.textContent = sysConfig.name;
+            showBusinessSettingsSaved(saved);
+            actualizarCatalogo();
+        } catch {
+            showBusinessSettingsMessage('No se pudo guardar la información. Inténtalo de nuevo más tarde.');
+        }
+        return;
+    }
     const prevConfig = JSON.stringify(sysConfig);
-    sysConfig = { salesFlow: connectedMode ? sysConfig.salesFlow || "DIRECT" : window.PosLocalFlow.salesFlow(), name: document.getElementById("confName").value.trim() || "POS DISTRIBUIDORA", ruc: document.getElementById("confRuc").value.trim(), address: document.getElementById("confAddress").value.trim(), phone: document.getElementById("confPhone").value.trim(), currency: connectedMode ? "C$" : document.getElementById("confCurrency").value.trim() || "C$", header: document.getElementById("confHeader").value.trim(), footer: document.getElementById("confFooter").value.trim(), tax: 0, minStock: parseInt(minStockInput.value) || 5, logo: tempConfigLogoBase64 };
+    sysConfig = { ...sysConfig, salesFlow: window.PosLocalFlow.salesFlow(), name: document.getElementById("confName").value.trim() || "POS DISTRIBUIDORA", legalName: document.getElementById("confLegalName").value.trim(), ruc: document.getElementById("confRuc").value.trim(), address: document.getElementById("confAddress").value.trim(), phone: document.getElementById("confPhone").value.trim(), currency: document.getElementById("confCurrency").value.trim() || "C$", header: document.getElementById("confHeader").value.trim(), footer: document.getElementById("confFooter").value.trim(), tax: 0, minStock: Number(minStockInput.value) || 5, logo: tempConfigLogoBase64 };
     localStorage.setItem(configStorageKey, JSON.stringify(sysConfig));
     if (prevConfig !== JSON.stringify(sysConfig)) registrarAuditoria('CONFIGURACION', 'ACTUALIZACION', 'Actualizó configuración del negocio');
     showAlert("Configuración guardada exitosamente.");
@@ -735,8 +980,9 @@ window.guardarConfiguracion = function() {
 
 window.resetConfiguracion = function() {
     if (!isAdmin('configView')) { showAlert("No tiene permisos."); return; }
+    if (connectedMode) { showAlert("En modo conectado, edita y guarda los ajustes en MySQL."); return; }
     showConfirm("⚠️ ¿Seguro que deseas restablecer la configuración?", () => {
-        sysConfig = { salesFlow: connectedMode ? sysConfig.salesFlow || "DIRECT" : window.PosLocalFlow.salesFlow(), name: "POS DISTRIBUIDORA", ruc: "", address: "", phone: "", currency: "C$", header: "", footer: "¡Gracias por su compra!", tax: 0, minStock: 5, logo: null };
+        sysConfig = { ...defaultSystemConfig(), localBusinessId: sysConfig.localBusinessId || '', salesFlow: window.PosLocalFlow.salesFlow() };
         localStorage.setItem(configStorageKey, JSON.stringify(sysConfig));
         cargarVistaConfiguracion();
         const brandName = document.getElementById("brandNameDisplay"); if(brandName) brandName.textContent = sysConfig.name;
@@ -770,8 +1016,8 @@ function dashboardRows(bodyId, headings, rows) {
 let dashboardLocalExportSheets = null;
 function renderDashboard() {
     const localContent = document.getElementById("dashboardLocalContent"), connectedContent = document.getElementById("dashboardConnectedContent");
-    localContent?.classList.remove("hidden");
-    connectedContent?.classList.add("hidden");
+    localContent?.classList.toggle("hidden", connectedMode);
+    connectedContent?.classList.toggle("hidden", !connectedMode);
     if (connectedMode) return;
     const range = window.PosDashboardPeriod?.range() || { from: "", until: "" };
     if (range.error) return;
@@ -1229,8 +1475,14 @@ function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
         pagoH = '<div class="invoice-summary-row"><span>Pago con ' + escapeHtml(sale.metodo) + '</span><strong>' + sysConfig.currency + r2(sale.total).toFixed(2) + '</strong></div>';
     }
     const statusAnulada = sale.anulada ? '<span class="invoice-badge invoice-badge--danger">FACTURA ANULADA</span>' : '';
-    const confLogoImg = sysConfig.logo ? '<img class="invoice-logo" src="' + escapeHtml(sysConfig.logo) + '" alt="">' : '';
+    const invoiceDisplayNumber = sale.historicaConectada
+        ? (sale.numeroVisual ? '#' + escapeHtml(sale.numeroVisual) : 'Sin número local')
+        : '#' + escapeHtml(sale.numeroVisual || String(sale.numero).padStart(6, '0'));
+    const historicalOriginNote = sale.historicaConectada ? '<small class="invoice-origin-note"><strong>Histórica</strong> · Negocio de origen: ' + escapeHtml(sale.origenHistorico || 'Sin identificar') + '</small>' : '';
+    const logoSource = sysConfig.logo ? (connectedMode ? window.PosConnected?.assetUrl(sysConfig.logo) : sysConfig.logo) : null;
+    const confLogoImg = logoSource ? '<img class="invoice-logo" src="' + escapeHtml(logoSource) + '" alt=""' + (connectedMode ? ' crossorigin="use-credentials"' : '') + '>' : '';
     const confH3 = '<h3 class="invoice-company-name">' + escapeHtml(sysConfig.name) + '</h3>';
+    const confLegalNameInfo = sysConfig.legalName ? '<span>' + escapeHtml(sysConfig.legalName) + '</span>' : '';
     const confRucInfo = sysConfig.ruc ? '<span>RUC: ' + escapeHtml(sysConfig.ruc) + '</span>' : '';
     const confAddressInfo = sysConfig.address ? '<span>Dir: ' + escapeHtml(sysConfig.address) + '</span>' : '';
     const confPhoneInfo = sysConfig.phone ? '<span>Tel: ' + escapeHtml(sysConfig.phone) + '</span>' : '';
@@ -1245,11 +1497,11 @@ function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
     if (tkCont) {
         tkCont.innerHTML = '<div id="imprimibleTicket" class="invoice-view invoice-view--sale">' +
             '<header class="invoice-header">' +
-                '<div class="invoice-brand">' + confLogoImg + '<div class="invoice-brand-copy">' + confH3 + '<div class="invoice-business-details">' + confRucInfo + confAddressInfo + confPhoneInfo + '</div>' + confExtraHeader + '</div></div>' +
+                '<div class="invoice-brand">' + confLogoImg + '<div class="invoice-brand-copy">' + confH3 + '<div class="invoice-business-details">' + confLegalNameInfo + confRucInfo + confAddressInfo + confPhoneInfo + '</div>' + confExtraHeader + '</div></div>' +
                 '<div class="invoice-heading">' + statusAnulada + '<span class="invoice-badge invoice-badge--info">' + (esCopia ? "COPIA DE FACTURA" : "COMPROBANTE DE VENTA") + '</span></div>' +
             '</header>' +
             '<div class="invoice-card"><div class="invoice-grid">' +
-                '<div class="invoice-field"><span class="invoice-field-label">Factura</span><strong>#' + String(sale.numero).padStart(6, '0') + '</strong></div>' +
+                '<div class="invoice-field"><span class="invoice-field-label">Factura</span><strong>' + invoiceDisplayNumber + '</strong>' + historicalOriginNote + '</div>' +
                 '<div class="invoice-field"><span class="invoice-field-label">Fecha y hora</span><strong>' + sale.fecha + '</strong></div>' +
                 '<div class="invoice-field"><span class="invoice-field-label">Cajero</span><strong>' + escapeHtml(sale.vendedor) + '</strong></div>' +
             '</div></div>' +
@@ -1301,7 +1553,7 @@ document.getElementById("pdfTicketBtn")?.addEventListener("click", () => {
     html2pdf().set({ filename: 'ticket_' + Date.now() + '.pdf', margin: 0, jsPDF: { unit: 'mm', format: [80, salida.alturaMm] } }).from(salida.elemento).save();
 });
 
-window.abrirAnularVenta = function(id) { if (!isAdmin('historyView')) { showAlert("No tiene permisos para anular ventas."); return; } const s = salesHistory.find(x => String(x.id) === String(id)); if(!s) return; document.getElementById("anularVentaId").value = s.id; document.getElementById("anularVentaNumero").textContent = '#' + String(s.numero).padStart(6, '0'); document.getElementById("anularVentaMotivo").value = ""; document.getElementById("anularVentaModal").classList.remove("hidden"); };
+window.abrirAnularVenta = function(id) { if (!isAdmin('historyView')) { showAlert("No tiene permisos para anular ventas."); return; } const s = salesHistory.find(x => String(x.id) === String(id)); if(!s) return; if (s.historicaConectada) { showAlert("Las ventas históricas son de solo lectura. No se pueden anular ni afectar inventario, caja o cuentas por cobrar."); return; } document.getElementById("anularVentaId").value = s.id; document.getElementById("anularVentaNumero").textContent = '#' + String(s.numeroVisual || s.numero).padStart(6, '0'); document.getElementById("anularVentaMotivo").value = ""; document.getElementById("anularVentaModal").classList.remove("hidden"); };
 window.confirmarAnularVenta = async function() {
     if (connectedMode) return window.PosSales.cancel();
     if (!isAdmin('historyView')) { showAlert("No tiene permisos para anular ventas."); return; }
@@ -1313,7 +1565,7 @@ window.confirmarAnularVenta = async function() {
     const needsCashRefund = paymentMethod === "cash" && refundAmount > 0;
     let activeCash = null;
     if (needsCashRefund) {
-        const openSessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: "abierta" }).toArray();
+        const openSessions = await window.PosLocalIdentity.cashSessions("abierta");
         if (openSessions.length !== 1) { showAlert("Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual."); return; }
         activeCash = openSessions[0];
         cajaActual = activeCash;
@@ -1327,10 +1579,10 @@ window.confirmarAnularVenta = async function() {
             const storedSale = await localDB.sales.get(sale.id);
             if (!storedSale || storedSale.anulada) throw new Error("La venta ya fue anulada.");
             if (needsCashRefund) {
-                const openSessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID, estado: "abierta" }).toArray();
+                const openSessions = await window.PosLocalIdentity.cashSessions("abierta");
                 if (openSessions.length !== 1 || String(openSessions[0].id) !== String(activeCash.id)) throw new Error("Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual.");
                 if (calcularResumenCaja(openSessions[0]).esperado < refundAmount) throw new Error("La caja actual no tiene efectivo suficiente para devolver esta venta.");
-                const sessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID }).toArray();
+                const sessions = await window.PosLocalIdentity.cashSessions();
                 if (sessions.some(session => (session.movimientos || []).some(movement => String(movement.reversalOfSaleId) === String(sale.id)))) throw new Error("La devolución de esta venta ya está registrada.");
                 activeCash = openSessions[0];
                 activeCash.movimientos.push({
@@ -1352,7 +1604,7 @@ window.confirmarAnularVenta = async function() {
                 if (client) { client.debt = calcularDeudaFacturasCliente(client); await localDB.clients.put(client); await encolarSincronizacion('UPDATE', 'clients', client); }
             }
             if (paymentMethod !== "cash") {
-                const sessions = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID }).toArray();
+                const sessions = await window.PosLocalIdentity.cashSessions();
                 for (const session of sessions) {
                     let changed = false;
                     for (const movement of session.movimientos || []) if (String(movement.saleId) === String(sale.id)) { movement.anulado = true; movement.estado = "void"; changed = true; }
@@ -1404,11 +1656,15 @@ function actualizarTablaHistorial() {
             const pagoHtml = v.metodo === "Crédito" ? '<span style="color:#d32f2f; font-weight:bold;">CRÉDITO</span><br><small style="color:#666;">Vence: ' + escapeHtml(v.vencimiento) + " · " + (obtenerSaldoFactura("cliente", v) > 0 ? "Pendiente" : "Pagada") + '</small>' : v.conectado ? '<span style="color:' + (v.anulada ? "#777" : v.estadoCaja === "pendiente" ? "#b45309" : "#166534") + '; font-weight:bold;">' + escapeHtml(medioPago.toUpperCase()) + '</span><br><small>' + estadoPago + '</small>' : '<span style="color:#28a745; font-weight:bold;">' + escapeHtml(medioPago.toUpperCase()) + '</span>';
             const detalleFormat = v.anulada ? `<strong>${escapeHtml(v.detalle)}</strong><br><span style="color:#d32f2f; font-size:10px; font-weight:bold;">❌ ANULADA</span>` : `<strong>${escapeHtml(v.detalle)}</strong> (${escapeHtml(v.tarifa)})`;
             const totalFormat = v.anulada ? `<del>${sysConfig.currency}${r2(v.total).toFixed(2)}</del>` : `${sysConfig.currency}${r2(v.total).toFixed(2)}`;
-            const actionBtns = v.anulada ? `<button class="btn btn-sm btn-info" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-info" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.abrirAnularVenta('${v.id}')">Anular</button>`;
+            const actionBtns = v.historicaConectada || v.anulada ? `<button class="btn btn-sm btn-info" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-info" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.abrirAnularVenta('${v.id}')">Anular</button>`;
             const tr = document.createElement("tr");
             tr.dataset.tableDate = tableDate(v.fechaTS || v.id || v.fecha);
             if (v.anulada) tr.style.cssText = "background-color:#fdf5f5;color:#888;";
-            tr.innerHTML = `<td>#${escapeHtml(v.numero)}</td><td>${escapeHtml(v.fecha)}</td><td>${escapeHtml(v.vendedor)}</td><td>${detalleFormat}</td><td>${pagoHtml}</td><td style="font-weight:bold;">${totalFormat}</td><td>${actionBtns}</td>`;
+            const invoiceCell = v.historicaConectada
+                ? `<strong>${v.numeroVisual ? '#' + escapeHtml(v.numeroVisual) : 'Histórica'}</strong><br><span class="history-origin-badge">Histórica · ${escapeHtml(v.origenHistorico || 'Origen sin identificar')}</span>`
+                : `#${escapeHtml(v.numeroVisual || v.numero)}`;
+            tr.classList.toggle('history-row--historical', Boolean(v.historicaConectada));
+            tr.innerHTML = `<td>${invoiceCell}</td><td>${escapeHtml(v.fecha)}</td><td>${escapeHtml(v.vendedor)}</td><td>${detalleFormat}</td><td>${pagoHtml}</td><td style="font-weight:bold;">${totalFormat}</td><td>${actionBtns}</td>`;
             tbody.appendChild(tr);
         });
     }
@@ -1513,9 +1769,10 @@ function actualizarTablaInventario() {
         const btnKardex = `<button class="btn btn-sm btn-info" style="margin-right:4px;" onclick="window.verKardex('${p.id}')">Kardex</button>`;
         const btnEditar = `<button class="btn btn-sm btn-primary" style="margin-right:4px;" onclick="window.editarProducto('${p.id}')">Editar</button>`;
         const btnEstado = `<button class="btn btn-sm ${isActive ? 'btn-warning' : 'btn-success'}" style="margin-right:4px;" onclick="window.toggleEstadoProducto('${p.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>`;
+        const btnEliminar = `<button class="btn btn-sm btn-danger" onclick="window.eliminarProductoLogico('${p.id}')">Eliminar</button>`;
         const btnAjuste = `<button class="btn btn-sm btn-warning" style="margin-right:4px;" onclick="window.abrirAjuste('${p.id}')">${iconoAjuste()} Ajuste</button>`;
         const fotoHtml = p.image ? `<img src="${escapeHtml(p.image)}" style="width:40px; height:40px; object-fit:cover; border-radius:4px;">` : iconoProducto("width:40px;height:40px;");
-        return `<tr data-product-id="${escapeHtml(p.id)}" tabindex="-1" style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(codigosDeProducto(p)[0] || '')}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}</div></td></tr>`;
+        return `<tr data-product-id="${escapeHtml(p.id)}" tabindex="-1" style="${rowStyle}"><td>${fotoHtml}</td><td>${escapeHtml(codigosDeProducto(p)[0] || '')}</td><td style="font-weight:bold;">${escapeHtml(p.name)}<br><small>${escapeHtml(p.category)}</small></td><td style="font-size: 1.1em;">${stockHtml}</td><td style="font-weight:bold; color:#0066cc;">${sysConfig.currency}${(p.cost || 0).toFixed(2)}</td><td>Men: ${sysConfig.currency}${retail.toFixed(2)}<br>May: ${sysConfig.currency}${wholesale.toFixed(2)}</td><td>${estadoHtml}</td><td><div style="display:flex; flex-wrap:wrap; gap:5px;">${btnKardex}${btnAjuste}${btnEditar}${btnEstado}${btnEliminar}</div></td></tr>`;
     }).join("") : '<tr><td colspan="8" class="text-center">No hay productos que coincidan con la búsqueda.</td></tr>';
     
     if(document.getElementById("invTotalProducts")) document.getElementById("invTotalProducts").textContent = products.filter(p => !p.deleted && p.active !== false).length; 
@@ -1675,7 +1932,7 @@ function actualizarTablaClientes() {
         const tieneHist = true;
         const btnBorrar = tieneHist ? `<button class="btn btn-sm ${isActive ? 'btn-warning' : 'btn-success'}" onclick="window.toggleEstadoCliente('${c.id}')">${isActive ? 'Inactivar' : 'Activar'}</button>` : `<button class="btn btn-sm btn-danger" onclick="window.eliminarClienteFisico('${c.id}')">Borrar</button>`;
             
-        return `<tr style="${isActive ? '' : 'background-color:#f9f9f9; opacity:0.8;'}"><td><strong>${escapeHtml(c.name)}</strong></td><td>${escapeHtml(c.phone)}</td><td>${sysConfig.currency}${(c.creditLimit||0).toFixed(2)}</td><td style="color:${disponible<0?'red':'green'}; font-weight:bold;">${sysConfig.currency}${disponible.toFixed(2)}</td><td style="color:red; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(c.debt||0).toFixed(2)}</td><td>${estadoHtml}</td><td><button class="btn btn-sm btn-info" onclick="window.verEstadoCuentaCliente('${c.id}')">Historial</button> <button class="btn btn-sm btn-primary" onclick="window.editarCliente('${c.id}')">Editar</button> ${btnBorrar}</td></tr>`;
+        return `<tr data-client-id="${escapeHtml(c.id)}" style="${isActive ? '' : 'background-color:#f9f9f9; opacity:0.8;'}"><td><strong>${escapeHtml(c.name)}</strong></td><td>${escapeHtml(c.phone)}</td><td>${sysConfig.currency}${(c.creditLimit||0).toFixed(2)}</td><td style="color:${disponible<0?'red':'green'}; font-weight:bold;">${sysConfig.currency}${disponible.toFixed(2)}</td><td style="color:red; font-weight:bold; font-size:1.1em;">${sysConfig.currency}${(c.debt||0).toFixed(2)}</td><td>${estadoHtml}</td><td><button class="btn btn-sm btn-info" onclick="window.verEstadoCuentaCliente('${c.id}')">Historial</button> <button class="btn btn-sm btn-primary" onclick="window.editarCliente('${c.id}')">Editar</button> ${btnBorrar}</td></tr>`;
     }).join(""); 
 }
 
@@ -2280,11 +2537,32 @@ window.eliminarCompra = function(id) {
             showAlert("No se puede anular: ya se vendió parte de esta mercancía.\n" + faltantes.join("\n"));
             return;
         }
+        try {
+            await localDB.transaction('rw', localDB.products, localDB.purchases, localDB.suppliers, localDB.inventory_movements, localDB.cajaSessions, localDB.sync_queue, localDB.audit_logs, async () => {
+            const storedPurchase = await localDB.purchases.get(compra.id);
+            if (storedPurchase?.anulada) return;
+        const sessions = await window.PosLocalIdentity.cashSessions();
+            const source = sessions.find(session => session.movimientos?.some(movement => !movement.anulado && movement.tipo === 'salida' && String(movement.referenciaCompraId) === String(compra.id)));
+            if (source && compra.tipo === 'contado') {
+                const target = sessions.find(session => session.estado === 'abierta');
+                if (!target) throw new Error(MSG_SIN_CAJA);
+                target.movimientos.push({ id: Date.now() + Math.random(), cajaSessionId: target.id, tipo: 'entrada', monto: r2(compra.total), concepto: 'Anulación compra contado ' + compra.factura + ': ' + motivo, fechaTS: Date.now(), fecha: new Date().toLocaleString(), usuario: currentUser.displayName, medioPago: 'CASH', estado: 'confirmado', reversalOfPurchaseId: compra.id, originalCashSessionId: source.id });
+                await localDB.cajaSessions.put(target);
+                await encolarSincronizacion('UPDATE', 'cajaSessions', target);
+            }
         if (compra.items) { for (let item of compra.items) { const prodMatch = resolverProductoDeItemCompra(item); if (prodMatch) { await registrarMovimientoKardex(prodMatch.id, 'ANULACION_COMPRA', -item.cantidad, `Anulación Factura ${compra.factura}: ${motivo}`); } } }
         if (compra.tipo === 'credito') { const suppMatch = suppliers.find(s => (s.name||"").toLowerCase() === (compra.proveedor||"").toLowerCase()); if (suppMatch) { suppMatch.debt = r2(Math.max(0, (suppMatch.debt || 0) - compra.total)); await localDB.suppliers.put(suppMatch); await encolarSincronizacion('UPDATE', 'suppliers', suppMatch); } }
         compra.anulada = true; compra.motivoAnulacion = motivo; compra.fechaAnulacion = new Date().toLocaleString(); compra.usuarioAnulacion = currentUser.displayName;
         await localDB.purchases.put(compra); await encolarSincronizacion('UPDATE', 'purchases', compra);
         await registrarAuditoria('COMPRAS', 'ANULACION', `Anuló Factura de Compra ${compra.factura}. Motivo: ${motivo}`);
+            });
+            await initCaja();
+        } catch (error) {
+            // Rehydrate in-memory state after a rolled-back Dexie transaction.
+            await initApp();
+            showAlert(error.message === MSG_SIN_CAJA ? MSG_SIN_CAJA : 'No se pudo anular la compra. No se guardaron cambios.');
+            return;
+        }
         actualizarTablaCompras(); actualizarTablaInventario(); actualizarTablaCuentasPorPagar(); renderDashboard(); showAlert("Factura de compra anulada.");
     });
 };
@@ -2375,7 +2653,7 @@ document.getElementById("payablePaymentForm")?.addEventListener("submit", async 
     showAlert("Abono registrado.");
 });
 
-async function initCaja() { const todasCajas = await localDB.cajaSessions.where({ business_id: DEFAULT_BUSINESS_ID }).toArray(); cajaHistorial = todasCajas.sort((a, b) => b.fechaAperturaTS - a.fechaAperturaTS); cajaActual = todasCajas.find(s => s.estado === "abierta") || null; }
+async function initCaja() { const todasCajas = await window.PosLocalIdentity.cashSessions(); cajaHistorial = todasCajas.sort((a, b) => b.fechaAperturaTS - a.fechaAperturaTS); cajaActual = todasCajas.find(s => s.estado === "abierta") || null; }
 function calcularResumenCaja(session) {
     if (connectedMode) return { ventasContado: session.connectedSales || 0, entradas: 0, salidas: r2(session.movimientos.filter(m => m.tipo === "salida").reduce((sum, m) => sum + m.monto, 0)), esperado: session.connectedExpected };
     const desde = session.fechaAperturaTS;
@@ -2451,11 +2729,11 @@ function detalleResumenLocal(session) {
     const reversals = out.filter(m => m.reversalOfSaleId);
     return { cashSales: sum(sales.filter(v => v.metodo === 'Contado' && obtenerMedioPagoVenta(v) === 'cash')), creditSales: sum(sales.filter(v => v.metodo === 'Crédito')), cardSales: sum(sales.filter(v => obtenerMedioPagoVenta(v) === 'card')), transferSales: sum(sales.filter(v => obtenerMedioPagoVenta(v) === 'transfer')), expenses: sum(expenses), purchases: sum(purchases), withdrawals: sum(out.filter(m => !expenses.includes(m) && !purchases.includes(m) && !reversals.includes(m))), cashReturns: sum(reversals), cashCollections: sum(collections), otherCash: sum(movements.filter(m => m.tipo === 'entrada' && !collections.includes(m))) };
 }
-const cashCloseMoney = value => 'C$ ' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const cashCloseMoney = value => value === null || value === undefined ? 'No disponible' : 'C$ ' + Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 function pintarResumenCierre(target, data, details = false) {
     const root = document.getElementById(target); root.replaceChildren();
     const add = (label, value) => { const row = document.createElement('div'); row.className = 'cash-close-row'; const name = document.createElement('span'); name.textContent = label; const amount = document.createElement('strong'); amount.textContent = value; row.append(name, amount); root.append(row); };
-    add('Fecha y hora de apertura', data.openedAt); add(details ? 'Fecha y hora de cierre' : 'Fecha y hora de cierre (prevista)', data.closedAt); add('Gestor que cierra', data.closedBy);
+    add('Fecha y hora de apertura', data.openedAt || 'No registrado'); add(details ? 'Fecha y hora de cierre' : 'Fecha y hora de cierre (prevista)', data.closedAt || 'No registrado'); add('Gestor que cierra', data.closedBy || 'No registrado');
     const summary = data.summary;
     for (const [label, key, sign] of [['Efectivo inicial','openingAmount','+'],['Ventas de contado en efectivo','cashSales','+'],['Ventas de crédito','creditSales',''],['Ventas por transferencia','transferSales',''],['Ventas por tarjeta','cardSales',''],['Abonos en efectivo','cashCollections','+'],['Otras entradas en efectivo','otherCash','+'],['Gastos en efectivo','expenses','−'],['Salidas manuales / pagos en efectivo','withdrawals','−'],['Compras en efectivo','purchases','−'],['Devoluciones en efectivo','cashReturns','−']]) add(label, (sign ? '(' + sign + ') ' : '') + cashCloseMoney(key === 'openingAmount' ? data.openingAmount : summary[key]));
     add('Efectivo final esperado', cashCloseMoney(data.expectedAmount));
@@ -2463,7 +2741,7 @@ function pintarResumenCierre(target, data, details = false) {
     const note = document.createElement('p'); note.className = 'cash-close-note'; note.textContent = 'Crédito, tarjeta y transferencia son informativos y no suman al efectivo físico. Compras muestra únicamente salidas de efectivo registradas en Caja; compras conectadas pendiente.'; root.append(note);
 }
 function datosCierreLocal(session) { return { summary: detalleResumenLocal(session), openingAmount: session.efectivoInicial, expectedAmount: session.efectivoEsperado ?? calcularResumenCaja(session).esperado, countedAmount: session.efectivoReal, difference: session.diferencia, openedAt: session.fechaApertura, closedAt: session.fechaCierre || new Date().toLocaleString(), closedBy: session.usuarioCierre || currentUser.displayName }; }
-window.PosCashSummary = { open(data) { pintarResumenCierre('cajaCierreResumen', data); document.getElementById('cajaEsperadoDisplay').textContent = cashCloseMoney(data.expectedAmount); document.getElementById('cajaEfectivoRealInput').value = ''; document.getElementById('cajaEfectivoRealInput').dataset.expected = data.expectedAmount; actualizarDiferenciaCierre(); document.getElementById('cierreCajaModal').classList.remove('hidden'); document.getElementById('cierreCajaModal').querySelector('[data-initial-focus]').focus(); document.getElementById('cierreCajaModal').querySelector('.modal-card').scrollTop = 0; } };
+window.PosCashSummary = { open(data) { const preview = { ...data, closedBy: data.closedBy || currentUser?.displayName || currentUser?.username || null }; pintarResumenCierre('cajaCierreResumen', preview); document.getElementById('cajaEsperadoDisplay').textContent = cashCloseMoney(data.expectedAmount); document.getElementById('cajaEfectivoRealInput').value = ''; document.getElementById('cajaEfectivoRealInput').dataset.expected = data.expectedAmount; actualizarDiferenciaCierre(); document.getElementById('cierreCajaModal').classList.remove('hidden'); document.getElementById('cierreCajaModal').querySelector('[data-initial-focus]').focus(); document.getElementById('cierreCajaModal').querySelector('.modal-card').scrollTop = 0; } };
 function actualizarDiferenciaCierre() {
     const input = document.getElementById('cajaEfectivoRealInput'); const valid = /^\d+(?:\.\d{1,2})?$/.test(input.value) && Number.isFinite(Number(input.value));
     document.getElementById('confirmCierreCajaBtn').disabled = !valid;
@@ -2475,8 +2753,8 @@ document.getElementById('cajaHistorialBody').addEventListener('click', event => 
 async function cerrarCaja(efectivoReal) {
     if (connectedMode) return window.PosSales.closeCash(); if (!cajaActual) return; efectivoReal = r2(efectivoReal); const resumen = calcularResumenCaja(cajaActual); const diferencia = r2(efectivoReal - resumen.esperado); cajaActual.resumenCierre = detalleResumenLocal(cajaActual); cajaActual.estado = "cerrada"; cajaActual.fechaCierreTS = Date.now(); cajaActual.fechaCierre = new Date().toLocaleString(); cajaActual.efectivoReal = efectivoReal; cajaActual.efectivoEsperado = resumen.esperado; cajaActual.diferencia = diferencia; cajaActual.usuarioCierre = currentUser.displayName; await localDB.cajaSessions.put(cajaActual); await encolarSincronizacion("UPDATE", "cajaSessions", cajaActual); cajaActual = null; await initCaja(); renderCajaView(); showAlert(`Caja cerrada exitosamente.`); }
 document.getElementById("abrirCajaBtn")?.addEventListener("click", () => { if (connectedMode) { window.PosSales.openCash(); return; } const inputEl = document.getElementById("cajaEfectivoInicialInput"); const inicial = parseFloat(inputEl?.value); if (isNaN(inicial) || inicial < 0) { showAlert("⚠️ Ingrese el monto de efectivo inicial con el que abre la caja."); inputEl?.focus(); return; } abrirCaja(inicial); if (inputEl) inputEl.value = ""; });
-document.getElementById("registrarEntradaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("entrada", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
-document.getElementById("registrarSalidaBtn")?.addEventListener("click", () => { const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("salida", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
+document.getElementById("registrarEntradaBtn")?.addEventListener("click", () => { if (connectedMode) return window.PosSales.manualCash("IN"); const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("entrada", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
+document.getElementById("registrarSalidaBtn")?.addEventListener("click", () => { if (connectedMode) return window.PosSales.manualCash("OUT"); const monto = parseFloat(document.getElementById("cajaMovimientoMonto")?.value); const concepto = document.getElementById("cajaMovimientoConcepto")?.value; registrarMovimientoCaja("salida", monto, concepto); document.getElementById("cajaMovimientoMonto").value = ""; document.getElementById("cajaMovimientoConcepto").value = ""; });
 document.getElementById("cerrarCajaBtn")?.addEventListener("click", () => {
     if (connectedMode) { window.PosSales.closeDialog(); return; }
     if (!cajaActual) { showAlert("No hay ninguna caja abierta en este momento."); return; }
@@ -2835,6 +3113,32 @@ window.PosRuntime = Object.freeze({
     publishSale(value) { if (!connectedMode || value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID) throw new Error('Negocio incorrecto'); const index = salesHistory.findIndex(sale => sale.id === value.id); if (index < 0) salesHistory.push(value); else salesHistory[index] = value; actualizarTablaHistorial(); },
     setCash(values) { if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto'); cajaHistorial = values; cajaActual = values.find(value => value.estado === 'abierta') || null; },
     setUser(user) { currentUser = user ? { ...user, displayName: user.fullName } : null; },
+    setBusinessSettings(value) {
+        if (!connectedMode || !value || value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID || value.currency !== 'C$') throw new Error('Configuración de negocio incorrecta');
+        if (legacyConnectedSettings && legacyConnectedSettings.values.name.trim().toLocaleLowerCase() !== String(value.businessName || '').trim().toLocaleLowerCase()) {
+            legacyConnectedSettings = null;
+            const confirmation = document.getElementById('legacyImportConfirm');
+            if (confirmation) confirmation.checked = false;
+        }
+        sysConfig = {
+            ...defaultSystemConfig(), name: value.businessName, legalName: value.legalName || '', ruc: value.ruc || '',
+            address: value.address || '', phone: value.phone || '', currency: 'C$', logo: value.logo || null,
+            header: value.ticketHeader || '', footer: value.ticketFooter || '', minStock: Number(value.minStockDefault ?? 5),
+            tax: Number(value.taxRateDefault || 0), salesFlow: sysConfig.salesFlow || 'DIRECT'
+        };
+        businessSettingsHasStored = value.hasStoredSettings;
+        businessSettingsSchemaReady = value.schemaReady;
+        const brandName = document.getElementById('brandNameDisplay'); if (brandName) brandName.textContent = sysConfig.name;
+        const context = document.getElementById('businessContext'); if (context) context.textContent = 'Conectado · ' + sysConfig.name;
+    },
+    businessIdentity() {
+        if (!connectedMode) return null;
+        return {
+            name: sysConfig.name, legalName: sysConfig.legalName, ruc: sysConfig.ruc,
+            address: sysConfig.address, phone: sysConfig.phone, currency: 'C$',
+            ticketHeader: sysConfig.header, ticketFooter: sysConfig.footer
+        };
+    },
     setProducts(values) {
         if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto');
         products = values.map(value => ({ ...value, business_id: value.businessId }));
@@ -2851,11 +3155,34 @@ window.PosRuntime = Object.freeze({
         if (!connectedMode) throw new Error('Modalidad incorrecta');
         DEFAULT_BUSINESS_ID = businessId;
         const scope = encodeURIComponent(apiBaseUrl) + '_' + businessId;
-        localDB = createPosDatabase('POS_ConnectedDB_' + scope);
-        configStorageKey = 'posConnectedConfig_' + scope;
-        sysConfig = readSystemConfig(configStorageKey);
-        // Moneda conectada de esta fase; no interpretar simbolos locales como conversiones.
-        sysConfig.currency = 'C$';
+        CONNECTED_EFFECTIVE_BUSINESS_ID = businessId;
+        localDB = null;
+        const scopedKey = 'posConnectedConfig_' + scope;
+        let candidate = null, candidateKey = null;
+        for (const key of [scopedKey, 'posSystemConfig']) {
+            try {
+                const raw = localStorage.getItem(key), parsed = raw ? JSON.parse(raw) : null;
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+                candidate = {
+                    name: typeof parsed.name === 'string' ? parsed.name.slice(0, 160) : '',
+                    legalName: typeof parsed.legalName === 'string' ? parsed.legalName.slice(0, 160) : '',
+                    ruc: typeof parsed.ruc === 'string' ? parsed.ruc.slice(0, 64) : '',
+                    address: typeof parsed.address === 'string' ? parsed.address.slice(0, 255) : '',
+                    phone: typeof parsed.phone === 'string' ? parsed.phone.slice(0, 40) : '',
+                    header: typeof parsed.header === 'string' ? parsed.header.slice(0, 500) : '',
+                    footer: typeof parsed.footer === 'string' ? parsed.footer.slice(0, 500) : '',
+                    minStock: Number.isFinite(Number(parsed.minStock)) ? Number(parsed.minStock) : 5,
+                    currency: 'C$', logo: typeof parsed.logo === 'string' ? parsed.logo : null
+                };
+                if (!candidate.name.trim()) continue;
+                candidateKey = key;
+                break;
+            } catch { /* An unreadable legacy copy must not affect connected settings. */ }
+        }
+        legacyConnectedSettings = candidate ? { key: candidateKey, values: candidate } : null;
+        configStorageKey = null;
+        sysConfig = defaultSystemConfig();
+        businessSettingsHasStored = false;
     },
     clearCart() { cart = []; resetearDescuentoVenta(); actualizarCarrito(); }
 });

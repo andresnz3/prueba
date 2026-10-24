@@ -15,8 +15,8 @@
   const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'reports', configView: 'settings' };
   let identity = null, ownerBusinessId = null, supportContext = null, activeView = null, grant = null, pendingView = null;
   let generation = 0;
-  let systemAdminReady = false, systemAdminBusinesses = [], systemAdminUsers = [], systemAdminBilling = null, systemAdminSelectedBusinessId = '', systemAdminTab = 'businesses';
-  let systemAdminDeleteBusiness = null, systemAdminDeleteTrigger = null, systemAdminPaymentBusiness = null, systemAdminPaymentTrigger = null;
+  let systemAdminReady = false, systemAdminBusinesses = [], systemAdminUsers = [], systemAdminUserCapacity = null, systemAdminBilling = null, systemAdminSelectedBusinessId = '', systemAdminMigrationTargetId = '', systemAdminTab = 'businesses';
+  let systemAdminDeleteBusiness = null, systemAdminDeleteTrigger = null, systemAdminDeletePreview = null, systemAdminDeletePreviewToken = 0, systemAdminPaymentBusiness = null, systemAdminPaymentTrigger = null;
   const assertGeneration = value => { if (generation !== value) throw new window.PosApiError('STALE_REQUEST'); };
   let expiryTimer, grantTimer, busy = false, passwordUserId = null, userPage = 0;
   function message(id, text) { el(id).textContent = text; el(id).classList.remove('hidden'); }
@@ -39,9 +39,9 @@
     return allowed;
   }
   function canAccessSystemAdmin() { return isSystemAdmin() && systemAdminReady; }
-  function canView(view) { return Boolean(identity && (view === 'salesView' || (view === 'systemAdminView' && canAccessSystemAdmin()) || identity.role === 'ADMIN' || (grant?.view === view && grant.until > Date.now()))); }
+  function canView(view) { return Boolean(identity && (view === 'salesView' || view === 'configView' || (view === 'systemAdminView' && canAccessSystemAdmin()) || identity.role === 'ADMIN' || (grant?.view === view && grant.until > Date.now()))); }
   function expire(text = 'La sesión venció o fue revocada. Inicia sesión nuevamente.') {
-    generation++; identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminBilling = null; systemAdminSelectedBusinessId = ''; window.PosMigrationPreview.reset(); window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
+    generation++; identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminDeletePreview = null; systemAdminDeletePreviewToken++; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminUserCapacity = null; systemAdminBilling = null; systemAdminSelectedBusinessId = ''; systemAdminMigrationTargetId = ''; window.PosMigrationPreview.reset(); window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
     clearTimeout(expiryTimer); clearTimeout(grantTimer); clearPasswords();
     document.querySelectorAll('.modal, .view-panel').forEach(node => node.classList.add('hidden'));
     el('app').classList.add('hidden'); el('app').inert = false; el('loginScreen').classList.remove('hidden');
@@ -67,18 +67,20 @@
     if (!ownerBusinessId) {
       ownerBusinessId = value.user.businessId;
       window.PosRuntime.prepareConnectedBusiness(ownerBusinessId, api.baseUrl);
-    } else { await localDB.open(); }
+    } else if (!connectedMode && localDB) { await localDB.open(); }
     identity = value.user;
     syncSystemAdminAccess();
     syncSupportBanner(value.support);
     window.PosRuntime.setUser(identity);
+    const settings = await api.businessSettings(); assertGeneration(version);
+    window.PosRuntime.setBusinessSettings(settings);
     scheduleExpiry(value);
     await initApp(); assertGeneration(version);
     if (Date.parse(value.expiresAt) <= Date.now()) throw new window.PosApiError('INVALID_SESSION', 401);
     el('sellerName').textContent = identity.fullName;
     document.querySelector('.seller-info span').textContent = 'Sesión conectada';
     el('roleBadge').textContent = identity.role === 'ADMIN' ? 'Administrador' : 'Usuario';
-    el('businessContext').textContent = 'Conectado · ' + (identity.businessName || 'Negocio ' + identity.businessId);
+    el('businessContext').textContent = 'Conectado · ' + settings.businessName;
     el('businessContext').classList.remove('hidden');
     el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN'); syncSystemAdminAccess(); el('renewSessionBtn').classList.remove('hidden');
     el('loginError').classList.add('hidden');
@@ -104,26 +106,74 @@
     errorText.classList.add('hidden');
     field.setAttribute('aria-invalid', 'false');
   }
-  function systemAdminDeleteError(text) {
+  function systemAdminDeleteError(text, { inputInvalid = true } = {}) {
     const field = el('systemAdminDeleteInput');
     const errorText = el('systemAdminDeleteError');
     errorText.textContent = text;
     errorText.classList.remove('hidden');
-    field.setAttribute('aria-invalid', 'true');
+    if (inputInvalid) field.setAttribute('aria-invalid', 'true');
+  }
+  function renderSystemAdminDeleteSummary(preview) {
+    const summary = el('systemAdminDeleteSummary');
+    const heading = document.createElement('p');
+    heading.className = 'system-admin-delete-summary-heading';
+    heading.textContent = 'Se eliminarán ' + preview.totalRecords.toLocaleString('es-NI') + ' registros';
+    const list = document.createElement('ul');
+    list.className = 'system-admin-delete-summary-list';
+    for (const item of preview.counts) {
+      const row = document.createElement('li');
+      row.textContent = item.label + ': ' + item.count.toLocaleString('es-NI');
+      list.append(row);
+    }
+    const content = [heading, list];
+    if (preview.retainedBilling.subscriptions || preview.retainedBilling.payments) {
+      const billing = document.createElement('p');
+      billing.className = 'system-admin-delete-retention';
+      billing.textContent = 'Se conservará en la auditoría del sistema el historial de facturación: ' + preview.retainedBilling.subscriptions + ' planes y ' + preview.retainedBilling.payments + ' pagos.';
+      content.push(billing);
+    }
+    if (preview.images.count) {
+      const files = document.createElement('p');
+      files.className = 'system-admin-delete-retention';
+      files.textContent = 'Las imágenes se retirarán después del borrado y la limpieza se reintentará si fuera necesario.';
+      content.push(files);
+    }
+    summary.replaceChildren(...content);
+  }
+  async function loadSystemAdminDeletePreview(business, token) {
+    const confirm = el('systemAdminDeleteConfirmBtn');
+    const summary = el('systemAdminDeleteSummary');
+    try {
+      const preview = await api.adminBusinessDeletionPreview(business.id);
+      if (token !== systemAdminDeletePreviewToken || systemAdminDeleteBusiness !== business || el('systemAdminDeleteModal').classList.contains('hidden')) return;
+      if (preview.business.name !== business.name || preview.business.id !== business.id) throw new window.PosApiError('INVALID_RESPONSE');
+      systemAdminDeletePreview = preview;
+      renderSystemAdminDeleteSummary(preview);
+      confirm.disabled = false;
+    } catch (failure) {
+      if (token !== systemAdminDeletePreviewToken || el('systemAdminDeleteModal').classList.contains('hidden')) return;
+      summary.textContent = 'No se pudo cargar el resumen. No es posible confirmar la eliminación.';
+      systemAdminDeletePreview = null;
+      confirm.disabled = true;
+      systemAdminDeleteError(failure.message || 'No se pudo preparar la eliminación de forma segura.', { inputInvalid: false });
+    }
   }
   function openSystemAdminDeleteModal(business, trigger) {
     if (!canAccessSystemAdmin() || busy) return;
     clearSystemAdminMessage();
     systemAdminDeleteBusiness = business;
     systemAdminDeleteTrigger = trigger;
+    systemAdminDeletePreview = null;
     const modal = el('systemAdminDeleteModal');
     const input = el('systemAdminDeleteInput');
     const confirm = el('systemAdminDeleteConfirmBtn');
     input.value = '';
     input.disabled = false;
-    confirm.disabled = false;
+    confirm.disabled = true;
     clearSystemAdminDeleteError();
-    el('systemAdminDeleteMessage').textContent = 'Para eliminar «' + business.name + '», escribe exactamente ELIMINAR. Esta acción no se puede deshacer.';
+    el('systemAdminDeleteMessage').textContent = 'Vas a eliminar definitivamente «' + business.name + '» (ID ' + business.id + '). Esta acción no se puede deshacer. Escribe exactamente ELIMINAR para continuar.';
+    el('systemAdminDeleteSummary').textContent = 'Cargando el resumen de información…';
+
     modal.classList.remove('hidden');
     el('app').inert = true;
     if (business.id === '1') {
@@ -136,13 +186,18 @@
       confirm.disabled = true;
       systemAdminDeleteError('Finaliza la sesión de soporte antes de eliminar ese negocio.');
       el('systemAdminDeleteTitle').focus();
-    } else input.focus();
+    } else {
+      input.focus();
+      void loadSystemAdminDeletePreview(business, ++systemAdminDeletePreviewToken);
+    }
   }
   function closeSystemAdminDeleteModal({ restoreFocus = true } = {}) {
+    systemAdminDeletePreviewToken++;
     el('systemAdminDeleteModal').classList.add('hidden');
     el('systemAdminDeleteModal').removeAttribute('aria-busy');
     el('app').inert = false;
     el('systemAdminDeleteInput').value = '';
+    el('systemAdminDeleteSummary').replaceChildren();
     el('systemAdminDeleteInput').disabled = false;
     el('systemAdminDeleteConfirmBtn').disabled = false;
     el('systemAdminDeleteCancelBtn').disabled = false;
@@ -150,6 +205,7 @@
     const trigger = systemAdminDeleteTrigger;
     systemAdminDeleteBusiness = null;
     systemAdminDeleteTrigger = null;
+    systemAdminDeletePreview = null;
     if (restoreFocus && trigger?.isConnected && canAccessSystemAdmin()) trigger.focus();
   }
   function updateSystemAdminBusinessOptions() {
@@ -159,11 +215,17 @@
     systemAdminSelectedBusinessId = systemAdminBusinesses.some(business => business.id === previous) ? previous : (systemAdminBusinesses[0]?.id || '');
     select.value = systemAdminSelectedBusinessId;
   }
+  function continueBusinessMigration(businessId) {
+    if (!canAccessSystemAdmin() || !systemAdminBusinesses.some(business => business.id === String(businessId) && business.migrationState === 'PENDING')) return;
+    systemAdminMigrationTargetId = String(businessId);
+    void selectSystemAdminTab('migration');
+  }
   function renderSystemAdminBusinesses() {
     const body = el('systemAdminBusinessesBody'); body.replaceChildren();
     for (const business of systemAdminBusinesses) {
       const row = document.createElement('tr'); row.dataset.businessId = business.id;
-      for (const text of [business.id, business.name, business.status === 'ACTIVE' ? 'Activo' : 'Suspendido', String(business.userCount)]) {
+      const businessStatus = business.migrationState === 'PENDING' ? 'Migración pendiente' : business.status === 'ACTIVE' ? 'Activo' : business.migrationState === 'COMPLETE' ? 'Listo para activar' : 'Suspendido';
+      for (const text of [business.id, business.name, businessStatus, String(business.userCount)]) {
         const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
       }
       const actions = document.createElement('td');
@@ -171,6 +233,10 @@
       users.addEventListener('click', () => { systemAdminSelectedBusinessId = business.id; updateSystemAdminBusinessOptions(); selectSystemAdminTab('users'); }); actions.append(users);
       if (business.id === '1') {
         const protectedLabel = document.createElement('span'); protectedLabel.className = 'system-admin-help'; protectedLabel.textContent = 'Negocio del sistema'; actions.append(protectedLabel);
+      } else if (business.migrationState === 'PENDING') {
+        const pendingHelp = document.createElement('span'); pendingHelp.className = 'system-admin-help'; pendingHelp.textContent = 'Acceso comercial bloqueado hasta completar la importación y conciliación.'; actions.append(pendingHelp);
+        const resume = document.createElement('button'); resume.type = 'button'; resume.className = 'btn btn-primary'; resume.textContent = 'Continuar migración';
+        resume.addEventListener('click', () => continueBusinessMigration(business.id)); actions.append(resume);
       } else {
         const manage = document.createElement('button'); manage.type = 'button'; manage.className = 'btn btn-primary'; manage.textContent = 'Administrar negocio';
         manage.disabled = business.status !== 'ACTIVE';
@@ -249,6 +315,9 @@
   function appendBillingManagementActions(actions, business) {
     if (business.id === '1') {
       const protectedLabel = document.createElement('span'); protectedLabel.className = 'system-admin-help'; protectedLabel.textContent = 'Negocio del sistema'; actions.append(protectedLabel);
+    } else if (business.migrationState === 'PENDING') {
+      const resume = document.createElement('button'); resume.type = 'button'; resume.className = 'btn btn-primary'; resume.textContent = 'Continuar migración';
+      resume.addEventListener('click', () => continueBusinessMigration(business.id)); actions.append(resume);
     } else {
       const manage = document.createElement('button'); manage.type = 'button'; manage.className = 'btn btn-primary'; manage.textContent = 'Administrar negocio';
       manage.disabled = business.status !== 'ACTIVE';
@@ -296,7 +365,11 @@
     const body = el('systemAdminBillingBody'); body.replaceChildren();
     for (const business of businesses) {
       const row = document.createElement('tr'); row.dataset.businessId = business.id;
-      const name = document.createElement('td'); name.textContent = business.name; row.append(name);
+      const name = document.createElement('td'); name.textContent = business.name;
+      if (business.migrationState === 'PENDING') {
+        const pending = document.createElement('small'); pending.className = 'system-admin-help'; pending.textContent = 'Migración pendiente'; name.append(document.createElement('br'), pending);
+      }
+      row.append(name);
 
       const planCell = document.createElement('td');
       const planControl = document.createElement('div'); planControl.className = 'system-admin-plan-control';
@@ -305,7 +378,12 @@
       for (const plan of plans) planSelect.append(new Option(plan.name, plan.code));
       planSelect.value = business.planCode || '';
       const included = document.createElement('small');
-      const showIncluded = () => { const plan = plans.find(item => item.code === planSelect.value); included.textContent = plan ? plan.includedUsers + (plan.includedUsers === 1 ? ' usuario sugerido' : ' usuarios incluidos') : ''; };
+      const showIncluded = () => {
+        const plan = plans.find(item => item.code === planSelect.value);
+        if (!plan) { included.textContent = ''; return; }
+        const over = Math.max(0, business.activeUserCount - plan.includedUsers);
+        included.textContent = 'M\u00e1ximo ' + plan.includedUsers + ' usuarios activos (incluye al administrador). Ahora: ' + business.activeUserCount + '. ' + (over ? 'Desactiva manualmente ' + over + ' usuario(s) antes de guardar.' : 'Todos los usuarios actuales caben en el plan.');
+      };
       planSelect.addEventListener('change', showIncluded); showIncluded();
       planControl.append(planSelect, included); planCell.append(planControl); row.append(planCell);
 
@@ -394,13 +472,17 @@
   async function refreshSystemAdminUsers() {
     if (!isSystemAdmin()) throw new window.PosApiError('SYSTEM_ADMIN_REQUIRED', 403);
     const businessId = el('systemAdminUserBusinessId').value;
-    if (!businessId) { systemAdminUsers = []; renderSystemAdminUsers(); return systemAdminUsers; }
+    if (!businessId) { systemAdminUsers = []; systemAdminUserCapacity = null; el('systemAdminUsersCapacity').textContent = ''; renderSystemAdminUsers(); return systemAdminUsers; }
     systemAdminSelectedBusinessId = businessId;
-    systemAdminUsers = await api.adminUsers(businessId);
+    [systemAdminUsers, systemAdminUserCapacity] = await Promise.all([api.adminUsers(businessId), api.adminBusinessUserCapacity(businessId)]);
+    const capacity = el('systemAdminUsersCapacity');
+    capacity.textContent = systemAdminUserCapacity.maximumUsers === null
+      ? 'Este negocio no tiene un plan asignado. Asígnale uno para administrar sus usuarios; no se cambió su configuración anterior.'
+      : systemAdminUserCapacity.activeUsers + ' de ' + systemAdminUserCapacity.maximumUsers + ' usuarios activos · ' + systemAdminUserCapacity.activeAdmins + ' de 1 administrador · ' + systemAdminUserCapacity.availableUsers + ' cupos disponibles. Los usuarios inactivos no ocupan cupo.';
     renderSystemAdminUsers();
     return systemAdminUsers;
   }
-  async function selectSystemAdminTab(tab) {
+  async function selectSystemAdminTab(tab, refresh = true) {
     if (!canAccessSystemAdmin() || !['businesses', 'users', 'billing', 'migration'].includes(tab)) return;
     systemAdminTab = tab;
     const tabs = { businesses: 'systemAdminBusinesses', users: 'systemAdminUsers', billing: 'systemAdminBilling', migration: 'systemAdminMigration' };
@@ -411,12 +493,41 @@
       el(prefix + 'Panel').classList.toggle('hidden', !selected); el(prefix + 'Panel').setAttribute('aria-hidden', String(!selected));
     }
     clearSystemAdminMessage();
-    if (tab === 'users' || tab === 'billing') {
-      try { await verify(); if (tab === 'users') await refreshSystemAdminUsers(); else await refreshSystemAdminBilling(); }
+    if (refresh && ['businesses', 'users', 'billing'].includes(tab)) {
+      try {
+        await verify();
+        if (tab === 'businesses') await refreshSystemAdminBusinesses();
+        else if (tab === 'users') {
+          // El panel de migración puede crear un negocio después de la carga
+          // inicial. Refrescar aquí permite provisionar sus cuentas nuevas sin
+          // confiar en una lista de destinos obsoleta.
+          await refreshSystemAdminBusinesses();
+          await refreshSystemAdminUsers();
+        } else await refreshSystemAdminBilling();
+      }
       catch (failure) { error(failure, 'systemAdminMessage'); }
     }
     if (tab === 'migration') {
-      try { await verify(); await refreshSystemAdminBusinesses(); if (canAccessSystemAdmin()) window.PosMigrationPreview.show({ canAccess: canAccessSystemAdmin, businesses: systemAdminBusinesses, migrateBasic: (targetBusinessId, packageValue, confirmSystemBusiness) => api.migrateBasic(targetBusinessId, packageValue, confirmSystemBusiness), previewInventory: (targetBusinessId, packageValue) => api.previewInventoryMigration(targetBusinessId, packageValue), migrateInventory: (targetBusinessId, packageValue) => api.migrateInventory(targetBusinessId, packageValue), previewSales: (targetBusinessId, packageValue) => api.previewSalesMigration(targetBusinessId, packageValue), migrateSales: (targetBusinessId, packageValue) => api.migrateSales(targetBusinessId, packageValue) }); }
+      try {
+        await verify();
+        await refreshSystemAdminBusinesses();
+        if (canAccessSystemAdmin()) {
+          window.PosMigrationPreview.show({
+            canAccess: canAccessSystemAdmin,
+            businesses: systemAdminBusinesses,
+            targetBusinessId: systemAdminMigrationTargetId,
+          createMigrationTarget: (name, planCode) => api.createMigrationTarget(name, planCode),
+            inspectExistingMigrationTarget: businessId => api.inspectExistingMigrationTarget(businessId),
+            prepareExistingMigrationTarget: (businessId, confirmed) => api.prepareExistingMigrationTarget(businessId, confirmed),
+            previewArchive: (targetBusinessId, packageValue, fileSha256) => api.previewFullMigration(targetBusinessId, packageValue, fileSha256),
+            archiveFull: (targetBusinessId, packageValue, confirmed, fileSha256) => api.archiveFullMigration(targetBusinessId, packageValue, confirmed, fileSha256),
+            archiveStatus: (targetBusinessId, batchId) => api.migrationBatchStatus(targetBusinessId, batchId),
+            projectMigrationOperations: (targetBusinessId, batchId) => api.projectMigrationOperations(targetBusinessId, batchId),
+            reviewIdentityRecord: (...args) => api.reviewMigrationIdentityRecord(...args)
+          });
+          systemAdminMigrationTargetId = '';
+        }
+      }
       catch (failure) { error(failure, 'systemAdminMessage'); }
     }
   }
@@ -429,7 +540,7 @@
       systemAdminReady = false; systemAdminTab = 'businesses';
       await refreshSystemAdminBusinesses(); assertGeneration(version);
       systemAdminReady = true; activeView = 'systemAdminView'; pendingView = null;
-      await selectSystemAdminTab('businesses');
+      await selectSystemAdminTab('businesses', false);
       renderPosView(activeView);
     } catch (failure) {
       systemAdminReady = false;
@@ -447,13 +558,14 @@
       if (previous && previous !== view && grant) { await api.leave(views[previous]); grant = null; clearTimeout(grantTimer); }
       if (view === 'usersView') {
         // /users autoriza en el servidor; un cambio visual de rol nunca habilita esta ruta.
-        userPage = 0; const users = await api.users(); assertGeneration(version);
+        userPage = 0; const result = await api.users(); assertGeneration(version);
         if (identity.role !== 'ADMIN') throw new window.PosApiError('ADMIN_REQUIRED', 403);
-        activeView = view; renderPosView(view); renderUsers(users); return;
+        activeView = view; renderPosView(view); renderUsers(result.users); renderUserCapacity(result.capacity); return;
       }
       await api.enter(views[view]); assertGeneration(version);
       await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version); await window.PosPurchases.load(view); assertGeneration(version); await window.PosExpenses.load(view); assertGeneration(version);
-      activeView = view; renderPosView(view); pendingView = null;
+      if (view === 'configView') { const settings = await api.businessSettings(); assertGeneration(version); window.PosRuntime.setBusinessSettings(settings); }
+      activeView = view; renderPosView(view); window.PosMigrationHistory?.activate(view); pendingView = null;
       if (view === 'reportesView') { await window.PosReports.load(); assertGeneration(version); }
       if (view === 'dashboardView') { await window.PosDashboard.load(); assertGeneration(version); }
     } catch (failure) {
@@ -463,7 +575,8 @@
         activeView = 'salesView'; renderPosView(activeView); pendingView = view;
         el('authError').classList.add('hidden'); el('authModal').classList.remove('hidden'); el('grantAdminUsername').focus();
       } else {
-        if (identity) { activeView = null; document.querySelectorAll('.view-panel').forEach(node => node.classList.add('hidden')); }
+        // Conserva la vista actual si una carga falla; esconder todos los paneles
+        // deja el POS en blanco y bloquea la navegación a otros módulos.
         error(failure);
       }
     } finally { busy = false; el('app').inert = false; }
@@ -502,13 +615,20 @@
       await api.enter(views[view]); assertGeneration(version);
       await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version); await window.PosPurchases.load(view); assertGeneration(version); await window.PosExpenses.load(view); assertGeneration(version);
       grant = { view, until: Date.parse(value.expiresAt) }; activeView = view; pendingView = null;
-      el('authModal').classList.add('hidden'); renderPosView(view);
+      el('authModal').classList.add('hidden'); renderPosView(view); window.PosMigrationHistory?.activate(view);
       if (view === 'reportesView') await window.PosReports.load();
       clearTimeout(grantTimer); grantTimer = setTimeout(() => { grant = null; navigate('salesView'); }, Math.max(0, grant.until - Date.now()));
     } catch (failure) { error(failure, 'authError'); }
     finally { el('gestorPassword').value = ''; button.disabled = false; busy = false; }
   }
-  async function refreshUsers() { try { await verify(); renderUsers(await api.users(userPage * 100)); } catch (failure) { error(failure, 'usersMessage'); } }
+  async function refreshUsers() { try { await verify(); const result = await api.users(userPage * 100); renderUsers(result.users); renderUserCapacity(result.capacity); } catch (failure) { error(failure, 'usersMessage'); } }
+  function renderUserCapacity(capacity) {
+    const node = el('usersCapacity');
+    if (!capacity) { node.textContent = ''; return; }
+    node.textContent = capacity.maximumUsers === null
+      ? 'Este negocio no tiene un plan asignado. El administrador del sistema debe asignarlo antes de crear o reactivar usuarios.'
+      : capacity.planName + ': ' + capacity.activeUsers + ' de ' + capacity.maximumUsers + ' usuarios activos (' + capacity.activeAdmins + ' de 1 administrador). ' + capacity.availableUsers + ' cupos disponibles; los usuarios inactivos no ocupan cupo.';
+  }
   function renderUsers(users) {
     const body = el('usersTableBody'); body.replaceChildren();
     el('previousUsersBtn').disabled = userPage === 0; el('nextUsersBtn').disabled = users.length < 100;
@@ -523,7 +643,7 @@
       const actions = document.createElement('td');
       function action(text, callback) {
         const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-secondary'; button.textContent = text;
-        button.addEventListener('click', async () => { button.disabled = true; try { await callback(); } catch (failure) { error(failure, 'usersMessage'); } finally { button.disabled = false; } }); actions.append(button);
+        button.addEventListener('click', async () => { button.disabled = true; try { await callback(); } catch (failure) { error(failure, 'usersMessage'); await refreshUsers(); } finally { button.disabled = false; } }); actions.append(button);
       }
       async function changed() { if (user.id === identity?.id) { await api.me(); } await refreshUsers(); }
       action('Guardar rol', async () => { await api.updateUser(user.id, { role: select.value }); await changed(); });
@@ -592,7 +712,7 @@
   el('systemAdminDeleteInput').addEventListener('input', clearSystemAdminDeleteError);
   el('systemAdminDeleteForm').addEventListener('submit', async event => {
     event.preventDefault();
-    if (!canAccessSystemAdmin() || busy || !systemAdminDeleteBusiness) return;
+    if (!canAccessSystemAdmin() || busy || !systemAdminDeleteBusiness || !systemAdminDeletePreview) return;
     const business = systemAdminDeleteBusiness;
     const input = el('systemAdminDeleteInput');
     if (input.value !== 'ELIMINAR') {
@@ -609,14 +729,23 @@
     try {
       await verify();
       if (!isSystemAdmin()) throw new window.PosApiError('SYSTEM_ADMIN_REQUIRED', 403);
-      await api.deleteAdminBusiness(business.id, 'ELIMINAR');
+      const result = await api.deleteAdminBusiness(business.id, 'ELIMINAR', systemAdminDeletePreview.previewToken);
       closeSystemAdminDeleteModal({ restoreFocus: false });
       await refreshSystemAdminBusinesses();
       if (systemAdminTab === 'billing') await refreshSystemAdminBilling();
-      systemAdminNotice('Negocio eliminado correctamente.');
+      systemAdminNotice(result.filesPendingCleanup
+        ? 'Negocio eliminado. La limpieza de algunas imágenes quedó pendiente y se reintentará automáticamente.'
+        : 'Negocio eliminado correctamente.');
       el('systemAdminRefreshBtn').focus();
     } catch (failure) {
       if (failure.code === 'INVALID_SESSION') error(failure, 'systemAdminDeleteError');
+      else if (failure.code === 'BUSINESS_DELETE_PREVIEW_STALE') {
+        input.value = '';
+        systemAdminDeletePreview = null;
+        systemAdminDeleteError('La información cambió. Actualizando el resumen…', { inputInvalid: false });
+        await loadSystemAdminDeletePreview(business, ++systemAdminDeletePreviewToken);
+        if (systemAdminDeletePreview) systemAdminDeleteError('La información cambió. Revisa el resumen actualizado y escribe ELIMINAR otra vez.', { inputInvalid: false });
+      }
       else if (modal.classList.contains('hidden')) error(failure, 'systemAdminMessage');
       else systemAdminDeleteError(failure.message || 'No se pudo eliminar el negocio.');
     } finally {
@@ -625,7 +754,7 @@
       el('app').inert = !modal.classList.contains('hidden');
       input.disabled = false;
       el('systemAdminDeleteCancelBtn').disabled = false;
-      el('systemAdminDeleteConfirmBtn').disabled = false;
+      el('systemAdminDeleteConfirmBtn').disabled = !systemAdminDeletePreview || business.id === '1' || supportContext?.businessId === business.id;
     }
   });
   el('systemAdminUserBusinessId').addEventListener('change', async () => {
@@ -651,26 +780,52 @@
     const button = form.querySelector('button[type="submit"]'); button.disabled = true; clearSystemAdminMessage();
     try {
       await verify();
-      const created = await api.createAdminBusiness(el('systemAdminBusinessName').value.trim());
+      const created = await api.createAdminBusiness(el('systemAdminBusinessName').value.trim(), el('systemAdminBusinessPlan').value);
       systemAdminSelectedBusinessId = created.id; form.reset();
       await refreshSystemAdminBusinesses(); systemAdminNotice('Negocio creado.');
     } catch (failure) { error(failure, 'systemAdminMessage'); }
     finally { button.disabled = false; }
   });
+  const systemAdminUserFields = {
+    username: ['systemAdminUsername', 'Usa de 3 a 100 caracteres: letras sin acentos, números, punto, guion o guion bajo.'],
+    fullName: ['systemAdminFullName', 'Ingresa un nombre completo de hasta 160 caracteres.'],
+    password: ['systemAdminPassword', 'La contraseña debe tener al menos 12 caracteres y hasta 256 bytes.'],
+    role: ['systemAdminRole', 'Selecciona Administrador o Vendedor.']
+  };
   el('systemAdminUserForm').addEventListener('submit', async event => {
     event.preventDefault();
-    const form = event.currentTarget;
-    if (!canAccessSystemAdmin() || !form.reportValidity()) return;
-    const button = form.querySelector('button[type="submit"]'); button.disabled = true; clearSystemAdminMessage();
+    const form = event.currentTarget, button = form.querySelector('button[type="submit"]');
+    if (!canAccessSystemAdmin() || button.disabled) return;
+    window.PosValidation.clear(form);
+    clearSystemAdminMessage();
+    const businessId = el('systemAdminUserBusinessId').value;
+    const data = { username: el('systemAdminUsername').value.trim(), fullName: el('systemAdminFullName').value.trim(), password: el('systemAdminPassword').value, role: el('systemAdminRole').value };
+    const valid = {
+      username: /^[A-Za-z0-9_.-]{3,100}$/.test(data.username),
+      fullName: Boolean(data.fullName) && data.fullName.length <= 160 && ![...data.fullName].some(character => character.charCodeAt(0) <= 0x1f),
+      password: data.password.length >= 12 && new TextEncoder().encode(data.password).length <= 256,
+      role: ['ADMIN', 'VENDEDOR'].includes(data.role)
+    };
+    if (!businessId) { systemAdminNotice('Selecciona el negocio para el nuevo usuario.'); el('systemAdminUserBusinessId').focus(); return; }
+    let firstInvalid = true;
+    for (const [field, allowed] of Object.entries(valid)) {
+      if (!allowed) { window.PosValidation.field(...systemAdminUserFields[field], firstInvalid); firstInvalid = false; }
+    }
+    if (!firstInvalid) return;
+    button.disabled = true;
+    const businessSelect = el('systemAdminUserBusinessId'); businessSelect.disabled = true;
     try {
       await verify();
-      await api.createAdminUser(el('systemAdminUserBusinessId').value, {
-        username: el('systemAdminUsername').value.trim(), fullName: el('systemAdminFullName').value.trim(),
-        password: el('systemAdminPassword').value, role: el('systemAdminRole').value
-      });
+      await api.createAdminUser(businessId, data);
       form.reset(); await refreshSystemAdminUsers(); systemAdminNotice('Usuario creado.');
-    } catch (failure) { error(failure, 'systemAdminMessage'); }
-    finally { el('systemAdminPassword').value = ''; button.disabled = false; }
+    } catch (failure) {
+      const field = failure.code === 'USERNAME_EXISTS' ? 'username' : failure.field;
+      if (Object.hasOwn(systemAdminUserFields, field)) {
+        const [id, help] = systemAdminUserFields[field];
+        window.PosValidation.field(id, failure.code === 'USERNAME_EXISTS' ? 'Ese usuario ya existe en uno de los negocios. Elige otro nombre.' : help);
+      }
+      error(failure, 'systemAdminMessage');
+    } finally { el('systemAdminPassword').value = ''; businessSelect.disabled = false; button.disabled = false; }
   });
   el('refreshUsersBtn').addEventListener('click', refreshUsers);
   el('previousUsersBtn').addEventListener('click', () => { if (userPage > 0) { userPage--; refreshUsers(); } });
@@ -712,7 +867,18 @@
     const result = await operation(api, effectiveBusinessId());
     assertGeneration(version); return result;
   }
+  async function settingsOperation(operation) {
+    mutationLock(); const version = generation; await verify(); assertGeneration(version);
+    const result = await operation(); assertGeneration(version);
+    window.PosRuntime.setBusinessSettings(result);
+    return result;
+  }
   window.PosConnected = Object.freeze({ login, logout, navigate, authorize, canView, inventoryOperation, effectiveBusinessId, handleError: error, canAccessSystemAdmin,
+    migrationHistory: (module, offset = 0, limit = 50) => api.migrationHistory(module, offset, limit),
+    updateBusinessSettings: data => settingsOperation(() => api.updateBusinessSettings(data)),
+    importLegacyBusinessSettings: data => settingsOperation(() => api.importLegacyBusinessSettings(data)),
+    uploadBusinessLogo: file => settingsOperation(() => api.uploadBusinessLogo(file)),
+    assetUrl: reference => api.assetUrl(reference),
     canManageModule: view => Boolean(identity && activeView && (identity.role === 'ADMIN' || ((Array.isArray(view) ? view.includes(activeView) : view === activeView) && grant?.view === activeView && grant.until > Date.now()))) });
   (async () => {
     busy = true; mode.disabled = true; el('loginForm').querySelector('button').disabled = true;

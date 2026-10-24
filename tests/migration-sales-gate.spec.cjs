@@ -6,7 +6,7 @@ const path = require('node:path');
 
 const salesFixturePath = path.join(__dirname, '..', 'prueba de ventas.json');
 
-test('el JSON real actualiza la vista previa y ventas avanza aunque inventario omita stock distinto', async ({ page }) => {
+test('el JSON real muestra origen distinto y exige consentimiento antes de importar ventas históricas', async ({ page }) => {
   test.skip(!fs.existsSync(salesFixturePath), 'Se necesita el JSON local real de ventas para esta prueba.');
   await page.goto('/');
   await page.evaluate(() => {
@@ -41,10 +41,19 @@ test('el JSON real actualiza la vista previa y ventas avanza aunque inventario o
           eligible: true,
           gates: { basic: true, inventory: true, schema: true, targetUser: true },
           sales: { detected: packageValue.data.sales.length, couldMigrate: packageValue.data.sales.length, toSkip: 0 },
+          sourceOriginConflict: {
+            required: true,
+            incomingSourceBusinessName: packageValue.business.name,
+            incomingSourceBusinessKey: 'b'.repeat(64),
+            existingSources: [{ sourceBusinessKey: 'a'.repeat(64), sourceBusinessName: 'Paquete anterior', saleCount: 4 }]
+          },
           warnings: []
         };
       },
-      migrateSales: async () => ({ created: { sales: 1 }, skipped: { sales: 0 }, warnings: [] })
+      migrateSales: async (_targetBusinessId, _packageValue, confirmDifferentSource) => {
+        window.__differentSourceConsent = confirmDifferentSource;
+        return { created: { sales: 1 }, skipped: { sales: 0 }, warnings: [] };
+      }
     });
   });
 
@@ -67,4 +76,14 @@ test('el JSON real actualiza la vista previa y ventas avanza aunque inventario o
   const previewEvidence = await page.evaluate(() => ({ calls: window.__salesPreviewCallCount, pricesPreserved: window.__salesPreviewReceivedHistoricalPrices }));
   expect(previewEvidence.calls).toBeGreaterThan(0);
   expect(previewEvidence.pricesPreserved).toBe(true);
+  await page.locator('#migrationSalesStartBtn').click();
+  await expect(page.locator('#migrationSalesOriginWarning')).toBeVisible();
+  await expect(page.locator('#migrationSalesOriginMessage')).toContainText('Paquete anterior');
+  await expect(page.locator('#migrationSalesOriginMessage')).toContainText('Las facturas locales podrían repetirse');
+  await expect(page.locator('#migrationSalesConfirmBtn')).toBeDisabled();
+  await page.locator('#migrationSalesOriginConfirm').check();
+  await expect(page.locator('#migrationSalesConfirmBtn')).toBeEnabled();
+  await page.locator('#migrationSalesConfirmBtn').click();
+  await expect(page.locator('#migrationSalesConfirmModal')).toBeHidden();
+  expect(await page.evaluate(() => window.__differentSourceConsent)).toBe(true);
 });

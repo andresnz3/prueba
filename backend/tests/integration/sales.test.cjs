@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { randomBytes, randomUUID } = require('node:crypto');
+const { randomBytes, randomUUID, createHash } = require('node:crypto');
 const { readConfig } = require('../../src/config/environment');
 const { readAuthConfig } = require('../../src/config/auth');
 const { createDatabasePool } = require('../../src/config/database');
@@ -302,16 +302,41 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     await admin.request('/cash/sessions/'+previous.id+'/close','POST',{operationKey:randomUUID(),countedAmount:oldSummary.expectedAmount});
     const current = (await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'2.00'})).data.cash;
     const currentSale = (await one.request('/sales','POST',await body(one,{paymentMethod:'CASH'}))).data.sale;
+    const flaggedSale = (await one.request('/sales','POST',await body())).data.sale;
+    const referencedSale = (await one.request('/sales','POST',await body())).data.sale;
+    await rows(pool,'UPDATE sales SET is_historical = TRUE WHERE business_id = ? AND id = ?',[business,flaggedSale.id]);
+    await rows(pool,'INSERT INTO migration_sales_references (business_id, source_business_key, source_sale_key, fingerprint, sale_id) VALUES (?, ?, ?, ?, ?)',[business,'a'.repeat(64),'b'.repeat(64),'c'.repeat(64),referencedSale.id]);
+    const customerId = String((await rows(pool,'INSERT INTO clients (business_id, name) VALUES (?, ?)',[business,'Caja regression'])).insertId);
+    await rows(pool,'UPDATE sales SET client_id = ? WHERE business_id = ? AND id = ?',[customerId,business,currentSale.id]);
+    const [seller] = await rows(pool,'SELECT user_id FROM sales WHERE business_id = ? AND id = ?',[business,currentSale.id]);
+    const paymentIds = [];
+    for (const historical of [false,true]) {
+      const payment = await rows(pool,"INSERT INTO customer_payments (business_id, user_id, client_id, sale_id, cash_session_id, amount, payment_method, is_historical) VALUES (?, ?, ?, ?, ?, 1, 'CASH', ?)",[business,seller.user_id,customerId,currentSale.id,current.id,historical]);
+      paymentIds.push(String(payment.insertId));
+    }
+    const assertOperationalEntries = overview => {
+      assert.ok(overview.operationSales.some(item=>item.id===currentSale.id));
+      assert.equal(overview.operationSales.find(item=>item.id===currentSale.id).isHistorical,false);
+      assert.equal(overview.operationSales.find(item=>item.id===currentSale.id).invoiceNumber,currentSale.invoiceNumber);
+      assert.equal(overview.operationSales.some(item=>item.id===flaggedSale.id),false);
+      assert.equal(overview.operationSales.some(item=>item.id===referencedSale.id),false);
+      assert.ok(overview.operationCollections.some(item=>item.id===paymentIds[0]));
+      assert.equal(overview.operationCollections.some(item=>item.id===paymentIds[1]),false);
+    };
     const overview = (await admin.request('/cash/overview')).data.overview;
+    assertOperationalEntries(overview);
     assert.equal(overview.currentCashSessionId,current.id);
     assert.equal(overview.salesByUser.reduce((sum,item)=>sum+Number(item.total),0).toFixed(2),currentSale.total);
     assert.ok(overview.movements.length > 0);
     assert.ok(overview.movements.every(item=>item.cashSessionId===current.id));
     assert.equal(overview.pendingPayments.some(item=>item.saleId===oldCard.id),false);
     assert.equal(overview.pendingHistoricalPayments.some(item=>item.saleId===oldCard.id),true);
-    assert.equal(overview.expectedAmount,(2+Number(currentSale.total)).toFixed(2));
+    assert.equal(overview.expectedAmount,(2+Number(currentSale.total)+Number(flaggedSale.total)+Number(referencedSale.total)).toFixed(2));
      await admin.request('/cash/sessions/'+current.id+'/close','POST',{operationKey:randomUUID(),countedAmount:overview.expectedAmount});
      const closedOverview = (await admin.request('/cash/overview')).data.overview;
+     assertOperationalEntries(closedOverview);
+     await rows(pool,'DELETE FROM migration_sales_references WHERE business_id = ? AND sale_id = ?',[business,referencedSale.id]);
+     await rows(pool,'UPDATE sales SET is_historical = FALSE WHERE business_id = ? AND id = ?',[business,flaggedSale.id]);
      assert.equal(closedOverview.currentCashSessionId,null);
      assert.ok(closedOverview.operationSales.some(item=>item.id===currentSale.id));
      assert.ok(closedOverview.movements.some(item=>item.saleId===currentSale.id));
@@ -321,5 +346,23 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
   await t.test('auditoria contiene operaciones y nunca contrasenas ni tokens',async()=>{
     const records=await rows(pool,'SELECT action, details FROM audit_logs WHERE business_id = ?',[business]);for(const action of ['CREATE_SALE','CANCEL_SALE','OPEN_CASH','CLOSE_CASH','RESOLVE_OPERATION','CONFIRM_NONCASH_PAYMENT','PREPARE_SALE_ORDER','CANCEL_SALE_ORDER','CHANGE_SALES_FLOW'])assert.ok(records.some(r=>r.action===action));
     assert.ok(!JSON.stringify(records).includes(password));
+  });
+  await t.test('ventas historicas exponen su origen y rechazan anulacion sin efectos operativos',async()=>{
+    const [fixtureSale]=await rows(pool,"SELECT id FROM sales WHERE business_id = ? AND status = 'COMPLETED' ORDER BY id DESC LIMIT 1",[business]);
+    assert.ok(fixtureSale);
+    const sourceBusinessKey=createHash('sha256').update('name:paquete historico de prueba').digest('hex'), sourceSaleKey=createHash('sha256').update('local-id:venta-local-historica-27').digest('hex');
+    const internalReference='MIG-000027-'+sourceBusinessKey.slice(0,8)+sourceSaleKey.slice(0,20);
+    await rows(pool,'UPDATE sales SET invoice_number = ?, detail = ? WHERE business_id = ? AND id = ?',[internalReference,'Factura local: 000027 · Fixture histórico',business,fixtureSale.id]);
+    await rows(pool,'INSERT INTO migration_sales_references (business_id, source_business_key, source_sale_key, source_sale_id, fingerprint, sale_id) VALUES (?, ?, ?, ?, ?, ?)',[business,sourceBusinessKey,sourceSaleKey,'venta-local-historica-27','f'.repeat(64),fixtureSale.id]);
+    await rows(pool,'INSERT INTO audit_logs (business_id, user_id, action, entity, entity_id, details, created_at) VALUES (?, NULL, ?, ?, ?, ?, UTC_TIMESTAMP(3))',[business,'MIGRATION_SALES_IMPORT','businesses',business,JSON.stringify({sourceBusinessKey,sourceBusinessName:'Paquete Histórico de Prueba',summary:{created:{sales:1},skipped:{sales:0}}})]);
+    const before={stock:await stock(product.id),cash:await count('cash_movements'),inventory:await count('inventory_movements'),payments:await count('customer_payments')};
+    const sale=(await admin.request('/sales/'+fixtureSale.id)).data.sale;
+    assert.equal(sale.isHistorical,true);assert.equal(sale.sourceBusinessKey,sourceBusinessKey);assert.equal(sale.sourceSaleId,'venta-local-historica-27');assert.equal(sale.sourceBusinessName,'Paquete Histórico de Prueba');assert.equal(sale.originalInvoiceNumber,'000027');assert.equal(sale.invoiceNumber,internalReference);
+    const listed=(await admin.request('/sales?limit=100')).data.sales.find(item=>item.id===String(fixtureSale.id));assert.equal(listed.isHistorical,true);assert.equal(listed.sourceBusinessName,'Paquete Histórico de Prueba');
+    const blocked=await admin.request('/sales/'+fixtureSale.id+'/cancel','POST',{operationKey:randomUUID(),reason:'No se permite en historicas'});
+    assert.equal(blocked.status,409);assert.equal(blocked.data.error.code,'HISTORICAL_SALE_READ_ONLY');
+    const after={stock:await stock(product.id),cash:await count('cash_movements'),inventory:await count('inventory_movements'),payments:await count('customer_payments')};
+    assert.deepEqual(after,before);
+    const [saved]=await rows(pool,'SELECT status, invoice_number FROM sales WHERE business_id = ? AND id = ?',[business,fixtureSale.id]);assert.equal(saved.status,'COMPLETED');assert.equal(saved.invoice_number,internalReference);
   });
 });

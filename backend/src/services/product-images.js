@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('node:fs/promises');
 const { join } = require('node:path');
-const { randomBytes } = require('node:crypto');
+const { randomBytes, createHash } = require('node:crypto');
 const sharp = require('sharp');
 const { httpError } = require('../middleware/errors');
 const MAX_SOURCE = 8 * 1024 * 1024, MAX_OUTPUT = 512 * 1024, MAX_PIXELS = 40000000;
@@ -60,6 +60,32 @@ function createImageStore(config) {
       return '/api/product-images/' + business + '/' + name;
     });
   }
+  async function saveMigration(business, buffer, stableId) {
+    if (typeof stableId !== 'string' || !stableId.trim() || stableId.length > 240) throw httpError(400, 'IMAGE_REFERENCE_INVALID');
+    return storage(async () => {
+      const dir = directory(business);
+      await fs.mkdir(dir,{recursive:true,mode:0o700});
+      const digest = createHash('sha256').update(String(business)).update('\0').update(stableId).update('\0').update(buffer).digest('hex');
+      const name = digest.slice(0,32) + '.jpg';
+      const path = join(dir,name);
+      try {
+        const existing = await fs.readFile(path);
+        if (!existing.equals(buffer)) throw httpError(500,'IMAGE_MIGRATION_CONTENT_CONFLICT');
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        let size = 0;
+        for (const file of await fs.readdir(dir)) if (/^[a-f0-9]{32}\.jpg$/.test(file)) size += (await fs.stat(join(dir,file))).size;
+        if (size + buffer.length > config.quota) throw httpError(409,'IMAGE_QUOTA_EXCEEDED');
+        try { await fs.writeFile(path,buffer,{flag:'wx',mode:0o600}); }
+        catch (writeError) {
+          if (writeError.code !== 'EEXIST') throw writeError;
+          const existing = await fs.readFile(path);
+          if (!existing.equals(buffer)) throw httpError(500,'IMAGE_MIGRATION_CONTENT_CONFLICT');
+        }
+      }
+      return '/api/product-images/' + business + '/' + name;
+    });
+  }
   async function assertOwned(business, reference) {
     if (reference === null) return;
     const name = parseReference(reference,business);
@@ -80,6 +106,65 @@ function createImageStore(config) {
     const name = parseReference(reference,business);
     return storage(() => fs.unlink(join(directory(business),name)));
   }
-  return { save, assertOwned, read, remove };
+  function cleanupDirectory(business) { return join(config.root, '.deleted-business-' + String(business)); }
+  async function countBusinessFiles(business) {
+    const dir = directory(business);
+    try {
+      let count = 0, bytes = 0;
+      async function visit(current, depth = 0) {
+        if (depth > 16) throw new Error('Image directory depth exceeded');
+        for (const entry of await fs.readdir(current, { withFileTypes: true })) {
+          const path = join(current, entry.name), info = await fs.lstat(path);
+          if (info.isDirectory() && !info.isSymbolicLink()) await visit(path, depth + 1);
+          else if (info.isFile() || info.isSymbolicLink()) { count++; if (info.isFile()) bytes += info.size; }
+        }
+      }
+      await visit(dir);
+      return { count, bytes };
+    } catch (error) {
+      if (error.code === 'ENOENT') return { count: 0, bytes: 0 };
+      if (error.publicCode) throw error;
+      throw httpError(503, 'IMAGE_STORAGE_UNAVAILABLE');
+    }
+  }
+  async function removeBusinessFiles(business) {
+    const id = String(business);
+    const source = directory(id), staged = cleanupDirectory(id);
+    try {
+      await fs.mkdir(config.root, { recursive: true, mode: 0o700 });
+      let sourceExists = false, stagedExists = false;
+      try { const info = await fs.lstat(source); sourceExists = true; if (!info.isDirectory() || info.isSymbolicLink()) return false; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      try { const info = await fs.lstat(staged); stagedExists = true; if (!info.isDirectory() || info.isSymbolicLink()) return false; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (sourceExists && stagedExists) return false;
+      if (sourceExists) await fs.rename(source, staged);
+      if (stagedExists || sourceExists) await fs.rm(staged, { recursive: true, force: true });
+      return true;
+    } catch { return false; }
+  }
+  async function recoverBusinessFiles(businessExists) {
+    if (typeof businessExists !== 'function') throw new TypeError('businessExists is required');
+    await fs.mkdir(config.root, { recursive: true, mode: 0o700 });
+    const entries = await fs.readdir(config.root, { withFileTypes: true });
+    let pending = 0;
+    for (const entry of entries) {
+      const stagedMatch = /^\.deleted-business-([1-9]\d{0,19})$/.exec(entry.name);
+      const orphanMatch = /^([1-9]\d{0,19})$/.exec(entry.name);
+      if ((!stagedMatch && !orphanMatch) || !entry.isDirectory()) continue;
+      const id = (stagedMatch || orphanMatch)[1];
+      if (await businessExists(id)) {
+        if (!stagedMatch) continue;
+        const source = directory(id), staged = cleanupDirectory(id);
+        try {
+          await fs.lstat(source);
+          pending++;
+        } catch (error) {
+          if (error.code !== 'ENOENT') { pending++; continue; }
+          try { await fs.rename(staged, source); } catch { pending++; }
+        }
+      } else if (!(await removeBusinessFiles(id))) pending++;
+    }
+    return pending;
+  }
+  return { save, saveMigration, assertOwned, read, remove, countBusinessFiles, removeBusinessFiles, recoverBusinessFiles };
 }
 module.exports = { createImageStore, normalize, parseReference, MAX_SOURCE, MAX_OUTPUT, MAX_PIXELS };

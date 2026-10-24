@@ -17,6 +17,7 @@
   const paymentLabel = value => ({ CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia', CREDIT: 'Crédito', OTHER: 'Otro' })[value] || value || '—';
   const movementLabel = value => ({ SALE: 'Venta', CUSTOMER_PAYMENT: 'Abono de cliente', REVERSAL: 'Devolución', MANUAL_ENTRY: 'Entrada manual', MANUAL_EXIT: 'Salida manual', EXPENSE: 'Gasto', SUPPLIER_PAYMENT: 'Pago a proveedor' })[value] || value || 'Movimiento';
   const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', CONFIRMED: 'Confirmado', PENDING: 'Pendiente', VOID: 'Anulado', POSTED: 'Registrado', PARTIAL: 'Parcial', PAID: 'Pagada', OPEN: 'Pendiente', OVERDUE: 'Vencida', PENDING_CONFIRMATION: 'Por confirmar' })[value] || value || '—';
+  const saleStatusLabel = row => row.isHistorical ? 'Histórica · ' + statusLabel(row.status) : statusLabel(row.status);
   let currentData = null, requestId = 0;
 
   function apiRange() {
@@ -89,7 +90,7 @@
     setRows('connectedDashMethodsBody', 3, data.sales.paymentMethods.map(row => `<td>${esc(paymentLabel(row.method))}</td><td>${Number(row.count)}</td><td>${money(row.total)}</td>`), 'Sin ventas en este período.');
     setRows('connectedDashSellersBody', 3, data.sales.sellers.map(row => `<td><strong>${esc(row.seller)}</strong></td><td>${Number(row.count)}</td><td>${money(row.total)}</td>`), 'Sin ventas en este período.');
     setRows('connectedDashProductsBody', 3, data.sales.topProducts.map(row => `<td>${esc(row.name)}</td><td>${Number(row.quantity).toLocaleString('es-NI', { maximumFractionDigits: 3 })}</td><td>${money(row.total)}</td>`), 'Sin productos vendidos en este período.');
-    setRows('connectedDashHistoryBody', 6, data.sales.history.map(row => `<td data-sort-value="${esc(dayKey(row.createdAt))}" data-table-date="${esc(dayKey(row.createdAt))}">${esc(dateTime(row.createdAt))}</td><td>${esc(row.invoiceNumber)}</td><td>${esc(row.seller)}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${money(row.total)}</td><td>${esc(statusLabel(row.status))}</td>`), 'Sin ventas en este período.');
+    setRows('connectedDashHistoryBody', 6, data.sales.history.map(row => `<td data-sort-value="${esc(dayKey(row.createdAt))}" data-table-date="${esc(dayKey(row.createdAt))}">${esc(dateTime(row.createdAt))}</td><td>${esc(row.invoiceNumber)}</td><td>${esc(row.seller)}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${money(row.total)}</td><td>${esc(saleStatusLabel(row))}</td>`), 'Sin ventas en este período.');
     setRows('connectedDashDebtorsBody', 3, data.receivables.clients.map(row => `<td><strong>${esc(row.clientName)}</strong></td><td>${money(row.balance)}</td><td>${esc(row.status)}</td>`), 'No hay clientes con deuda actual.');
     setRows('connectedDashPaymentsBody', 6, data.receivables.payments.map(row => `<td data-table-date="${esc(dayKey(row.createdAt))}">${esc(dateTime(row.createdAt))}</td><td>${esc(row.clientName)}</td><td>${esc(row.invoiceNumber || '—')}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td>`), 'Sin abonos en este período.');
     setRows('connectedDashExpensesBody', 7, data.expenses.history.map(row => `<td data-table-date="${esc(dayKey(row.createdAt))}">${esc(dateTime(row.createdAt))}</td><td>${esc(row.category)}</td><td>${esc(row.description)}</td><td>${esc(paymentLabel(row.paymentMethod))}</td><td>${esc(statusLabel(row.status))}</td><td>${money(row.amount)}</td><td>${esc(row.userName)}</td>`), 'Sin gastos en este período.');
@@ -153,7 +154,7 @@
       { name: 'Ventas por medio', rows: [['Medio de pago', 'Ventas', 'Total'], ...currentData.sales.paymentMethods.map(row => [paymentLabel(row.method), Number(row.count), Number(row.total)])] },
       { name: 'Ventas por vendedor', rows: [['Vendedor', 'Ventas', 'Efectivo', 'Tarjeta', 'Transferencia', 'Crédito', 'Total'], ...currentData.sales.sellers.map(row => [row.seller, Number(row.count), Number(row.cash), Number(row.card), Number(row.transfer), Number(row.credit), Number(row.total)])] },
       { name: 'Productos más vendidos', rows: [['Producto', 'Unidades', 'Total vendido'], ...currentData.sales.topProducts.map(row => [row.name, Number(row.quantity), Number(row.total)])] },
-      { name: 'Ventas del período', rows: [['Fecha', 'Factura', 'Vendedor', 'Medio de pago', 'Total', 'Estado'], ...currentData.sales.history.map(row => [dateTime(row.createdAt), row.invoiceNumber, row.seller, paymentLabel(row.paymentMethod), Number(row.total), statusLabel(row.status)])] },
+      { name: 'Ventas del período', rows: [['Fecha', 'Factura', 'Vendedor', 'Medio de pago', 'Total', 'Estado'], ...currentData.sales.history.map(row => [dateTime(row.createdAt), row.invoiceNumber, row.seller, paymentLabel(row.paymentMethod), Number(row.total), saleStatusLabel(row)])] },
       { name: 'Cuentas por cobrar', rows: [['Cliente', 'Deuda', 'Estado'], ...currentData.receivables.clients.map(row => [row.clientName, Number(row.balance), row.status])] },
       { name: 'Abonos del período', rows: [['Fecha', 'Cliente', 'Factura', 'Medio de pago', 'Estado', 'Monto'], ...currentData.receivables.payments.map(row => [dateTime(row.createdAt), row.clientName, row.invoiceNumber || '—', paymentLabel(row.paymentMethod), statusLabel(row.status), Number(row.amount)])] },
       { name: 'Compras del período', rows: [['Fecha', 'N° compra interno', 'Factura proveedor', 'Proveedor', 'Condición', 'Estado', 'Total'], ...currentData.purchases.history.map(row => [dateTime(row.createdAt), row.purchaseNumber || row.invoiceNumber, row.supplierInvoiceNumber || '', row.supplierName, row.purchaseType === 'CREDIT' ? 'Crédito' : 'Contado', statusLabel(row.status), Number(row.total)])] },
@@ -167,7 +168,7 @@
   function exportExcel() {
     const sheets = exportSheets();
     if (!sheets) return false;
-    return Boolean(window.PosTables?.exportWorkbookToXlsx(sheets, { fileName: 'dashboard' }));
+    return Boolean(window.PosTables?.exportWorkbookToXlsx(sheets, { fileName: 'dashboard_conectado' }));
   }
   const exportButton = document.querySelector('.dashboard-heading button');
   if (exportButton) exportButton.onclick = event => { event.preventDefault(); exportExcel(); };

@@ -40,7 +40,7 @@ async function mysqlSalesSnapshot(invoiceNumber = null) {
   if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === process.env.DB_NAME) throw new Error('La comprobación MySQL requiere una base de integración aislada');
   const config = readConfig(), pool = createDatabasePool({ ...config.database, database, connectionLimit: 1 });
   try {
-    const [totals] = await pool.execute("SELECT COUNT(*) AS count, COALESCE(SUM(total), 0.00) AS total FROM sales WHERE business_id = ? AND status = 'COMPLETED'", [business]);
+    const [totals] = await pool.execute("SELECT COUNT(*) AS count, COALESCE(SUM(s.total), 0.00) AS total FROM sales s WHERE s.business_id = ? AND s.status = 'COMPLETED' AND COALESCE(s.is_historical, FALSE) = FALSE AND NOT EXISTS (SELECT 1 FROM migration_sales_references r WHERE r.business_id = s.business_id AND r.sale_id = s.id)", [business]);
     const [saleRows] = invoiceNumber ? await pool.execute('SELECT s.id, s.created_at, i.id AS itemId, m.id AS movementId, im.id AS inventoryMovementId FROM sales s JOIN sale_items i ON i.business_id = s.business_id AND i.sale_id = s.id LEFT JOIN cash_movements m ON m.business_id = s.business_id AND m.sale_id = s.id LEFT JOIN inventory_movements im ON im.business_id = s.business_id AND im.reference_type = \'sales\' AND im.reference_id = s.id WHERE s.business_id = ? AND s.invoice_number = ?', [business, invoiceNumber]) : [[]];
     return { count: Number(totals[0].count), total: Number(totals[0].total), sale: saleRows[0] || null };
   } finally { await pool.end(); }
@@ -48,6 +48,7 @@ async function mysqlSalesSnapshot(invoiceNumber = null) {
 
 test('Reportes conectados muestra fuentes MySQL, filtra hoy y conserva el modo local aislado', async ({ page }) => {
   await login(page);
+  const businessIdentity = await page.evaluate(() => window.PosRuntime.businessIdentity());
   const cash = await call(page, 'currentCash', true);
   if (!cash) await call(page, 'openCash', { operationKey: randomUUID(), openingAmount: '100.00' });
   const suffix = randomBytes(4).toString('hex');
@@ -69,7 +70,7 @@ test('Reportes conectados muestra fuentes MySQL, filtra hoy y conserva el modo l
   await expect(page.locator('#repTopProductosBody')).toContainText(product.name);
   await expect(page.locator('#repCxCBody')).toContainText(clientName);
   await expect(page.locator('#repVentasHistorialBody tr').filter({ hasText: sale.sale.invoiceNumber }).locator('td')).toHaveCount(6);
-  await expect(page.locator('#connectedReportScope')).toContainText('estado actual del negocio');
+  await expect(page.locator('#connectedReportScope')).toContainText('muestran el estado actual.');
   await expect(page.locator('#repComprasBody')).toContainText(/Sin compras para el período seleccionado\.|Proveedor compras/);
 
   await page.locator('#filtroHoyBtn').click();
@@ -89,18 +90,21 @@ test('Reportes conectados muestra fuentes MySQL, filtra hoy y conserva el modo l
   const [cashDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#repCajaBox .data-table-export').nth(1).click()]);
   expect(cashDownload.suggestedFilename()).toMatch(/^reporte_movimientos_caja_\d{4}-\d{2}-\d{2}\.xlsx$/);
   await page.locator('.rep-subtab[data-target="repInventarioBox"]').click();
-  const [inventoryDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#repInventarioBox .data-table-export').click()]);
+  const [inventoryDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Exportar Excel de Estado de inventario', exact: true }).click()]);
   expect(inventoryDownload.suggestedFilename()).toMatch(/^reporte_inventario_\d{4}-\d{2}-\d{2}\.xlsx$/);
   await page.locator('.rep-subtab[data-target="repCxCBox"]').click();
   const [receivableDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#repCxCBox .data-table-export').first().click()]);
   expect(receivableDownload.suggestedFilename()).toMatch(/^reporte_cuentas_por_cobrar_\d{4}-\d{2}-\d{2}\.xlsx$/);
+  const receivableWorkbook = JSON.parse(require('node:fs').readFileSync(await receivableDownload.path(), 'utf8')).book;
+  expect(receivableWorkbook.SheetNames).toContain('Negocio');
+  expect(JSON.stringify(receivableWorkbook.Sheets.Negocio)).toContain(businessIdentity.name);
   await expect(page.locator('#repCxCPagosBody')).toContainText(clientName);
   const [paymentDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#repCxCBox .data-table-export').nth(1).click()]);
   expect(paymentDownload.suggestedFilename()).toMatch(/^abonos_cuentas_por_cobrar_\d{4}-\d{2}-\d{2}\.xlsx$/);
   await page.locator('.rep-subtab[data-target="repComprasBox"]').click();
   await expect(page.locator('#repComprasBody')).toBeVisible();
 
-  expect(await page.evaluate(async () => ({ sales: await localDB.sales.count(), queue: await localDB.sync_queue.count() }))).toEqual({ sales: 0, queue: 0 });
+  expect(await page.evaluate(() => typeof localDB === 'undefined' || localDB === null)).toBe(true);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('.rep-subtab[data-target="repVentasBox"]').click();
@@ -126,8 +130,8 @@ test('Reportes conectados muestra fuentes MySQL, filtra hoy y conserva el modo l
   await expect(page.locator('#connectedDashProductsBody')).toContainText(product.name);
   await expect(page.locator('#connectedDashHistoryBody')).toContainText(sale.sale.invoiceNumber);
   await expect(page.locator('#connectedDashDebtorsBody')).toContainText(clientName);
-  expect((await page.locator('#dashboardConnectedContent .summary-card').allTextContents()).join(' ')).not.toContain('Cuentas por pagar');
-  expect(await page.evaluate(async () => ({ sales: await localDB.sales.count(), queue: await localDB.sync_queue.count() }))).toEqual({ sales: 0, queue: 0 });
+  expect((await page.locator('#dashboardConnectedContent .summary-card').allTextContents()).join(' ')).toContain('Cuentas por pagar');
+  expect(await page.evaluate(() => typeof localDB === 'undefined' || localDB === null)).toBe(true);
 
   await page.locator('#dashboardFromInput').fill('2000-01-01'); await page.locator('#dashboardUntilInput').fill('2000-01-01'); await page.locator('#dashboardApplyBtn').click();
   await expect(page.locator('#connectedDashSalesTotal')).toHaveText('C$0.00');
@@ -148,6 +152,7 @@ test('Reportes conectados muestra fuentes MySQL, filtra hoy y conserva el modo l
 
 test('venta nueva desde el POS se refleja en Reportes, Dashboard, Hoy, Todo y Excel', async ({ page }) => {
   await login(page);
+  const businessIdentity = await page.evaluate(() => window.PosRuntime.businessIdentity());
   const cash = await call(page, 'currentCash', true);
   if (!cash) await call(page, 'openCash', { operationKey: randomUUID(), openingAmount: '100.00' });
   const suffix = randomBytes(4).toString('hex');
@@ -197,12 +202,16 @@ test('venta nueva desde el POS se refleja en Reportes, Dashboard, Hoy, Todo y Ex
   await page.locator('#filtroHoyBtn').click(); await expect(page.locator('#repVentasHistorialBody')).toContainText(sale.invoiceNumber);
   await page.locator('#filtroTodoBtn').click(); await expect(page.locator('#repVentasHistorialBody')).toContainText(sale.invoiceNumber);
   await expect(page.locator('#repGastosHistoryBody')).toContainText(expenseDescription);
-  const [connectedReportDownload] = await Promise.all([page.waitForEvent('download'), page.locator('button[onclick*="PosReports"]:visible').click()]);
+  const [connectedReportDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#exportReportsAllBtn').click()]);
   const connectedReportWorkbook = JSON.parse(require('node:fs').readFileSync(await connectedReportDownload.path(), 'utf8')).book;
+  expect(connectedReportWorkbook.SheetNames).toContain('Negocio');
+  expect(JSON.stringify(connectedReportWorkbook.Sheets.Negocio)).toContain(businessIdentity.name);
   expect(JSON.stringify(connectedReportWorkbook.Sheets)).toContain(expenseDescription);
   expect(JSON.stringify(connectedReportWorkbook.Sheets)).toContain('Utilidad neta');
-  const [reportDownload] = await Promise.all([page.waitForEvent('download'), page.locator('button[onclick*="ventas"]').click()]);
+  const [reportDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#exportReportsSalesBtn').click()]);
   const reportWorkbook = JSON.parse(require('node:fs').readFileSync(await reportDownload.path(), 'utf8')).book;
+  expect(reportWorkbook.SheetNames).toContain('Negocio');
+  expect(JSON.stringify(reportWorkbook.Sheets.Negocio)).toContain(businessIdentity.name);
   expect(JSON.stringify(reportWorkbook.Sheets)).toContain(sale.invoiceNumber);
 
   await page.locator('#navDashboardBtn').click(); await expect(page.locator('#connectedDashHistoryBody')).toContainText(sale.invoiceNumber);
@@ -221,7 +230,7 @@ test('venta nueva desde el POS se refleja en Reportes, Dashboard, Hoy, Todo y Ex
   const [dashboardDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#dashboardView button[onclick="window.generarExcelDashboard()"]').click()]);
   const dashboardWorkbook = JSON.parse(require('node:fs').readFileSync(await dashboardDownload.path(), 'utf8')).book;
   expect(JSON.stringify(dashboardWorkbook.Sheets)).toContain(sale.invoiceNumber);
-  expect(await page.evaluate(async () => ({ sales: await localDB.sales.count(), queue: await localDB.sync_queue.count() }))).toEqual({ sales: 0, queue: 0 });
+  expect(await page.evaluate(() => typeof localDB === 'undefined' || localDB === null)).toBe(true);
 });
 
 test('Reportes conectados exporta Excel filtrado y avisa cuando el rango no tiene ventas', async ({ page }) => {
@@ -234,12 +243,14 @@ test('Reportes conectados exporta Excel filtrado y avisa cuando el rango no tien
   const quote = await call(page, 'quoteSale', input);
   const sale = await call(page, 'createSale', { ...input, detail: 'Exportación de prueba', operationKey: randomUUID(), quoteToken: quote.quoteToken, cashReceived: null });
   await page.locator('#navReportesBtn').click(); await expect(page.locator('#repVentasHistorialBody')).toContainText(sale.sale.invoiceNumber);
+  await page.locator('.rep-subtab[data-target="repVentasBox"]').click();
   const salesToolbar = page.locator('#repVentasHistorialBody').locator('xpath=ancestor::table').locator('xpath=..').locator('xpath=preceding-sibling::*[contains(@class,"data-table-toolbar")]');
   await salesToolbar.locator('.data-table-input').fill(sale.sale.invoiceNumber);
-  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('button[onclick*="ventas"]').click()]);
-  expect(download.suggestedFilename()).toMatch(/^ventas_conectado_\d{4}-\d{2}-\d{2}\.xlsx$/);
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#exportReportsSalesBtn').click()]);
+  expect(download.suggestedFilename()).toMatch(/^ventas_conectadas_\d{4}-\d{2}-\d{2}\.xlsx$/);
   const workbook = JSON.parse(require('node:fs').readFileSync(await download.path(), 'utf8')).book;
-  expect(workbook.SheetNames.length).toBe(3);
+  expect(workbook.SheetNames.length).toBe(4);
+  expect(workbook.SheetNames).toContain('Negocio');
   expect(JSON.stringify(workbook.Sheets)).toContain('Factura');
   expect(JSON.stringify(workbook.Sheets)).toContain(sale.sale.invoiceNumber);
   expect(workbook.Sheets['Historial de ventas']['!data'][0]).toEqual(['Fecha', 'Factura', 'Vendedor', 'Medio de pago', 'Total', 'Estado']);
@@ -249,6 +260,6 @@ test('Reportes conectados exporta Excel filtrado y avisa cuando el rango no tien
   await page.locator('#reporteDesdeInput').fill(oldDate); await page.locator('#reporteHastaInput').fill(oldDate); await page.locator('#aplicarFiltroReporteBtn').click();
   await expect(page.locator('#repVentas')).toHaveText('C$0.00');
   await expect(page.locator('#repVentasBox .data-table-export').first()).toBeHidden();
-  await page.locator('button[onclick*="ventas"]').click(); await expect(page.locator('#customAlertModal')).toBeVisible();
+  await page.locator('#exportReportsSalesBtn').click(); await expect(page.locator('#customAlertModal')).toBeVisible();
   await expect(page.locator('#customAlertMessage')).toContainText('No hay ventas visibles');
 });

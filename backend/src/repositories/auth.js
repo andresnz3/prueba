@@ -10,10 +10,25 @@ async function transaction(pool, work) {
 async function lockBusiness(db, businessId) {
   const [business] = await rows(db, 'SELECT id, status FROM businesses WHERE id = ? FOR UPDATE', [businessId]);
   if (!business || business.status !== 'ACTIVE') throw httpError(401, 'INVALID_SESSION');
+  const [gate] = await rows(db, 'SELECT COUNT(*) AS present FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = \'business_migration_controls\'', []);
+  if (Number(gate.present) === 1) {
+    const [control] = await rows(db, 'SELECT state FROM business_migration_controls WHERE business_id = ? FOR UPDATE', [businessId]);
+    if (control?.state === 'PENDING') throw httpError(401, 'INVALID_SESSION');
+  }
+}
+async function businessMigrationState(db, businessId) {
+  const [gate] = await rows(db, 'SELECT COUNT(*) AS present FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = \'business_migration_controls\'', []);
+  if (Number(gate.present) !== 1) return 'NOT_REQUIRED';
+  const [control] = await rows(db, 'SELECT state FROM business_migration_controls WHERE business_id = ?', [businessId]);
+  return control?.state || 'NOT_REQUIRED';
 }
 function createAuthRepository(pool, config) {
   const selectSession = 'SELECT s.id AS session_id, s.business_id, s.user_id, s.token_hash, s.expires_at, s.created_at, u.username, u.full_name, u.role, u.active, b.name AS business_name, b.status AS business_status FROM sessions s JOIN users u ON u.business_id = s.business_id AND u.id = s.user_id JOIN businesses b ON b.id = s.business_id WHERE s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP(3) AND s.created_at > TIMESTAMPADD(SECOND, -?, UTC_TIMESTAMP(3)) AND u.active = TRUE AND b.status = \'ACTIVE\' ';
-  async function session(tokenHash) { return (await rows(pool, selectSession + 'AND s.token_hash = ?', [config.absoluteSeconds, tokenHash]))[0]; }
+  async function session(tokenHash) {
+    const found = (await rows(pool, selectSession + 'AND s.token_hash = ?', [config.absoluteSeconds, tokenHash]))[0];
+    if (!found || await businessMigrationState(pool, found.business_id) === 'PENDING') return undefined;
+    return found;
+  }
   async function tenant(auth, work) {
     return transaction(pool, async db => {
       if (auth.support) {
@@ -47,6 +62,6 @@ function createAuthRepository(pool, config) {
     await rows(db, 'DELETE FROM session_authorizations WHERE business_id = ? AND (granted_by_user_id = ? OR session_id IN (SELECT id FROM sessions WHERE business_id = ? AND user_id = ?))', [businessId, userId, businessId, userId]);
     await rows(db, 'UPDATE sessions SET revoked_at = UTC_TIMESTAMP(3) WHERE business_id = ? AND user_id = ? AND revoked_at IS NULL', [businessId, userId]);
   }
-  return { pool, rows, transaction: work => transaction(pool, work), lockBusiness, session, tenant, audit, revokeUser };
+  return { pool, rows, transaction: work => transaction(pool, work), lockBusiness, businessMigrationState, session, tenant, audit, revokeUser };
 }
 module.exports = { createAuthRepository, publicUser, rows, transaction, lockBusiness };
