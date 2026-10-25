@@ -164,14 +164,14 @@ test('explica que faltan las migraciones de protección y muestra los signos esp
   await openMigration(page, { missingProtection: true });
   await page.locator('#migrationExistingBusiness').selectOption('7');
   await page.locator('#migrationExistingInspectBtn').click();
-  await expect(page.locator('#migrationExistingStatus')).toContainText('deben aplicarse las migraciones 012 y 013');
+  await expect(page.locator('#migrationExistingStatus')).toContainText('La importación todavía no está disponible');
   const rendered = await page.evaluate(() => {
     const target = document.createElement('p');
     target.textContent = new window.PosApiError('MIGRATION_GATE_SCHEMA_REQUIRED', 503).message;
     document.body.append(target);
     return target.textContent;
   });
-  expect(rendered).toBe('Para usar la importación segura deben aplicarse las migraciones 012 y 013 en el servidor. No se modificó ningún negocio.');
+  expect(rendered).toBe('La importación todavía no está disponible. Contacta al administrador del sistema; no se modificó ningún negocio.');
 });
 
 test('el administrador crea un destino y queda bloqueado hasta la conciliación', async ({ page }) => {

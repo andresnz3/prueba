@@ -20,7 +20,8 @@ test("la pantalla de login carga correctamente", async ({ page }) => {
 
 test("el ojito alterna la contraseña con teclado y conserva el login local en móvil", async ({ page }) => {
   await page.addInitScript({ path: require.resolve("./dexie-search-shim.js") });
-  await page.route("http://127.0.0.1:5500/**", async route => { const response = await route.fetch(); const html = (await response.text()).replace(/\s+integrity="[^"]*"/g, ""); await route.fulfill({ response, body: html }); });
+  const appOrigin = new URL(test.info().project.use.baseURL).origin;
+  await page.route(appOrigin + "/**", async route => { const response = await route.fetch(); const html = (await response.text()).replace(/\s+integrity="[^"]*"/g, ""); await route.fulfill({ response, body: html }); });
   await page.route("https://**/*", route => route.fulfill({ status: 200, contentType: route.request().url().includes("fonts.googleapis.com") ? "text/css" : "application/javascript", body: "" }));
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/?mode=local");
@@ -2822,7 +2823,8 @@ async function venderProductoDesdeUI(page, barcode) {
 
 test("cobro local mantiene efectivo y muestra el cambio antes de confirmar", async ({ page }) => {
   await page.addInitScript({ path: require.resolve("./dexie-search-shim.js") });
-  await page.route("http://127.0.0.1:5500/**", async route => { const response = await route.fetch(); const html = (await response.text()).replace(/\s+integrity="[^"]*"/g, ""); await route.fulfill({ response, body: html }); });
+  const appOrigin = new URL(test.info().project.use.baseURL).origin;
+  await page.route(appOrigin + "/**", async route => { const response = await route.fetch(); const html = (await response.text()).replace(/\s+integrity="[^"]*"/g, ""); await route.fulfill({ response, body: html }); });
   await page.route("https://**/*", route => route.fulfill({ status: 200, contentType: route.request().url().includes("fonts.googleapis.com") ? "text/css" : "application/javascript", body: "" }));
   await iniciarSesion(page);
   const barcode = "LOCAL-CHECKOUT-" + Date.now();

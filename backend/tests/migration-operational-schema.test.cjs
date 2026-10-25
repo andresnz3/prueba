@@ -46,11 +46,11 @@ test('schema 016 ausente informa el requisito para conservar órdenes sin precio
   });
 });
 
-test('la API comunica con claridad si falta 014, 015 o 016', () => {
-  for (const [code, version, expected] of [
-    ['MIGRATION_OPERATIONAL_SCHEMA_REQUIRED', '014', /migraci.n 014/],
-    ['MIGRATION_ZERO_INVENTORY_SCHEMA_REQUIRED', '015', /migraci.n 015/],
-    ['MIGRATION_ORDER_SNAPSHOT_SCHEMA_REQUIRED', '016', /migraci.n 016/]
+test('la API explica la indisponibilidad de la importación histórica sin mostrar detalles técnicos', () => {
+  for (const code of [
+    'MIGRATION_OPERATIONAL_SCHEMA_REQUIRED',
+    'MIGRATION_ZERO_INVENTORY_SCHEMA_REQUIRED',
+    'MIGRATION_ORDER_SNAPSHOT_SCHEMA_REQUIRED'
   ]) {
     let response;
     const res = {
@@ -61,7 +61,7 @@ test('la API comunica con claridad si falta 014, 015 o 016', () => {
     errorHandler(Object.assign(new Error(code), { publicStatus: 503, publicCode: code }), {}, res, () => {});
     assert.equal(res.statusCode, 503);
     assert.equal(response.error.code, code);
-    assert.match(response.error.message, expected);
-    for (const otherVersion of ['014', '015', '016'].filter(value => value !== version)) assert.equal(response.error.message.includes(otherVersion), false);
+    assert.match(response.error.message, /todav[ií]a no est[aá] disponible/i);
+    assert.doesNotMatch(response.error.message, /migraci[oó]n|\bSQL\b|\b0(?:14|15|16)\b/i);
   }
 });

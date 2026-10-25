@@ -57,7 +57,7 @@ test('archive flags missing source identity and omitted stores without trusting 
   value.source.scope.missingStores = ['gastos'];
   const plan = buildArchivePlan(value);
   assert.ok(plan.manifest.blockers.some(item => /identidad persistente del origen/.test(item)));
-  assert.ok(plan.manifest.blockers.some(item => /tiendas locales/.test(item)));
+  assert.ok(plan.manifest.blockers.some(item => /módulos locales/.test(item)));
   assert.ok(plan.manifest.securityBlockers.length > 0);
 });
 

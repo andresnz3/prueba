@@ -65,6 +65,7 @@ test('connected modules and global user form remain aligned across breakpoints',
     await page.locator('#systemAdminUsersTab').click();
     const form = page.locator('#systemAdminUserForm');
     await expect(form).toBeVisible();
+    await expect(page.locator('#systemAdminUsersCapacity')).toContainText('usuarios activos');
     const before = await form.evaluate(element => ({
       controls: [...element.querySelectorAll('input, select')].map(control => ({ top: control.getBoundingClientRect().top, height: control.getBoundingClientRect().height })),
       buttonTop: element.querySelector('button[type="submit"]').getBoundingClientRect().top,

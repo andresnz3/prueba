@@ -110,7 +110,7 @@ test('búsqueda local encuentra por código en POS, inventario y compras sin per
 });
 
 test('POS permite elegir una sugerencia con touch', async ({ browser }) => {
-  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:5500/', hasTouch: true, viewport: { width: 390, height: 844 } });
+  const context = await browser.newContext({ baseURL: test.info().project.use.baseURL, hasTouch: true, viewport: { width: 390, height: 844 } });
   try {
     const page = await context.newPage();
     await page.addInitScript({ path: require.resolve('./dexie-search-shim.js') });

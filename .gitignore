@@ -8,5 +8,13 @@ node_modules/
 /test-results-connected/
 /prueba-compras.json
 
+# Local Docker output and persistent bind-mount data (named volumes are outside the repository).
+/backups/
+/docker-backups/
+/.backups/
+/.docker-data/
+/mysql-data/
+/product-images/
+
 .codex/
 test-results/

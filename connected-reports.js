@@ -32,9 +32,9 @@
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('es-NI');
   };
-  const paymentLabel = value => ({ CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia', CREDIT: 'Crédito', OTHER: 'Otro' })[value] || value || '—';
-  const movementLabel = value => ({ SALE: 'Venta', CUSTOMER_PAYMENT: 'Abono de cliente', REVERSAL: 'Devolución', MANUAL_ENTRY: 'Entrada manual', MANUAL_EXIT: 'Salida manual', EXPENSE: 'Gasto', SUPPLIER_PAYMENT: 'Pago a proveedor' })[value] || value || 'Movimiento';
-  const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', CONFIRMED: 'Confirmado', PENDING: 'Pendiente', VOID: 'Anulado', POSTED: 'Registrado' })[value] || value || '—';
+  const paymentLabel = value => ({ CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia', CREDIT: 'Crédito', OTHER: 'Otro' })[value] || 'Otro medio';
+  const movementLabel = value => ({ SALE: 'Venta', CUSTOMER_PAYMENT: 'Abono de cliente', REVERSAL: 'Devolución', MANUAL_ENTRY: 'Entrada manual', MANUAL_EXIT: 'Salida manual', EXPENSE: 'Gasto', SUPPLIER_PAYMENT: 'Pago a proveedor' })[value] || 'Movimiento por revisar';
+  const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', CONFIRMED: 'Confirmado', PENDING: 'Pendiente', VOID: 'Anulado', POSTED: 'Registrado' })[value] || 'Por revisar';
   const saleStatusLabel = row => row.isHistorical ? 'Histórica · ' + statusLabel(row.status) : statusLabel(row.status);
   const setText = (id, value) => { const node = el(id); if (node) node.textContent = value; };
   let report = null, requestId = 0;
@@ -183,7 +183,7 @@
       return true;
     } catch (failure) {
       if (current !== requestId) return false;
-      if (status) { status.textContent = failure.message || 'No se pudieron cargar los reportes conectados.'; status.classList.remove('hidden'); }
+      if (status) { status.textContent = window.PosMessages.fromError(failure, 'No se pudieron cargar los reportes. Actualiza la pantalla e inténtalo de nuevo.'); status.classList.remove('hidden'); }
       if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
       return false;
     }

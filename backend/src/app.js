@@ -7,6 +7,7 @@ const { httpError, errorHandler } = require('./middleware/errors');
 function createApp({ config, checkDatabase, authentication }) {
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', config.trustProxyHops ?? 0);
   app.use(helmet());
   app.use(cors({
     origin(origin, callback) {

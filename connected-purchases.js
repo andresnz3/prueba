@@ -12,9 +12,9 @@
   const purchaseNumber = purchase => purchase.purchaseNumber || 'COMP-' + String(purchase.id).padStart(6, '0');
   const purchaseReference = purchase => '<strong>' + esc(purchaseNumber(purchase)) + '</strong>' + (purchase.supplierInvoiceNumber ? '<br><small>Factura proveedor: ' + esc(purchase.supplierInvoiceNumber) + '</small>' : '');
   const dayKey = value => window.PosPeriodFilters?.dateKey(value) || (() => { const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? '' : parsed.getFullYear() + '-' + String(parsed.getMonth() + 1).padStart(2, '0') + '-' + String(parsed.getDate()).padStart(2, '0'); })();
-  const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', HISTORICAL: 'Histórica · sin saldo operativo', PAID: 'Pagada', PARTIAL: 'Parcial', OPEN: 'Pendiente', OVERDUE: 'Vencida', PENDING_CONFIRMATION: 'Pago por confirmar', PENDING: 'Pendiente', POSTED: 'Registrado', VOID: 'Anulado' })[value] || value || '—';
+  const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', HISTORICAL: 'Histórica · sin saldo operativo', PAID: 'Pagada', PARTIAL: 'Parcial', OPEN: 'Pendiente', OVERDUE: 'Vencida', PENDING_CONFIRMATION: 'Pago por confirmar', PENDING: 'Pendiente', POSTED: 'Registrado', VOID: 'Anulado' })[value] || 'Por revisar';
   const uuid = () => crypto.randomUUID();
-  const state = { suppliers: [], products: [], purchasesOffset: 0, payablesOffset: 0, purchaseHasNext: false, payableHasNext: false, quickSupplier: false, cart: [], purchaseSearchTimer: 0, supplierSearchTimer: 0, payableSearchTimer: 0, operationKey: null, currentView: null, loadedPurchase: null };
+  const state = { suppliers: [], products: [], purchasesOffset: 0, payablesOffset: 0, purchaseHasNext: false, payableHasNext: false, quickSupplier: false, cart: [], purchaseSearchTimer: 0, supplierSearchTimer: 0, payableSearchTimer: 0, operationKey: null, currentView: null, loadedPurchase: null, editingPurchase: null };
   const pageSize = 100;
 
   async function allPages(fetchPage, business) {
@@ -47,8 +47,9 @@
     }
   }
   function showError(error, statusId) {
-    if (statusId && el(statusId)) { el(statusId).textContent = error.message || 'No se pudo completar la solicitud.'; }
-    else window.showAlert?.(error.message || 'No se pudo completar la solicitud.');
+    const safeMessage = window.PosMessages.fromError(error, 'No se pudo completar la solicitud de compras. Revisa la información e inténtalo de nuevo.');
+    if (statusId && el(statusId)) { el(statusId).textContent = safeMessage; }
+    else window.showAlert?.(safeMessage);
   }
   function refreshDerived() {
     document.dispatchEvent(new Event('connected:report-data-changed'));
@@ -75,7 +76,8 @@
     setTable('connectedPurchasesTableBody', 7, page.map(purchase => {
       const status = purchase.status === 'CANCELLED' ? 'Anulada' : purchase.isHistorical ? statusLabel(purchase.status) : purchase.purchaseType === 'CREDIT' ? statusLabel(purchase.status) + (purchase.dueAt ? ' · vence ' + date(purchase.dueAt) : '') : 'Contado';
       const total = purchase.status === 'CANCELLED' ? '<del>' + money(purchase.total) + '</del>' : money(purchase.total);
-      const actions = '<button type="button" class="btn btn-sm btn-info" data-purchase-action="view" data-purchase-id="' + esc(purchase.id) + '">Ver factura</button>' + (purchase.status === 'CANCELLED' || purchase.isHistorical ? '' : ' <button type="button" class="btn btn-sm btn-danger" data-purchase-action="cancel" data-purchase-id="' + esc(purchase.id) + '">Anular</button>');
+    const canOfferEdit = !purchase.isHistorical && purchase.purchaseStatus === 'COMPLETED' && (purchase.purchaseType === 'CASH' || (purchase.purchaseType === 'CREDIT' && Number(purchase.paid) === 0 && Number(purchase.pendingPayments) === 0));
+    const actions = '<button type="button" class="btn btn-sm btn-info" data-purchase-action="view" data-purchase-id="' + esc(purchase.id) + '">Ver factura</button>' + (canOfferEdit ? ' <button type="button" class="btn btn-sm btn-secondary" data-purchase-action="edit" data-purchase-id="' + esc(purchase.id) + '">Editar</button>' : '') + (purchase.status === 'CANCELLED' || purchase.isHistorical ? '' : ' <button type="button" class="btn btn-sm btn-danger" data-purchase-action="cancel" data-purchase-id="' + esc(purchase.id) + '">Anular</button>');
       return '<tr data-table-date="' + esc(dayKey(purchase.createdAt)) + '"><td>' + esc(dateTime(purchase.createdAt)) + '</td><td>' + purchaseReference(purchase) + '</td><td>' + esc(purchase.supplierName) + '</td><td>' + Number(purchase.itemCount || 0) + ' productos</td><td>' + total + '</td><td>' + esc(status) + '</td><td>' + actions + '</td></tr>';
     }), 'No hay facturas de compra registradas.');
     el('connectedPurchasesStatus').textContent = filtered.length + ' compra(s) dentro del período seleccionado.';
@@ -145,13 +147,14 @@
     } catch (error) { showError(error, view === 'purchasesView' ? 'connectedPurchasesStatus' : view === 'payablesView' ? 'connectedPayablesStatus' : 'connectedSuppliersStatus'); return false; }
   }
   function renderCart() {
-    const rows = state.cart.map((item, index) => '<tr><td><strong>' + esc(item.name) + '</strong></td><td>' + item.quantity.toFixed(3) + '</td><td>' + money(item.unitCost) + '</td><td>' + money(item.quantity * item.unitCost) + '</td><td><button type="button" class="btn btn-sm btn-secondary" data-cart-remove="' + index + '" aria-label="Quitar ' + esc(item.name) + '">Quitar</button></td></tr>');
+    const editing = Boolean(state.editingPurchase);
+    const rows = state.cart.map((item, index) => '<tr><td><strong>' + esc(item.name) + '</strong></td><td>' + (editing ? '<input type="number" min="0.001" step="0.001" inputmode="decimal" data-cart-field="quantity" data-cart-index="' + index + '" aria-label="Cantidad de ' + esc(item.name) + '" value="' + (Number.isFinite(item.quantity) ? item.quantity : '') + '">' : item.quantity.toFixed(3)) + '</td><td>' + (editing ? '<input type="number" min="0" step="0.01" inputmode="decimal" data-cart-field="unitCost" data-cart-index="' + index + '" aria-label="Costo unitario de ' + esc(item.name) + '" value="' + (Number.isFinite(item.unitCost) ? item.unitCost : '') + '">' : money(item.unitCost)) + '</td><td data-cart-total="' + index + '">' + money(item.quantity * item.unitCost) + '</td><td>' + (editing ? '<span aria-label="Los productos de la factura no se pueden agregar ni quitar durante una corrección">Fijo</span>' : '<button type="button" class="btn btn-sm btn-secondary" data-cart-remove="' + index + '" aria-label="Quitar ' + esc(item.name) + '">Quitar</button>') + '</td></tr>');
     setTable('purchCartBody', 5, rows, 'Aún no hay productos en esta factura.');
     el('purchTotalDisplay').textContent = money(state.cart.reduce((sum, item) => sum + item.quantity * item.unitCost, 0));
   }
   function clearOperationKey() { state.operationKey = null; }
   function openPurchase() {
-    el('purchaseForm').reset(); el('purchId').value = ''; state.cart = []; clearOperationKey();
+    closePurchase(); el('purchaseForm').reset(); el('purchId').value = ''; state.cart = []; clearOperationKey();
     if (!state.suppliers.length || !state.products.length) { window.showAlert('Agrega al menos un proveedor y un producto activo antes de registrar una compra.'); return; }
     el('purchPaymentMethodContainer').classList.remove('hidden');
     el('purchPaymentMethodContainer').classList.toggle('hidden', el('purchType').value !== 'contado');
@@ -160,7 +163,7 @@
     el('connectedPurchaseHint').classList.remove('hidden');
     renderCart(); el('purchaseModal').classList.remove('hidden'); el('purchSupplier').focus();
   }
-  function closePurchase() { el('purchaseModal')?.classList.add('hidden'); state.cart = []; clearOperationKey(); if (el('purchInternalNumber')) el('purchInternalNumber').value = 'Se asigna al guardar'; }
+  function closePurchase() { el('purchaseModal')?.classList.add('hidden'); state.cart = []; state.editingPurchase = null; clearOperationKey(); el('purchSupplier').disabled = false; el('purchType').disabled = false; el('purchaseProductEntry').classList.remove('hidden'); el('purchPaymentMethodContainer').classList.remove('hidden'); el('purchDaysContainer').style.display = ''; el('purchaseModalTitle').textContent = 'Registrar Factura de Compra'; el('purchaseForm').querySelector('button[type="submit"]').textContent = 'Guardar Factura Completa'; if (el('purchInternalNumber')) el('purchInternalNumber').value = 'Se asigna al guardar'; }
   function resolveProduct(query) {
     const value = String(query || '').trim(), normalize = window.PosProductSearch.normalize;
     if (!value) return { product: null, ambiguous: false };
@@ -180,6 +183,17 @@
     clearOperationKey(); renderCart(); input.focus(); return true;
   }
   async function savePurchase() {
+    if (state.editingPurchase) {
+      const purchase = state.editingPurchase;
+      if (state.cart.some(item => !Number.isFinite(item.quantity) || item.quantity <= 0 || !/^\d+(?:\.\d{1,3})?$/.test(String(item.quantity)) || !Number.isFinite(item.unitCost) || item.unitCost < 0 || !/^\d+(?:\.\d{1,2})?$/.test(String(item.unitCost)))) return window.showAlert('Revisa las cantidades y costos de la compra; usa hasta 3 decimales para cantidad y 2 para costo.');
+      const button = el('purchaseForm').querySelector('button[type="submit"]'); button.disabled = true;
+      const data = { operationKey: state.operationKey || (state.operationKey = uuid()), revision: purchase.revision, supplierInvoiceNumber: el('purchInvoice').value.trim() || null, items: state.cart.map(item => ({ productId: item.productId, quantity: item.quantity.toFixed(3), unitCost: item.unitCost.toFixed(2) })) };
+      try {
+        await window.PosSales.performFinancial('EDIT_PURCHASE', data, (api, input) => api.updatePurchase(purchase.id, input));
+      } catch (error) { showError(error, 'connectedPurchasesStatus'); }
+      finally { button.disabled = false; }
+      return;
+    }
     const supplier = state.suppliers.find(item => item.active && item.name.toLocaleLowerCase('es') === el('purchSupplier').value.trim().toLocaleLowerCase('es'));
     const supplierInvoiceNumber = el('purchInvoice').value.trim(), credit = el('purchType').value === 'credito';
     const total = state.cart.reduce((sum, item) => sum + item.quantity * item.unitCost, 0);
@@ -219,6 +233,21 @@
   async function viewPurchaseById(id) {
     try { const purchase = await request(async (api, business) => { const row = state.currentView === 'payablesView' ? await api.payable(id) : await api.purchase(id); if (row.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401); return row; }); viewPurchase(purchase); }
     catch (error) { showError(error); }
+  }
+  async function editPurchaseById(id) {
+    try {
+      const purchase = await request(async (api, business) => { const row = await api.purchase(id); if (row.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401); return row; });
+      if (!purchase.editability?.allowed) { window.showAlert(window.PosMessages.text(purchase.editability?.message || 'Esta compra no cumple las condiciones para corregirse de forma segura.', 'Esta compra requiere una revisión antes de corregirse.')); return; }
+      state.editingPurchase = purchase; state.cart = purchase.items.map(item => ({ productId: item.productId, name: item.name, quantity: Number(item.quantity), unitCost: Number(item.unitCost) })); clearOperationKey();
+      el('purchaseForm').reset(); el('purchId').value = purchase.id; el('purchSupplier').value = purchase.supplierName; el('purchSupplier').disabled = true;
+      const cashPurchase = purchase.purchaseType === 'CASH';
+      el('purchInvoice').value = purchase.supplierInvoiceNumber || ''; el('purchType').value = cashPurchase ? 'contado' : 'credito'; el('purchType').disabled = true;
+      el('purchInternalNumber').value = purchase.purchaseNumber; el('connectedPurchaseNumberField').classList.remove('hidden');
+      el('purchPaymentMethodContainer').classList.add('hidden'); el('purchDaysContainer').style.display = 'none'; el('purchaseProductEntry').classList.add('hidden');
+      el('purchaseModalTitle').textContent = cashPurchase ? 'Corregir compra al contado' : 'Corregir compra a crédito'; el('purchaseForm').querySelector('button[type="submit"]').textContent = 'Guardar corrección';
+      el('connectedPurchaseHint').textContent = cashPurchase ? 'El pago en efectivo y la caja original deben estar íntegros y abiertos. Si aumenta el total, se cobrará la diferencia de esa caja. Una reducción requiere registrar primero la devolución del proveedor. No se permiten cambios si hubo movimientos posteriores.' : 'Solo se permite corregir cantidades, costos y factura del proveedor si no hay pagos ni movimientos posteriores. El proveedor, la fecha y el conjunto de productos se conservan. Cada ajuste queda auditado.';
+      el('connectedPurchaseHint').classList.remove('hidden'); renderCart(); el('purchaseModal').classList.remove('hidden'); el('purchInvoice').focus();
+    } catch (error) { showError(error, 'connectedPurchasesStatus'); }
   }
   function askCancel(purchase) {
     state.loadedPurchase = purchase;
@@ -341,6 +370,7 @@
     const button = event.target.closest('[data-purchase-action]'); if (!button) return;
     const id = button.dataset.purchaseId;
     if (button.dataset.purchaseAction === 'view') viewPurchaseById(id);
+    if (button.dataset.purchaseAction === 'edit') editPurchaseById(id);
     if (button.dataset.purchaseAction === 'pay') openInvoicePayment(id);
     if (button.dataset.purchaseAction === 'cancel') {
       const row = button.closest('tr');
@@ -377,6 +407,18 @@
   el('purchCartBody').addEventListener('click', event => {
     const button = event.target.closest('[data-cart-remove]'); if (!button) return;
     state.cart.splice(Number(button.dataset.cartRemove), 1); clearOperationKey(); renderCart();
+  });
+  el('purchCartBody').addEventListener('input', event => {
+    const input = event.target.closest('[data-cart-field]'); if (!input || !state.editingPurchase) return;
+    const index = Number(input.dataset.cartIndex), field = input.dataset.cartField, raw = input.value;
+    if (!state.cart[index] || !['quantity', 'unitCost'].includes(field)) return;
+    state.cart[index][field] = raw === '' ? NaN : Number(raw);
+    const line = state.cart[index], lineTotal = Number.isFinite(line.quantity) && Number.isFinite(line.unitCost) ? line.quantity * line.unitCost : NaN;
+    const cell = el('purchCartBody').querySelector('[data-cart-total="' + index + '"]');
+    if (cell) cell.textContent = Number.isFinite(lineTotal) ? money(lineTotal) : '—';
+    const total = state.cart.reduce((sum, item) => sum + (Number.isFinite(item.quantity) && Number.isFinite(item.unitCost) ? item.quantity * item.unitCost : 0), 0);
+    el('purchTotalDisplay').textContent = money(total);
+    clearOperationKey();
   });
   el('purchType').addEventListener('change', () => {
     el('purchPaymentMethodContainer').classList.toggle('hidden', el('purchType').value !== 'contado');
@@ -424,7 +466,7 @@
       closePurchase(); el('cancelConnectedPurchaseModal').classList.add('hidden');
       const purchase = result.purchase;
       const reference = purchaseNumber(purchase) + (purchase.supplierInvoiceNumber ? ' (factura del proveedor ' + purchase.supplierInvoiceNumber + ')' : '');
-      window.showAlert(result.kind === 'CANCEL_PURCHASE' ? 'Compra ' + purchaseNumber(purchase) + ' anulada. Se revirtió el inventario.' : 'Compra ' + reference + ' registrada. Existencias y costo actualizados.');
+      window.showAlert(result.kind === 'CANCEL_PURCHASE' ? 'Compra ' + purchaseNumber(purchase) + ' anulada. Se revirtió el inventario.' : result.kind === 'EDIT_PURCHASE' ? 'Compra ' + reference + ' corregida. Se actualizaron el saldo y los movimientos de inventario correspondientes.' : 'Compra ' + reference + ' registrada. Existencias y costo actualizados.');
     }
     if (['purchasesView', 'payablesView', 'suppliersView'].includes(state.currentView)) await load(state.currentView);
     refreshDerived();
@@ -433,5 +475,5 @@
     const button = event.target.closest('[data-reverse-supplier-payment]');
     if (button) window.PosSales.reversePayment('supplier', button.dataset.reverseSupplierPayment, button.dataset.method, button.dataset.status);
   });
-  window.PosPurchases = Object.freeze({ operationCompleted, load, openPurchase, closePurchase, addItem: addPurchaseItem, addPurchaseItem, savePurchase, applyPeriod, supplierOptions: () => state.suppliers, quickEditProduct() { window.showAlert('Editar productos requiere entrar a Inventario.'); }, productCreated(product) { if (!state.products.some(row => row.id === product.id)) state.products.push(product); window.PosRuntime.setProducts(state.products); el('purchProductTemp').value = product.name; el('purchProductTemp').dataset.productId = product.id; el('purchCostTemp').value = Number(product.cost || 0).toFixed(2); }, newSupplier, editSupplier, saveSupplier, toggleSupplier, supplierStatement, viewPurchase: viewPurchaseById, openInvoicePayment, payInvoice, cancelPurchase: askCancel });
+  window.PosPurchases = Object.freeze({ operationCompleted, load, openPurchase, closePurchase, addItem: addPurchaseItem, addPurchaseItem, savePurchase, applyPeriod, supplierOptions: () => state.suppliers, quickEditProduct() { window.showAlert('Editar productos requiere entrar a Inventario.'); }, productCreated(product) { if (!state.products.some(row => row.id === product.id)) state.products.push(product); window.PosRuntime.setProducts(state.products); el('purchProductTemp').value = product.name; el('purchProductTemp').dataset.productId = product.id; el('purchCostTemp').value = Number(product.cost || 0).toFixed(2); }, newSupplier, editSupplier, saveSupplier, toggleSupplier, supplierStatement, viewPurchase: viewPurchaseById, editPurchase: editPurchaseById, openInvoicePayment, payInvoice, cancelPurchase: askCancel });
 })();

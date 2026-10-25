@@ -75,4 +75,24 @@ function cancellation(body) {
   try { reason = v.text(data.reason, 500); } catch { throw Object.assign(httpError(400, 'REASON_REQUIRED'), { field: 'reason' }); }
   return { operationKey: operationKey(data.operationKey), reason };
 }
-module.exports = { supplier, active, purchase, payment, cancellation, operationKey };
+function purchaseEdit(body) {
+  const data = v.body(body, ['operationKey', 'revision', 'supplierInvoiceNumber', 'items'], ['operationKey', 'revision', 'items']);
+  if (typeof data.revision !== 'string' || !/^[a-f0-9]{64}$/.test(data.revision)) fail('PURCHASE_REVISION_INVALID', 'revision');
+  const supplierInvoiceNumber = optionalText(data.supplierInvoiceNumber, 100, 'supplierInvoiceNumber');
+  if (supplierInvoiceNumber && /^COMP-\d{6,}$/i.test(supplierInvoiceNumber)) fail('INVALID_INPUT', 'supplierInvoiceNumber');
+  if (!Array.isArray(data.items) || !data.items.length || data.items.length > 100) fail('CART_EMPTY', 'items');
+  const seen = new Set();
+  const items = data.items.map(item => {
+    v.body(item, ['productId', 'quantity', 'unitCost']);
+    const productId = v.id(item.productId);
+    if (seen.has(productId)) fail('INVALID_INPUT', 'items');
+    seen.add(productId);
+    let quantity, unitCost;
+    try { quantity = decimal(item.quantity, 3, 9); } catch { fail('QUANTITY_INVALID', 'quantity'); }
+    try { unitCost = money(item.unitCost, 'unitCost'); } catch { fail('INVALID_INPUT', 'unitCost'); }
+    if (units(quantity) <= 0n) fail('QUANTITY_INVALID', 'quantity');
+    return { productId, quantity, unitCost };
+  });
+  return { operationKey: operationKey(data.operationKey), revision: data.revision, supplierInvoiceNumber, items };
+}
+module.exports = { supplier, active, purchase, purchaseEdit, payment, cancellation, operationKey };

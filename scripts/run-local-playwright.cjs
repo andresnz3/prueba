@@ -12,7 +12,7 @@ const mimeTypes = new Map([
   ['.css', 'text/css; charset=utf-8'], ['.html', 'text/html; charset=utf-8'],
   ['.ico', 'image/x-icon'], ['.jpeg', 'image/jpeg'], ['.jpg', 'image/jpeg'],
   ['.js', 'text/javascript; charset=utf-8'], ['.json', 'application/json; charset=utf-8'],
-  ['.png', 'image/png'], ['.svg', 'image/svg+xml; charset=utf-8'], ['.webp', 'image/webp']
+  ['.png', 'image/png'], ['.svg', 'image/svg+xml; charset=utf-8'], ['.webp', 'image/webp'], ['.woff2', 'font/woff2']
 ]);
 
 function createPublicServer() {
@@ -58,7 +58,7 @@ async function main() {
       cwd: path.resolve(__dirname, '..'),
       stdio: 'inherit',
       windowsHide: true,
-      env: { ...process.env, POS_LOCAL_TEST_MANAGED_SERVER: '1' }
+      env: { ...process.env, POS_LOCAL_TEST_MANAGED_SERVER: '1', POS_LOCAL_TEST_ORIGIN: 'http://127.0.0.1:' + port }
     });
     code = await new Promise((resolve, reject) => {
       child.once('error', reject);

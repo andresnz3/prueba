@@ -5,7 +5,7 @@
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const money = value => 'C$' + Number(value || 0).toFixed(2);
-  const paymentLabel = value => ({ CASH: 'Efectivo', BANK: 'Banco', PENDING: 'Por pagar' })[value] || value || '—';
+  const paymentLabel = value => ({ CASH: 'Efectivo', BANK: 'Banco', PENDING: 'Por pagar' })[value] || 'Otro medio';
   const dateTime = value => { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('es-NI'); };
   let offset = 0, count = 0, rows = [], summary = { today: '0.00', total: '0.00', count: 0 }, requestId = 0, busy = false;
   const filteredRows = () => {
@@ -16,7 +16,7 @@
   function status(message, error = false) {
     const node = el('connectedExpenseStatus');
     if (!node) return;
-    node.textContent = message;
+    node.textContent = window.PosMessages.text(message, 'No se pudo completar la operación de gastos. Inténtalo nuevamente.');
     node.classList.remove('hidden');
     node.classList.toggle('error', error);
   }
@@ -72,7 +72,7 @@
       return true;
     } catch (failure) {
       if (current !== requestId) return false;
-      status(failure.message || 'No se pudieron cargar los gastos conectados.', true);
+      status(window.PosMessages.fromError(failure, 'No se pudieron cargar los gastos. Actualiza la pantalla e inténtalo de nuevo.'), true);
       if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
       return false;
     }
@@ -94,7 +94,7 @@
     try {
       await window.PosSales.performFinancial('EXPENSE', { category, description, receiptReference, amount, paymentMethod }, async (client, input) => ({ kind: 'EXPENSE', expense: await client.createExpense(input) }));
     } catch (failure) {
-      status(failure.message || 'No se pudo registrar el gasto conectado.', true);
+      status(window.PosMessages.fromError(failure, 'No se pudo registrar el gasto. Revisa la información e inténtalo de nuevo.'), true);
       if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
     } finally { busy = false; if (button) button.disabled = false; render(); }
   }
@@ -106,7 +106,7 @@
       try {
         await window.PosSales.performFinancial('CANCEL_EXPENSE', { reason }, async (client, input) => ({ kind: 'EXPENSE', expense: await client.cancelExpense(expense.id, input) }));
       } catch (failure) {
-        status(failure.message || 'No se pudo anular el gasto conectado.', true);
+        status(window.PosMessages.fromError(failure, 'No se pudo anular el gasto. Inténtalo de nuevo.'), true);
         if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
       }
     });

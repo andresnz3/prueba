@@ -514,9 +514,9 @@ document.addEventListener("keydown", event => {
     }
 });
 
-function showAlert(mensaje) { const msgEl = document.getElementById("customAlertMessage"); const modalEl = document.getElementById("customAlertModal"); if(msgEl && modalEl) { msgEl.innerHTML = escapeHtml(mensaje).replace(/\n/g, "<br>"); modalEl.style.zIndex = "10100"; modalEl.classList.remove("hidden"); } else { alert(mensaje); } }
+function showAlert(mensaje) { const safeMessage = window.PosMessages?.text(mensaje, 'No se pudo completar la solicitud. Inténtalo nuevamente.') || 'No se pudo completar la solicitud. Inténtalo nuevamente.'; const msgEl = document.getElementById("customAlertMessage"); const modalEl = document.getElementById("customAlertModal"); if(msgEl && modalEl) { msgEl.innerHTML = escapeHtml(safeMessage).replace(/\n/g, "<br>"); modalEl.style.zIndex = "10100"; modalEl.classList.remove("hidden"); } else { alert(safeMessage); } }
 let confirmCallback = null;
-function showConfirm(mensaje, callback) { const msgEl = document.getElementById("customConfirmMessage"); const modalEl = document.getElementById("customConfirmModal"); if(msgEl && modalEl) { msgEl.innerHTML = escapeHtml(mensaje).replace(/\n/g, "<br>"); confirmCallback = callback; modalEl.style.zIndex = "10100"; modalEl.classList.remove("hidden"); } else { if(confirm(mensaje)) callback(); } }
+function showConfirm(mensaje, callback) { const safeMessage = window.PosMessages?.text(mensaje, 'Confirma esta acción después de revisar la información.') || 'Confirma esta acción después de revisar la información.'; const msgEl = document.getElementById("customConfirmMessage"); const modalEl = document.getElementById("customConfirmModal"); if(msgEl && modalEl) { msgEl.innerHTML = escapeHtml(safeMessage).replace(/\n/g, "<br>"); confirmCallback = callback; modalEl.style.zIndex = "10100"; modalEl.classList.remove("hidden"); } else { if(confirm(safeMessage)) callback(); } }
 document.getElementById("customConfirmBtn")?.addEventListener("click", () => { document.getElementById("customConfirmModal")?.classList.add("hidden"); if(confirmCallback) confirmCallback(); });
 
 document.querySelectorAll(".close-modal-btn").forEach(btn => { 
@@ -756,7 +756,7 @@ function renderPosView(viewId) {
     if(viewId === "clientsView") actualizarTablaClientes();
     if(viewId === "suppliersView") actualizarTablaProveedores();
     if(viewId === "historyView") { actualizarTablaHistorial(); actualizarTablaAuditoria(); }
-    if(viewId === "cajaView") { renderCajaView(); if (!connectedMode) window.PosLocalFlow?.load().catch(error => showAlert(error.message)); }
+    if(viewId === "cajaView") { renderCajaView(); if (!connectedMode) window.PosLocalFlow?.load().catch(error => showAlert(window.PosMessages.fromError(error, 'No se pudieron cargar los movimientos de Caja. Actualiza la pantalla e inténtalo de nuevo.'))); }
     if(viewId === "gastosView") renderGastosView();
     if(viewId === "reportesView") { initReportesFiltros(); renderReportes(); }
     if(viewId === "dashboardView") renderDashboard();
@@ -980,7 +980,7 @@ window.guardarConfiguracion = async function() {
 
 window.resetConfiguracion = function() {
     if (!isAdmin('configView')) { showAlert("No tiene permisos."); return; }
-    if (connectedMode) { showAlert("En modo conectado, edita y guarda los ajustes en MySQL."); return; }
+    if (connectedMode) { showAlert("En el modo conectado, edita y guarda los ajustes del negocio desde esta sección."); return; }
     showConfirm("⚠️ ¿Seguro que deseas restablecer la configuración?", () => {
         sysConfig = { ...defaultSystemConfig(), localBusinessId: sysConfig.localBusinessId || '', salesFlow: window.PosLocalFlow.salesFlow() };
         localStorage.setItem(configStorageKey, JSON.stringify(sysConfig));
@@ -1360,7 +1360,7 @@ async function registrarVenta(total, pago, vuelto) {
         await initApp(); actualizarTablaInventario(); actualizarCatalogo(); renderDashboard(); renderCajaView();
         ticketEsVentaNueva = true;
         generarVisualizacionTicket(sale, pago, vuelto, false);
-    } catch (error) { showAlert(error.message || "No se pudo completar la venta."); }
+    } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo registrar la venta. Actualiza el inventario y revisa el historial antes de intentarlo de nuevo.')); }
     finally { procesandoVenta = false; refrescarSelectClientesCredito(); }
 }
 
@@ -1577,13 +1577,13 @@ window.confirmarAnularVenta = async function() {
     try {
         await localDB.transaction('rw', localDB.sales, localDB.clients, localDB.products, localDB.inventory_movements, localDB.sync_queue, localDB.cajaSessions, localDB.audit_logs, async () => {
             const storedSale = await localDB.sales.get(sale.id);
-            if (!storedSale || storedSale.anulada) throw new Error("La venta ya fue anulada.");
+            if (!storedSale || storedSale.anulada) throw window.PosMessages.expected("La venta ya fue anulada.");
             if (needsCashRefund) {
                 const openSessions = await window.PosLocalIdentity.cashSessions("abierta");
-                if (openSessions.length !== 1 || String(openSessions[0].id) !== String(activeCash.id)) throw new Error("Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual.");
-                if (calcularResumenCaja(openSessions[0]).esperado < refundAmount) throw new Error("La caja actual no tiene efectivo suficiente para devolver esta venta.");
+                if (openSessions.length !== 1 || String(openSessions[0].id) !== String(activeCash.id)) throw window.PosMessages.expected("Para anular esta venta debe abrir una caja, porque la devolución se registra en la caja actual.");
+                if (calcularResumenCaja(openSessions[0]).esperado < refundAmount) throw window.PosMessages.expected("La caja actual no tiene efectivo suficiente para devolver esta venta.");
                 const sessions = await window.PosLocalIdentity.cashSessions();
-                if (sessions.some(session => (session.movimientos || []).some(movement => String(movement.reversalOfSaleId) === String(sale.id)))) throw new Error("La devolución de esta venta ya está registrada.");
+                if (sessions.some(session => (session.movimientos || []).some(movement => String(movement.reversalOfSaleId) === String(sale.id)))) throw window.PosMessages.expected("La devolución de esta venta ya está registrada.");
                 activeCash = openSessions[0];
                 activeCash.movimientos.push({
                     id: crypto.randomUUID(), cajaSessionId: activeCash.id, tipo: "salida", monto: refundAmount,
@@ -1597,7 +1597,7 @@ window.confirmarAnularVenta = async function() {
             for (const item of sale.items || []) {
                 let product = products.find(value => String(value.id) === String(item.id || item.productId));
                 if (!product) product = products.find(value => (value.name || "").toLowerCase() === (item.name || "").toLowerCase());
-                if (!product || !await registrarMovimientoKardex(product.id, 'DEVOLUCION_VENTA', Number(item.cantidad ?? item.quantity), `Anulación Venta #${sale.numero}: ${motivo}`)) throw new Error("No se pudo restituir el inventario de esta venta.");
+                if (!product || !await registrarMovimientoKardex(product.id, 'DEVOLUCION_VENTA', Number(item.cantidad ?? item.quantity), `Anulación Venta #${sale.numero}: ${motivo}`)) throw window.PosMessages.expected("No se pudo restituir el inventario de esta venta.");
             }
             if (sale.metodo === "Crédito") {
                 const client = clients.find(value => String(value.id) === String(sale.clienteId)) || clients.find(value => value.name === sale.cliente);
@@ -1623,7 +1623,7 @@ window.confirmarAnularVenta = async function() {
     } catch (error) {
         Object.assign(sale, originalSale);
         await initApp();
-        showAlert(error.message || "No se pudo completar la anulación.");
+        showAlert(window.PosMessages.fromError(error, 'No se pudo completar la anulación. Actualiza la pantalla y comprueba el historial antes de intentarlo de nuevo.'));
         return;
     }
     document.getElementById("anularVentaModal").classList.add("hidden"); actualizarTablaHistorial(); actualizarTablaInventario(); actualizarCatalogo(); actualizarTablaClientes(); if (cajaActual) renderCajaView(); renderDashboard(); showAlert(`Venta #${sale.numero} anulada exitosamente.`);
@@ -1839,7 +1839,7 @@ window.eliminarProductoLogico = function(id) {
             showAlert(afectados.length ? `Producto eliminado (${afectados.length} registro(s)).` : "No se encontraron registros activos para eliminar.");
         } catch (err) {
             console.error(err);
-            showAlert(`No se pudo eliminar: ${err.message || err}`);
+            showAlert(window.PosMessages.fromError(err, 'No se pudo eliminar el producto. No se confirmaron cambios; actualiza el inventario e inténtalo de nuevo.'));
         } finally {
             actualizarTablaInventario();
             actualizarCatalogo();
@@ -2455,8 +2455,8 @@ document.getElementById("purchaseForm")?.addEventListener("submit", async (e) =>
     const purchaseItems = currentPurchaseCart.map(item => { const producto = resolverProductoDeItemCompra(item); return producto ? { ...item, productId: producto.id } : null; });
     if (purchaseItems.some(item => !item)) { showAlert("No se puede guardar la compra: cada producto debe estar vinculado a un producto del inventario."); return; }
     const totalFactura = r2(purchaseItems.reduce((sum, item) => sum + item.total, 0));
-    let dueDateStr = null; if(tipoCompra === "credito") { const days = Math.max(1, parseInt(document.getElementById("purchDays")?.value) || 30); let d = new Date(); d.setDate(d.getDate() + days); dueDateStr = d.toLocaleDateString(); } 
-    const newPurch = { id: purchaseId, business_id: DEFAULT_BUSINESS_ID, fecha: new Date().toLocaleDateString(), fechaTS: Date.now(), factura: facturaNum, tipo: tipoCompra, proveedor: proveedorNombre, items: purchaseItems, total: totalFactura, vencimiento: dueDateStr, anulada: false };
+    let dueDateStr = null, dueDateTs = null; if(tipoCompra === "credito") { const days = Math.max(1, parseInt(document.getElementById("purchDays")?.value) || 30); const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + days); dueDateStr = dueDate.toLocaleDateString(); dueDateTs = dueDate.getTime(); }
+    const newPurch = { id: purchaseId, business_id: DEFAULT_BUSINESS_ID, fecha: new Date().toLocaleDateString(), fechaTS: Date.now(), factura: facturaNum, tipo: tipoCompra, proveedor: proveedorNombre, items: purchaseItems, total: totalFactura, vencimiento: dueDateStr, vencimientoTS: dueDateTs, anulada: false };
     
     if (pId) { const index = purchasesHistory.findIndex(p => String(p.id) === String(pId)); if(index > -1) purchasesHistory[index] = newPurch; } else {
         purchasesHistory.push(newPurch);

@@ -6,6 +6,7 @@ const { readFile } = require('node:fs/promises');
 
 async function installLocalDatabaseReader(page) {
   await page.addInitScript({ path: require.resolve('./dexie-search-shim.js') });
+  await page.route('**/vendor/dexie/dexie.min.js', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: '' }));
   await page.addInitScript(() => {
     Dexie.exists = async name => Dexie.__databases.has(name);
     Object.defineProperty(window, 'indexedDB', {
@@ -75,7 +76,7 @@ test('export local conserva todas las tiendas, configuracion, imagenes e histori
   });
   await page.locator('#migrationExportGenerateBtn').click();
   await expect(page.locator('#migrationExportReview')).toBeVisible();
-  await expect(page.locator('#migrationExportScope')).toContainText('La lectura no modificó ningún registro');
+  await expect(page.locator('#migrationExportScope')).toContainText('La revisión no modificó ningún registro');
   await expect(page.locator('#migrationExportCounts')).toContainText('Gastos');
   await expect(page.locator('#migrationExportCounts')).toContainText('Auditoría');
   await expect(page.locator('#migrationExportCounts')).toContainText('Cola pendiente');

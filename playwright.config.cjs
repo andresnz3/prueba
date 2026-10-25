@@ -11,6 +11,15 @@ const managedServer = process.env.POS_LOCAL_TEST_MANAGED_SERVER === '1';
 module.exports = defineConfig({
   testDir: path.join(__dirname, 'tests'),
   testMatch: '**/*.spec.cjs',
+  // Connected migration/admin flows have dedicated coverage with their API and database fixtures.
+  // Keep the local browser profile limited to the static Dexie application.
+  testIgnore: [
+    '**/admin-migration-presentation.spec.cjs',
+    '**/migration-credit-preview.spec.cjs',
+    '**/migration-purchases.spec.cjs',
+    '**/migration-sales-gate.spec.cjs',
+    '**/pos-connected-layout.spec.cjs'
+  ],
   outputDir: path.join(os.tmpdir(), 'pos-local-playwright-results'),
   timeout: 30000,
   fullyParallel: false,

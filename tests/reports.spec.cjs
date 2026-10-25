@@ -25,7 +25,8 @@ async function iniciarSesion(page, username = "andres", password = "4321") {
 }
 
 async function instalarStubXlsx(page) {
-  await page.addInitScript(() => {
+  await page.route("**/vendor/xlsx/xlsx.full.min.js", route => route.fulfill({ status: 200, contentType: "application/javascript", body: "" }));
+  const installStub = () => {
     const excelColumn = index => { let value = index + 1, result = ""; while (value) { value -= 1; result = String.fromCharCode(65 + value % 26) + result; value = Math.floor(value / 26); } return result; };
     window.XLSX = {
       utils: {
@@ -44,7 +45,9 @@ async function instalarStubXlsx(page) {
         link.download = filename; document.body.append(link); link.click(); link.remove();
       }
     };
-  });
+  };
+  await page.addInitScript(installStub);
+  if (page.url() !== 'about:blank') await page.evaluate(installStub);
 }
 
 async function abrirReportes(page) {

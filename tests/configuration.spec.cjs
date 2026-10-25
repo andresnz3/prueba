@@ -313,7 +313,7 @@ test("Configuración descarta cambios no guardados y normaliza campos vacíos", 
   await expect(page.locator("#confMinStock")).toHaveValue("5");
 });
 
-test("Configuración no guarda un mínimo de stock fraccionario inválido", async ({ page }) => {
+test("Configuración guarda un mínimo de stock fraccionario válido", async ({ page }) => {
   await iniciarSesion(page, "andres", "4321");
   await abrirConfiguracion(page);
 
@@ -321,15 +321,15 @@ test("Configuración no guarda un mínimo de stock fraccionario inválido", asyn
   await page.locator("#saveConfigBtn").click();
   await cerrarAviso(page);
 
-  await page.locator("#confName").fill("Nombre fraccionario rechazado");
+  await page.locator("#confName").fill("Nombre fraccionario guardado");
   await page.locator("#confMinStock").fill("1.5");
-  expect(await page.locator("#confMinStock").evaluate(input => input.checkValidity())).toBe(false);
+  expect(await page.locator("#confMinStock").evaluate(input => input.checkValidity())).toBe(true);
   await page.locator("#saveConfigBtn").click();
-  await expect(page.locator("#configView")).toBeVisible();
-  await expect(page.locator("#customAlertModal")).toBeHidden();
+  await expect(page.locator("#customAlertModal")).toBeVisible();
+  await cerrarAviso(page);
 
   await page.locator("#navSalesBtn").click();
   await abrirConfiguracion(page);
-  await expect(page.locator("#confName")).toHaveValue("Nombre anterior");
-  await expect(page.locator("#confMinStock")).toHaveValue("5");
+  await expect(page.locator("#confName")).toHaveValue("Nombre fraccionario guardado");
+  await expect(page.locator("#confMinStock")).toHaveValue("1.5");
 });

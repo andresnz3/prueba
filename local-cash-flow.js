@@ -6,7 +6,7 @@
   const el = id => document.getElementById(id);
   let busy = false, loading = false, orders = [], selected = null, preview = null;
   const copy = value => JSON.parse(JSON.stringify(value));
-  const fail = message => { throw new Error(message); };
+  const fail = message => { throw window.PosMessages.expected(message); };
   function flow() {
     const config = JSON.parse(localStorage.getItem(configStorageKey) || '{}');
     return config.salesFlow === 'CENTRALIZED' ? 'CENTRALIZED' : 'DIRECT';
@@ -138,7 +138,7 @@
       });
       cart.splice(0); resetearDescuentoVenta(); actualizarCarrito(); await loadOrders(); render();
       showAlert('Orden enviada a Caja. No se generó factura ni se descontó inventario. La próxima factura sigue siendo #' + String(saleNumber).padStart(6, '0') + '.');
-    } catch (error) { showAlert(error.message); }
+    } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo completar esta operación. Actualiza la pantalla e inténtalo de nuevo.')); }
     finally { busy = false; render(); }
   }
   async function cancelOrder(id) {
@@ -154,7 +154,7 @@
         });
         await loadOrders(); render();
         showAlert('Orden cancelada. No se generó factura ni movimiento de caja. La próxima factura sigue siendo #' + String(saleNumber).padStart(6, '0') + '.');
-      } catch (error) { showAlert(error.message); }
+      } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo completar esta operación. Actualiza la pantalla e inténtalo de nuevo.')); }
       finally { busy = false; render(); }
     });
   }
@@ -185,7 +185,7 @@
       el('localOrderReceived').value = ''; window.PosValidation.clear(el('localOrderForm')); paymentFields();
       el('localOrderCheckoutModal').classList.remove('hidden');
       (el('localOrderMethod').value === 'cash' ? el('localOrderReceived') : el('localOrderConfirmBtn')).focus();
-    } catch (error) { showAlert(error.message); }
+    } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo completar esta operación. Actualiza la pantalla e inténtalo de nuevo.')); }
   }
   function updateCashChangePreview() {
     const previewBox = el('localOrderCashChangePreview'), input = el('localOrderReceived');
@@ -209,7 +209,7 @@
       const sale = await record(selected.input, { orderId: selected.id, quoteToken: preview.token, paymentMethod: method, received: method === 'cash' ? Number(raw) : null });
       el('localOrderCheckoutModal').classList.add('hidden'); selected = preview = null;
       await refresh(); generarVisualizacionTicket(sale, method === 'cash' ? Number(raw) : sale.total, method === 'cash' ? r2(Number(raw) - sale.total) : 0, false);
-    } catch (error) { showAlert(error.message); }
+    } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo completar esta operación. Actualiza la pantalla e inténtalo de nuevo.')); }
     finally { busy = false; el('localOrderConfirmBtn').disabled = false; render(); }
   }
   async function confirmSale(id) {
@@ -230,7 +230,7 @@
         await audit('CONFIRMAR_VENTA', 'Factura #' + sale.numero + '; ' + sale.medioPago + '; no altera el efectivo físico.');
       });
       await refresh();
-    } catch (error) { showAlert(error.message); }
+    } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo completar esta operación. Actualiza la pantalla e inténtalo de nuevo.')); }
     finally { busy = false; render(); }
   }
   function render() {
@@ -275,7 +275,7 @@
         config.salesFlow = requested; localStorage.setItem(configStorageKey,JSON.stringify(config)); sysConfig.salesFlow = requested;
       });
       await loadOrders(); renderCajaView();
-    } catch (error) { showAlert(error.message); }
+    } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo completar esta operación. Actualiza la pantalla e inténtalo de nuevo.')); }
     finally { busy = false; render(); }
   });
   el('localOrderForm').addEventListener('submit',charge); el('localOrderMethod').addEventListener('change',paymentFields); el('localOrderReceived').addEventListener('input',updateCashChangePreview);

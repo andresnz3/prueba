@@ -19,10 +19,10 @@
     else if (file && !file.size) photoError = new window.PosApiError('IMAGE_INVALID');
     const preview = el('prodImagePreview');
     if (photoError) {
-      window.PosValidation.field('prodImageInput', photoError.message);
+      window.PosValidation.field('prodImageInput', window.PosMessages.fromError(photoError, 'No se pudo cargar la imagen. Revisa el formato y el tamaño e inténtalo de nuevo.'));
       imageInput.value = ''; window.PosRuntime.setProductImage(editing?.image || null);
       preview.src = editing?.image || ''; preview.style.display = editing?.image ? 'block' : 'none';
-      showAlert(photoError.message); return;
+      showAlert(window.PosMessages.fromError(photoError, 'No se pudo cargar la imagen. Revisa el formato y el tamaño e inténtalo de nuevo.')); return;
     }
     if (!file) return;
     photoFile = file; photoPreview = URL.createObjectURL(file);
@@ -85,12 +85,12 @@
     if (failure.code === 'MODULE_FORBIDDEN') { closePanels(); await window.PosConnected.navigate('inventoryView'); return; }
     if (failure.status >= 500 || ['NETWORK_ERROR', 'DATABASE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(failure.code)) {
       uncertain = true; rows = []; window.PosRuntime.setProducts(rows);
-      showAlert(failure.message + '\nActualiza el inventario y comprueba el Kardex antes de reintentar una escritura; una respuesta perdida no confirma si se guardo.');
+      showAlert(window.PosMessages.fromError(failure, 'No se pudo confirmar el resultado de la operación. Actualiza el inventario y revisa el Kardex antes de volver a intentarlo.'));
     } else {
       const fields = { barcode: 'prodBarcode', name: 'prodName', category: 'prodCategory', cost: 'prodCost', marginRetail: 'prodMargenRetail', marginWholesale: 'prodMargenWholesale', retailPrice: 'prodRetail', wholesalePrice: 'prodWholesale', stock: 'prodStock', minStock: 'prodMinStock', quantity: 'ajusteCantidad', reason: 'ajusteMotivo' };
       const input = failure.code === 'BARCODE_EXISTS' ? 'prodBarcode' : failure.code === 'INSUFFICIENT_STOCK' ? 'ajusteCantidad' : fields[failure.field];
-      if (input) window.PosValidation.field(input, failure.code === 'INVALID_INPUT' ? 'Revisa el valor de este campo; respeta su límite y precisión.' : failure.message);
-      showAlert(failure.message);
+      if (input) window.PosValidation.field(input, failure.code === 'INVALID_INPUT' ? 'Revisa el valor de este campo; respeta su límite y precisión.' : window.PosMessages.fromError(failure, 'No se pudo guardar el producto. Revisa la información e inténtalo de nuevo.'));
+      showAlert(window.PosMessages.fromError(failure, 'No se pudo guardar el producto. Revisa la información e inténtalo de nuevo.'));
     }
   }
   async function run(operation) {

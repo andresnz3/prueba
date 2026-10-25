@@ -30,12 +30,20 @@ async function runBrowserTests({ config, database, playwrightArgs = [] }) {
     let apiUrl;
     const root = resolve(__dirname, '../..');
     const publicFiles = new Set(['index.html', 'app.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'connected-expenses.js', 'connected-purchases.js', 'connected-reports.js', 'dashboard-period.js', 'period-filters.js', 'connected-dashboard.js', 'local-cash-flow.js', 'local-migration-preview.js', 'local-migration-export.js', 'connected-migration-history.js']);
+    const vendorManifest = JSON.parse(readFileSync(resolve(root, 'vendor/manifest.json'), 'utf8'));
+    const publicVendorFiles = new Set(Object.keys(vendorManifest.sha256).map(file => file.replace(/^vendor\//, '')));
     web = createServer((req, res) => {
-      const name = new URL(req.url, 'http://localhost').pathname.slice(1) || 'index.html';
+      let name;
+      try { name = decodeURIComponent(new URL(req.url, 'http://localhost').pathname.slice(1)) || 'index.html'; }
+      catch { res.writeHead(400); res.end(); return; }
       if (name === 'api-config.js') { res.setHeader('Content-Type', 'application/javascript'); res.end('window.POS_API_BASE_URL = ' + JSON.stringify(apiUrl) + ';'); return; }
-      if (!publicFiles.has(name)) { res.writeHead(404); res.end(); return; }
-      const types = { js: 'application/javascript', html: 'text/html; charset=utf-8', css: 'text/css' };
-      res.setHeader('Content-Type', types[name.split('.').pop()]); res.end(readFileSync(resolve(root, 'dist', name)));
+      const vendorName = name.startsWith('vendor/') ? name.slice('vendor/'.length) : null;
+      if (!publicFiles.has(name) && !(vendorName && publicVendorFiles.has(vendorName))) { res.writeHead(404); res.end(); return; }
+      const file = resolve(root, 'dist', name);
+      if (!file.startsWith(resolve(root, 'dist') + require('node:path').sep)) { res.writeHead(404); res.end(); return; }
+      const types = { js: 'application/javascript; charset=utf-8', html: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8', woff2: 'font/woff2' };
+      res.setHeader('Content-Type', types[name.split('.').pop()] || 'application/octet-stream');
+      try { res.end(readFileSync(file)); } catch { res.writeHead(404); res.end(); }
     });
     const origin = await listen(web);
     const authConfig = readAuthConfig({ CSRF_SECRET: randomBytes(32).toString('hex'), AUTH_RATE_MAX: '100' });

@@ -18,6 +18,7 @@ test.afterEach(async ({ page }) => { expect(pageErrors.get(page)).toEqual([]); }
 
 async function login(page) {
   await page.route('https://**/*', route => route.abort());
+  await page.route('**/vendor/xlsx/xlsx.full.min.js', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: '' }));
   await page.goto('/?mode=connected');
   await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
   await page.locator('#loginUsername').fill('browseradmin'); await page.locator('#loginPassword').fill(password);
@@ -47,7 +48,9 @@ async function mysqlPurchase(invoiceNumber) {
 test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', async ({ page }) => {
   await login(page);
   const openingPayablesBalance = Number((await call(page, 'payablesSummary')).balance);
-  if (!await call(page, 'currentCash', true)) await call(page, 'openCash', { operationKey: randomUUID(), openingAmount: '100.00' });
+  const currentCash = await call(page, 'currentCash', true);
+  if (!currentCash) await call(page, 'openCash', { operationKey: randomUUID(), openingAmount: '100.00' });
+  else if (Number(currentCash.expectedAmount) < 100) await call(page, 'manualCashMovement', { operationKey: randomUUID(), direction: 'IN', amount: (100 - Number(currentCash.expectedAmount)).toFixed(2), reason: 'Fondo de la prueba aislada de compras' });
   const suffix = randomBytes(4).toString('hex');
   const product = await call(page, 'createProduct', { barcode: 'BUY-' + suffix, name: 'Producto compra ' + suffix, category: 'General', cost: '4.00', marginRetail: '20.0000', marginWholesale: '10.0000', retailPrice: '4.80', wholesalePrice: '4.40', stock: '2.000', minStock: '1.000', taxRate: '0.0000', image: null, active: true });
   await call(page, 'createSupplier', { name: 'Proveedor inicial ' + suffix, contact: 'Contacto', phone: '5551000' + suffix, ruc: null, address: 'Managua' });
@@ -209,6 +212,39 @@ test('Compras conectadas actualizan stock, CxP, reportes, Dashboard y Excel', as
   await page.locator('#navDashboardBtn').click(); await expect(page.locator('#connectedDashPurchasesBody')).toContainText(noInvoiceNumber);
   const [noInvoiceDashboardDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#dashboardView button[onclick="window.generarExcelDashboard()"]:visible').click()]);
   expect(JSON.stringify((await downloadedWorkbook(noInvoiceDashboardDownload)).Sheets)).toContain(noInvoiceNumber);
+
+  const editSuffix = randomBytes(4).toString('hex'), editInvoice = 'EDIT-' + editSuffix, correctedInvoice = 'EDIT-CORRECTED-' + editSuffix;
+  const editProduct = await call(page, 'createProduct', { barcode: 'EDIT-' + editSuffix, name: 'Producto corregible ' + editSuffix, category: 'General', cost: '5.00', marginRetail: '20.0000', marginWholesale: '10.0000', retailPrice: '6.00', wholesalePrice: '5.50', stock: '0.000', minStock: '0.000', taxRate: '0.0000', image: null, active: true });
+  await page.locator('#navPurchasesBtn').click(); await expect(page.locator('#purchasesView')).toBeVisible(); await page.locator('#addNewPurchaseBtn').click();
+  await page.locator('#purchSupplier').fill(supplierName); await page.locator('#purchInvoice').fill(editInvoice); await page.locator('#purchType').selectOption('credito');
+  await page.locator('#purchProductTemp').fill(editProduct.name); await page.locator('#purchQtyTemp').fill('2'); await page.locator('#purchCostTemp').fill('6.00'); await page.locator('#btnAddItemToPurch').click();
+  await page.locator('#purchaseForm button[type=submit]').click(); await expect(page.locator('#purchaseModal')).toBeHidden({ timeout: 15000 }); await closeAlert(page);
+  const editableRow = page.locator('#connectedPurchasesTableBody tr').filter({ hasText: editInvoice });
+  await editableRow.getByRole('button', { name: 'Editar' }).click(); await expect(page.locator('#purchaseModalTitle')).toHaveText('Corregir compra a crédito');
+  await expect(page.locator('#purchSupplier')).toBeDisabled(); await expect(page.locator('#purchType')).toBeDisabled();
+  await page.locator('#purchInvoice').fill(correctedInvoice);
+  await page.locator('#purchCartBody input[data-cart-field="quantity"]').fill('3.000');
+  await page.locator('#purchCartBody input[data-cart-field="unitCost"]').fill('7.00');
+  await page.locator('#purchaseForm button[type=submit]').click(); await expect(page.locator('#purchaseModal')).toBeHidden({ timeout: 15000 });
+  await expect(page.locator('#customAlertMessage')).toContainText('corregida'); await closeAlert(page);
+  const editedRow = await mysqlPurchase(correctedInvoice);
+  expect(editedRow).toMatchObject({ total: '21.00', purchase_type: 'CREDIT', status: 'COMPLETED', quantity: '3.000', stock: '3.000', cost: '7.00' });
+
+  const cashEditSuffix = randomBytes(4).toString('hex'), cashEditInvoice = 'CASH-EDIT-' + cashEditSuffix, cashEditCorrected = 'CASH-EDIT-CORRECTED-' + cashEditSuffix;
+  const cashEditProduct = await call(page, 'createProduct', { barcode: 'CASH-EDIT-' + cashEditSuffix, name: 'Producto al contado corregible ' + cashEditSuffix, category: 'General', cost: '2.00', marginRetail: '20.0000', marginWholesale: '10.0000', retailPrice: '2.40', wholesalePrice: '2.20', stock: '0.000', minStock: '0.000', taxRate: '0.0000', image: null, active: true });
+  const cashBeforeEdit = Number((await call(page, 'currentCash', true)).expectedAmount);
+  await page.locator('#navPurchasesBtn').click(); await page.locator('#addNewPurchaseBtn').click();
+  await page.locator('#purchSupplier').fill(supplierName); await page.locator('#purchInvoice').fill(cashEditInvoice); await page.locator('#purchType').selectOption('contado'); await page.locator('#purchPaymentMethod').selectOption('CASH');
+  await page.locator('#purchProductTemp').fill(cashEditProduct.name); await page.locator('#purchQtyTemp').fill('2'); await page.locator('#purchCostTemp').fill('2.00'); await page.locator('#btnAddItemToPurch').click();
+  await page.locator('#purchaseForm button[type=submit]').click(); await expect(page.locator('#purchaseModal')).toBeHidden({ timeout: 15000 }); await closeAlert(page);
+  const cashEditableRow = page.locator('#connectedPurchasesTableBody tr').filter({ hasText: cashEditInvoice });
+  await cashEditableRow.getByRole('button', { name: 'Editar' }).click(); await expect(page.locator('#purchaseModalTitle')).toHaveText('Corregir compra al contado');
+  await expect(page.locator('#purchType')).toHaveValue('contado');
+  await page.locator('#purchInvoice').fill(cashEditCorrected); await page.locator('#purchCartBody input[data-cart-field="quantity"]').fill('3.000'); await page.locator('#purchCartBody input[data-cart-field="unitCost"]').fill('3.00');
+  await page.locator('#purchaseForm button[type=submit]').click(); await expect(page.locator('#purchaseModal')).toBeHidden({ timeout: 15000 }); await expect(page.locator('#customAlertMessage')).toContainText('corregida'); await closeAlert(page);
+  const cashEditedRow = await mysqlPurchase(cashEditCorrected);
+  expect(cashEditedRow).toMatchObject({ total: '9.00', purchase_type: 'CASH', status: 'COMPLETED', quantity: '3.000', stock: '3.000', cost: '3.00', payment_method: 'CASH', payment_status: 'POSTED' });
+  expect(Number((await call(page, 'currentCash', true)).expectedAmount)).toBe(cashBeforeEdit - 9);
 });
 
 test('Estado de cuenta conectado usa canPay del backend aunque el pago no esté en las filas visibles', async ({ page }) => {

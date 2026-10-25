@@ -189,7 +189,8 @@ test('package confirmation keeps duplicate identifiers and broken references pen
   assert.ok(saved.pendingRecords >= 3);
   const [rows] = await pool.execute('SELECT entity_type AS entity,record_status AS status,pending_reason AS reason FROM migration_source_records WHERE business_id=? AND batch_id=? AND entity_type IN (\'products\',\'sales\') ORDER BY entity_type,source_record_key', [target, saved.batchId]);
   assert.equal(rows.filter(row => row.entity === 'products').length, 2);
-  assert.ok(rows.filter(row => row.entity === 'products').every(row => row.status === 'PENDING' && /DUPLICATE_LOCAL_ID/.test(row.reason)));
+  const duplicateRows = rows.filter(row => row.entity === 'products');
+  assert.ok(duplicateRows.every(row => row.status === 'PENDING' && /DUPLICATE_LOCAL_ID/.test(row.reason)), 'las dos filas deben seguir pendientes por tener referencias repetidas');
   assert.ok(rows.filter(row => row.entity === 'sales').every(row => row.status === 'PENDING' && /INCONSISTENT_REFERENCES/.test(row.reason)));
   const [business] = await pool.execute("SELECT state FROM business_migration_controls WHERE business_id=?", [target]);
   assert.equal(business[0].state, 'PENDING');

@@ -295,3 +295,87 @@ Administración del sistema permite confirmar una importación básica desde un 
 El endpoint `POST /api/system-admin/migration/basic` valida sesión de `andres` como `ADMIN` del negocio `1`, CSRF, paquete y negocio destino activo. Importar al negocio `1` requiere confirmación separada en el modal y una señal explícita validada también por el backend. Altas y auditoría `MIGRATION_BASIC_IMPORT` se ejecutan en una transacción; auditoría registra usuario actor en detalles, negocio destino, negocio origen, fecha exportada y conteos. No se crea tabla de categorías ni se toca el esquema.
 
 Se añadieron pruebas unitarias aisladas para validación del paquete, permisos, confirmación del negocio 1, duplicados, auditoría, destino y rollback. No se ejecutó el endpoint contra MySQL, no se importaron datos, no se aplicaron migraciones de esquema ni se cambió ninguna cuenta. Validación registrada al cerrar la tarea: ESLint, build público, pruebas unitarias del backend y `git diff --check`; el estado exacto de la suite aparece en la entrega de la tarea.
+
+## Aceptación manual de la fase 5.3 (24 de octubre de 2026)
+
+El usuario confirmó la prueba manual de venta conectada en el entorno Docker temporal `pos-phase53-manual-8cfba79916`. El flujo aceptado fue: factura `000001`, venta de contado de 2 unidades por C$22, recepción de C$25, cambio de C$3, existencia final de 3 unidades y cierre de caja por C$122 sin diferencias; los reportes mostraron los resultados esperados. Estos valores se registran como confirmación manual del usuario.
+
+**Aceptado:** la venta de contado en efectivo, el descuento de inventario, el cambio, el movimiento de caja, el cierre sin diferencia y la consulta de reportes del escenario probado.
+
+**Verificación automatizada asociada:** 74 pruebas Playwright conectadas pasaron en MySQL temporal; la prueba rápida de frontend Docker pasó; las pruebas unitarias backend informaron 209 aprobadas, 0 fallidas y 1 omitida porque faltaba un fixture JSON local. Los servicios MySQL, backend y frontend del entorno temporal alcanzaron estado saludable y la API respondió a través de Nginx.
+
+**Pendiente:** la prueba manual confirmada cubre efectivo y no valida por sí sola todos los métodos de pago, escenarios de devolución ni cargas comerciales prolongadas. Compras conectadas permanecen fuera de alcance y no se avanzaron. Esta aceptación no autoriza cambios en bases persistentes, despliegue en Contabo ni activación de nuevas funciones.
+
+## Validación automatizada de compras conectadas y CxP (24 de octubre de 2026)
+
+Por autorización expresa del usuario se validó el flujo de compras conectadas en un proyecto Docker temporal, independiente de `pos_docker_local` y de `pos_multitenant`. El nuevo esquema se instaló exclusivamente en una base aleatoria `pos_auth_test_*` con el ejecutor oficial y las migraciones 001–017. Las pruebas de integración crearon y eliminaron sus propias bases `pos_auth_test_*`; la base conservada para la prueba manual quedó vacía de negocios, usuarios, proveedores, productos, compras y pagos.
+
+Esta entrada actualiza el estado anterior que mantenía las compras conectadas en espera: se autorizó iniciar esta validación y pasaron las pruebas automatizadas, pero la fase sigue pendiente de la confirmación manual del usuario.
+
+**Verificado automáticamente:** alta de proveedor; compra al contado y a crédito; actualización de costo y existencias; saldo de CxP; abonos parciales y liquidación; rechazo de sobrepagos, incluidos pagos pendientes; idempotencia de reintentos de compra y de abono; pagos de tarjeta/transferencia pendientes y su confirmación; anulación con reversión de inventario y caja; reportes, auditoría y aislamiento entre negocios. La prueba de reversión conserva el movimiento original y registra los eventos compensatorios.
+
+**Resultados:** 3 pruebas unitarias de valores/estado de cuenta aprobadas; 2 pruebas de integración MySQL aprobadas (compatibilidad del esquema y flujo de compras/CxP); 2 pruebas Playwright conectadas aprobadas; build público y verificación de recursos aprobados. Las respuestas de frontend y API en el proyecto Docker temporal devolvieron HTTP 200 y los tres servicios quedaron saludables. No se ejecutaron compras en las bases persistentes ni en la base reservada para la validación manual.
+
+**Pendiente:** no existe función conectada de edición de compras: no hay endpoint de actualización ni acción de edición en la interfaz. No se implementó porque editar una compra puede cambiar existencias, costos, caja y pagos ya registrados; esos criterios necesitan definición del propietario. La anulación sí está disponible y pasó las verificaciones automatizadas. La prueba manual de compra a crédito y abono sigue pendiente, por lo que esta fase aún no se considera aceptada.
+
+El entorno Docker de validación manual quedó disponible únicamente en `http://127.0.0.1:8082/`. MySQL permanece en una red interna sin puerto publicado al host; el volumen, las imágenes y la configuración privada pertenecen al proyecto temporal y se conservarán hasta que el usuario termine sus pruebas. Para crear el primer administrador se debe usar `backend/scripts/init-business.cjs` en forma interactiva, introduciendo la contraseña en su prompt oculto.
+
+## Corrección segura de compras conectadas (24 de octubre de 2026)
+
+El usuario indicó que ya verificó manualmente compras a crédito, abonos a proveedores, inventario, Caja y reportes en Docker. Esa validación no cubre la nueva edición de compras; la edición sigue requiriendo comprobación manual antes de aceptar esta parte del flujo.
+
+Se implementó `PATCH /api/purchases/:id` con revisión de versión e idempotencia mediante `operationKey`. Permite corregir el número de factura, cantidades y costos únicamente en compras operativas completadas que superen las verificaciones de inventario, costo vigente, existencias, relaciones e historial. Conserva fecha, proveedor, usuario y conjunto de productos. Los deltas de cantidad se registran como movimientos compensatorios y no se permite dejar existencias negativas. Las correcciones de costo ajustan el costo de los movimientos de Kardex asociados a la compra; la auditoría guarda los valores anteriores y nuevos.
+
+Las compras a crédito con pagos o intentos de pago, históricas, con descuentos o impuestos no representados por este editor, con movimientos posteriores, con costos actuales distintos o con existencias inconsistentes permanecen bloqueadas. Las compras al contado solo se editan si todos sus pagos corresponden a efectivo confirmado, las salidas concilian con el total y la caja original sigue abierta. Un aumento registra el pago incremental en CxP, Caja y auditoría dentro de la misma transacción. Una reducción se rechaza hasta contar con un flujo explícito y conciliado de devolución del proveedor. La anulación compensa cada pago efectivo complementario con su movimiento de reversión, conserva las filas originales y requiere la caja abierta.
+
+| Before | After | Why |
+| --- | --- | --- |
+| Las compras completadas no tenían una ruta de edición. | La interfaz permite corregir comprobantes elegibles y el servidor valida revisión, producto, costo, Kardex y caja. | Corregir errores de captura sin alterar operaciones dependientes. |
+| Un cambio de total en una compra al contado podía dejar pago y comprobante desiguales. | Los aumentos añaden un pago complementario idempotente; las reducciones se bloquean sin devolución conciliada. | Mantener el total del comprobante, el pago y el efectivo conciliados. |
+| Una corrección solo de costo podía dejar el Kardex con costo anterior. | El costo corregido se refleja en los movimientos vinculados y el antes/después queda en auditoría. | Mantener coherentes la factura, el costo vigente y el Kardex sin inventar unidades. |
+
+**Verificación automatizada de esta entrega:** suite MySQL aislada completa aprobada; suite específica de compras/CxP aprobada con reintentos, revisión obsoleta, movimiento posterior, bloqueo por pago previo, rechazo de reducción sin devolución, falta de efectivo, anulación de pagos complementarios, conciliación de costo de Kardex y dos ediciones simultáneas; Playwright conectado probó edición a crédito y al contado y comprobó MySQL. También pasaron ESLint, backend unitario y build estático. No se requiere una nueva migración SQL.
+
+**Pendiente:** ejecutar manualmente desde el panel al menos una corrección elegible a crédito y, con una caja abierta, una compra al contado cuyo total aumente. Verificar que una reducción quede bloqueada con mensaje claro. La funcionalidad no se declara aceptada para clientes hasta completar esa revisión. No se alteraron `pos_multitenant`, `pos_docker_local`, `database/schema.sql` ni volúmenes existentes.
+
+
+## Auditoría de confiabilidad y compras conectadas (24 de octubre de 2026)
+
+Se habilitó la corrección segura de compras conectadas. Solo se admiten facturas completadas cuyo historial de inventario, costos, pagos, caja y relaciones pueda verificarse sin reescribir movimientos posteriores. El servidor exige una revisión vigente e idempotencia; conserva proveedor, fecha, usuario y productos. Las cantidades corregidas se concilian mediante movimientos compensatorios. Las correcciones de costo actualizan los costos de Kardex vinculados y registran valores anteriores y nuevos en auditoría.
+
+Las compras a crédito con pagos, intentos de pago, descuentos o impuestos no representados, movimiento posterior o existencias/costos inconsistentes quedan bloqueadas. Las compras de contado requieren pagos en efectivo confirmados y su sesión de caja abierta. Un aumento genera un pago y una salida de caja complementarios, atómicos e idempotentes; una reducción espera un flujo explícito de devolución. La anulación conserva pagos y movimientos y compensa cada salida original.
+
+La auditoría detectó y corrigió además el saldo del estado de cuenta del proveedor: las compras al contado no se reflejaban como cargo, aunque sus pagos sí aparecían. Ahora el cargo y cada pago confirmado se compensan; un pago de tarjeta o transferencia pendiente mantiene el importe como saldo hasta confirmarlo. Se añadieron regresiones para compra al contado pagada, transferencia pendiente y posterior confirmación.
+
+| Before | After | Why |
+| --- | --- | --- |
+| No había edición de compras. | El panel ofrece corrección solo cuando todas las dependencias verificables permiten aplicarla con seguridad. | Corregir captura sin cambiar historial dependiente. |
+| La compra al contado y su pago podían dejar un saldo incorrecto en el estado de cuenta. | Cargo y pagos confirmados quedan conciliados; los pendientes mantienen el saldo hasta confirmación. | Evitar saldos negativos o pagos pendientes tratados como pagados. |
+| La prueba del límite JSON dependía accidentalmente de una variable heredada del entorno. | La integración fija los 16 KiB que esa regresión pretende comprobar. | Hacer la prueba reproducible sin modificar el límite de producción. |
+| El detector de texto trataba cadenas internas de bibliotecas minificadas como interfaz del POS. | El detector revisa 279 archivos propios; las 6 bibliotecas externas se validan mediante SHA-256 y referencias locales. | Mantener la detección de texto dañado sin editar dependencias externas. |
+
+**Verificación:** ESLint completo aprobado; 211 pruebas unitarias aprobadas y una omitida por falta del archivo JSON de prueba; suite completa de integración MySQL temporal aprobada, con cero fallos y tres casos opcionales omitidos porque requieren el JSON real no disponible en este checkout. Playwright conectado de compras: 2/2; navegador local de compra en efectivo y diseño: 5/5. Las pruebas de compras cubren reintentos, revisión obsoleta, inventario posterior, historial de pagos, rechazo de devoluciones no conciliadas, caja insuficiente, anulaciones, saldos y ediciones simultáneas. Build público, auditoría UTF-8, hashes de dependencias y `git diff --check` aprobados. Cada base aleatoria `pos_auth_test_*` se eliminó al terminar.
+
+La integración de imagen tuvo una primera ejecución fallida porque el archivo temporal de pruebas heredaba `JSON_LIMIT_BYTES=1048576`, mientras la regresión comprueba explícitamente 16 KiB. Se hizo explícito el límite dentro de esa prueba y la suite MySQL completa volvió a pasar; no se cambió el límite de la aplicación.
+
+`docker compose config --quiet` aprobó. El daemon de Docker no respondió a la API del motor en este cierre, así que no se pudo comprobar el arranque/rebuild de los cambios recientes dentro de contenedores. Tampoco se iniciaron backend o frontend Docker en esta revisión.
+
+**Pendiente antes de aceptar la nueva edición:** revisar manualmente desde el panel una corrección elegible a crédito, el aumento de una compra al contado con su caja abierta y el rechazo explicado de una reducción. La validación automatizada no sustituye esa revisión del flujo real.
+
+No se requiere una nueva migración SQL. `database/schema.sql` permanece intacto. No se usaron `pos_multitenant` ni `pos_docker_local`, no se modificaron datos persistentes y no se alteraron commits, el índice ni el stash.
+
+
+### Repetición final de navegador (24 de octubre de 2026)
+
+La ejecución completa conectada descubrió que el test de compras dependía del efectivo residual de casos anteriores. Se ajustó únicamente su preparación aislada para asegurar C$100 en la caja temporal usando el endpoint normal de ingreso manual, y así probar la compra con fondos suficientes sin debilitar las reglas del POS. Repetida la suite completa: 126 pruebas conectadas aprobadas, cero fallidas y dos omitidas opcionales. Suite local completa: 194/194 aprobadas. Los datos y sesiones de prueba se mantuvieron dentro de perfiles y bases temporales.
+
+## Aceptación manual de la edición segura de compras conectadas (24 de octubre de 2026)
+
+El usuario confirmó la validación manual de la edición segura de compras conectadas. Se aceptan únicamente los escenarios que comprobó:
+
+- Editar una compra a crédito elegible y verificar la actualización correspondiente del inventario y de las cuentas por pagar (CxP).
+- Bloquear la edición de una compra a crédito después de registrar abonos.
+- Aumentar el total de una compra al contado con la caja abierta y comprobar el descuento adicional de efectivo en caja.
+- Rechazar una reducción del total cuando requiere una devolución al proveedor que todavía no está conciliada.
+
+Esta aceptación documenta la revisión manual del usuario de esos casos. No amplía las reglas de edición para compras con dependencias no conciliadas ni cambia la protección del historial. No se ejecutaron operaciones sobre las bases principales al registrar esta aceptación.

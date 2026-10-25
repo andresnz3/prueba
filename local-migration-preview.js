@@ -10,6 +10,14 @@
   const text = value => String(value ?? '').trim();
   const norm = value => text(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
   const money = value => r2(value).toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const FIELD_LABELS = { business_id: 'negocio de origen', clienteId: 'cliente relacionado', clientId: 'cliente relacionado', proveedorId: 'proveedor relacionado', supplierId: 'proveedor relacionado', productoId: 'producto relacionado', productId: 'producto relacionado', producto_id: 'producto relacionado', facturaId: 'factura relacionada', invoiceId: 'factura relacionada', saleId: 'venta relacionada', purchaseId: 'compra relacionada', cajaSessionId: 'sesión de Caja relacionada', cashSessionId: 'sesión de Caja relacionada', sessionId: 'sesión de Caja relacionada', referenciaId: 'registro relacionado', 'items[].productId': 'producto incluido', 'movimientos[].saleId': 'venta relacionada', 'movimientos[].purchaseId': 'compra relacionada' };
+  const CONTEXT_LABELS = { name: 'Nombre', nombre: 'Nombre', barcode: 'Código de barras', codigo: 'Código', numero: 'Número de factura', factura: 'Factura', fecha: 'Fecha', fechaTS: 'Fecha', total: 'Total', monto: 'Importe', categoria: 'Categoría', tipo: 'Tipo', estado: 'Estado', status: 'Estado', anulada: 'Anulada' };
+  const MODULE_LABELS = { products: 'Productos', productos: 'Productos', clients: 'Clientes', clientes: 'Clientes', suppliers: 'Proveedores', proveedores: 'Proveedores', sales: 'Ventas', ventas: 'Ventas', purchases: 'Compras', compras: 'Compras', cashSessions: 'Caja', cash_sessions: 'Caja', caja: 'Caja', inventoryMovements: 'Inventario', inventory_movements: 'Inventario', inventario: 'Inventario', abonos: 'Abonos', payments: 'Abonos', expenses: 'Gastos', gastos: 'Gastos', auditLogs: 'Auditoría', audit_logs: 'Auditoría', auditoria: 'Auditoría', saleOrders: 'Órdenes pendientes', sale_orders: 'Órdenes pendientes', ordenes: 'Órdenes pendientes', syncQueue: 'Operaciones pendientes', sync_queue: 'Operaciones pendientes', categories: 'Categorías', categorias: 'Categorías', configuration: 'Configuración', configuracion: 'Configuración' };
+  const PAYMENT_LABELS = { CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia', CREDIT: 'Crédito', OTHER: 'Otro' };
+  const STATUS_LABELS = { PAID: 'Pagada', OPEN: 'Pendiente', OVERDUE: 'Vencida', CANCELLED: 'Anulada', CANCELADA: 'Anulada', PENDING: 'Pendiente', PENDING_CONFIRMATION: 'Abono pendiente de confirmar', POSTED: 'Registrado', CONFIRMED: 'Confirmado', VOID: 'Anulado', COMPLETED: 'Completado' };
+  const fieldLabel = value => FIELD_LABELS[value] || (String(value).startsWith('items[') ? 'producto incluido' : String(value).startsWith('movimientos[') ? 'movimiento relacionado' : 'referencia relacionada');
+  const contextLabel = value => CONTEXT_LABELS[value] || 'Dato';
+  const itemLabel = value => MODULE_LABELS[value] || 'Información';
   let canAccess = () => false;
   let businesses = [];
   let localIdentity = null;
@@ -83,10 +91,12 @@
     const legacy = Number(scope?.legacyRecords || 0);
     const excluded = Number(scope?.excludedRecords || 0);
     el('migrationLocalBusinessName').textContent = text(identity?.name) || 'No disponible';
-    el('migrationLocalBusinessId').textContent = businessId || (ambiguous ? 'Varios identificadores en el archivo' : 'No declarado en el archivo');
+    el('migrationLocalBusinessId').textContent = businessId
+      ? (scope?.idSource === 'config' ? 'Identificación guardada' : 'Identificación encontrada en los registros')
+      : (ambiguous ? 'Se encontraron varias identificaciones' : 'No aparece en el archivo');
     el('migrationSourceCountTitle').textContent = 'Datos declarados en el archivo JSON cargado';
     const warnings = [];
-    if (!businessId) warnings.push('El paquete no contiene un identificador estable de origen.');
+    if (!businessId) warnings.push('El archivo no incluye una identificación estable del negocio de origen.');
     if (ambiguous) warnings.push('El paquete declara más de un negocio.');
     if (legacy) warnings.push('Incluye ' + legacy.toLocaleString('es-NI') + ' registros sin identidad verificable.');
     if (excluded) warnings.push('Excluye ' + excluded.toLocaleString('es-NI') + ' registros de otros negocios.');
@@ -209,14 +219,14 @@
       const list = node('ul');
       for (const row of item.legacyReferences || []) {
         if (row.identity === 'shared') continue;
-        list.append(node('li', '', 'Referencia ' + row.id + ' · ' + (row.identity === 'inferred' ? 'ID hallado en registros, no guardado en configuración' : 'sin ID de negocio')));
+        list.append(node('li', '', 'Referencia ' + row.id + ' · ' + (row.identity === 'inferred' ? 'identificación encontrada en los registros, no guardada en los ajustes' : 'sin identificación del negocio')));
       }
-      for (const row of item.otherBusinessReferences || []) list.append(node('li', '', `Referencia ${row.id} · otra identidad: ${row.businessId}`));
+      for (const row of item.otherBusinessReferences || []) list.append(node('li', '', `Referencia ${row.id} · asociada a otro negocio`));
       for (const row of item.duplicateReferences || []) list.append(node('li', '', `Referencia repetida ${row.id} · aparición ${row.duplicate}`));
-      for (const issue of item.referenceDetails || []) list.append(node('li', '', `Registro ${issue.record}: ${issue.field} → ${issue.target}, referencia ${issue.value} (${issue.issue === 'CROSS_BUSINESS_REFERENCE' ? 'otra identidad' : 'no encontrada'}).`));
+      for (const issue of item.referenceDetails || []) list.append(node('li', '', `${item.label}: referencia ${issue.record}, ${fieldLabel(issue.field)} ${issue.issue === 'CROSS_BUSINESS_REFERENCE' ? 'asociada a otro negocio' : 'no encontrada'}.`));
       details.append(list); container.append(details);
     }
-    for (const issue of review.referenceIssues || []) container.append(node('p', '', `${issue.module}: referencia ${issue.record}, campo ${issue.field} → ${issue.target} ${issue.value} (${issue.issue === 'CROSS_BUSINESS_REFERENCE' ? 'otra identidad' : 'no encontrada'}).`));
+    for (const issue of review.referenceIssues || []) container.append(node('p', '', `${itemLabel(issue.module)}: referencia ${issue.record}, ${fieldLabel(issue.field)} ${issue.issue === 'CROSS_BUSINESS_REFERENCE' ? 'asociada a otro negocio' : 'no encontrada'}.`));
     if (review.referenceIssuesTruncated) container.append(node('p', '', 'La lista supera el límite de detalle; el conteo incluye todas las relaciones.'));
     if (review.otherBusinessRows) container.append(node('p', '', 'Los registros asociados a otra identidad no se incluyen en los datos del paquete. Deben revisarse por separado.'));
     container.classList.toggle('hidden', Number(counts.legacy || 0) + Number(counts.sharedId || 0) + Number(counts.otherBusiness || 0) + Number(counts.duplicateIds || 0) + Number(counts.referenceIssues || 0) === 0);
@@ -452,7 +462,7 @@
   }
 
   function renderExistingTargetMessages(list, messages) {
-    list.replaceChildren(...messages.map(message => node('li', '', message)));
+    list.replaceChildren(...messages.map(message => node('li', '', window.PosMessages.text(message, 'No se pudo comprobar este punto. Contacta al administrador del sistema.'))));
     list.classList.toggle('hidden', messages.length === 0);
   }
 
@@ -505,7 +515,7 @@
       el('migrationExistingConfirm').disabled = !result.eligible;
       status.textContent = result.eligible ? 'La revisión no cambió los datos ni el estado del negocio.' : 'No se modificó ningún dato. Resuelve los elementos señalados antes de intentarlo de nuevo.';
     } catch (failure) {
-      if (token === existingTargetRequestToken) status.textContent = failure?.message || 'No se pudo revisar el negocio. No se hicieron cambios.';
+      if (token === existingTargetRequestToken) status.textContent = window.PosMessages.fromError(failure, 'No se pudo revisar el negocio. No se hicieron cambios.');
     } finally {
       if (token === existingTargetRequestToken) {
         existingTargetBusy = false;
@@ -523,7 +533,7 @@
     status.textContent = 'Reservando el negocio y bloqueando su acceso comercial…';
     try {
       const result = await prepareExistingMigrationTargetRequest(businessId, true);
-      if (String(result?.business?.id) !== businessId || result.business.status !== 'INACTIVE' || result.business.migrationState !== 'PENDING') throw new Error('La respuesta no confirmó el negocio seleccionado. No continúes con la importación.');
+      if (String(result?.business?.id) !== businessId || result.business.status !== 'INACTIVE' || result.business.migrationState !== 'PENDING') throw window.PosMessages.expected('La respuesta no confirmó el negocio seleccionado. No continúes con la importación.');
       businesses = [...businesses.filter(item => String(item.id) !== businessId), result.business];
       renderBusinessOptions(businessId);
       renderExistingBusinessOptions('');
@@ -541,7 +551,7 @@
       void updatePurchasesPreview();
       void updateCreditPreview();
     } catch (failure) {
-      status.textContent = failure?.message || 'No se pudo preparar el negocio. No se importó ni se sobrescribió información.';
+      status.textContent = window.PosMessages.fromError(failure, 'No se pudo preparar el negocio. No se importó ni se sobrescribió información.');
     } finally {
       existingTargetBusy = false;
       updateExistingPrepareButton();
@@ -572,7 +582,7 @@
       void updatePurchasesPreview();
       void updateCreditPreview();
     } catch (failure) {
-      status.textContent = failure?.message || 'No se pudo crear el destino. No se importó información.';
+      status.textContent = window.PosMessages.fromError(failure, 'No se pudo crear el destino. No se importó información.');
     } finally { button.disabled = false; }
   }
 
@@ -682,7 +692,7 @@
     startList.replaceChildren(...startBlockers.map(message => {
       const item = document.createElement('li');
       item.className = 'migration-error';
-      item.textContent = message;
+      item.textContent = window.PosMessages.text(message, 'No se pudo comprobar este requisito. Contacta al administrador del sistema.');
       return item;
     }));
     notesList.replaceChildren(...reconciliationNotes.map(message => {
@@ -758,10 +768,12 @@
       expenses: 'gastos', auditLogs: 'auditoría', saleOrders: 'órdenes pendientes',
       syncQueue: 'operaciones pendientes guardadas en el POS local'
     };
-    const missingStores = (archivePreview?.missingStores || []).map(store => missingLabels[store] || store);
-    const pendingMessages = blockers.filter(message => !/^El archivo versi[oó]n 1 no incluye /.test(String(message)));
+    const missingStores = (archivePreview?.missingStores || []).map(store => missingLabels[store] || 'otro módulo');
+    const pendingMessages = blockers
+      .filter(message => !/^El archivo versi[oó]n 1 no incluye gastos, auditor[ií]a, [oó]rdenes pendientes/.test(String(message)))
+      .map(message => window.PosMessages.text(message, 'Hay información pendiente de revisar. Contacta al administrador del sistema.'));
     if (archivePreview?.packageVersion === 1 && missingStores.length) {
-      pendingMessages.unshift('El archivo no contiene ' + missingStores.join(', ') + '. No se consideran vacíos; se conservaron y procesaron los datos disponibles, y el negocio seguirá bloqueado hasta verificar esta información.');
+      pendingMessages.unshift('El archivo no incluye ' + [...new Set(missingStores.map(itemLabel))].join(', ') + '. No se consideran vacíos; se conservaron y procesaron los datos disponibles, y el negocio seguirá bloqueado hasta verificar esta información.');
     }
     const moduleNames = {
       sales: 'Ventas', purchases: 'Compras', customerPayments: 'Abonos de clientes', supplierPayments: 'Pagos a proveedores',
@@ -775,16 +787,17 @@
       const group = byModule.get(key);
       group.count++;
       if (group.examples.length >= 2) continue;
-      const field = difference?.field && difference.field !== 'recordStatus' ? String(difference.field) : '';
+      const field = difference?.field && difference.field !== 'recordStatus' ? fieldLabel(difference.field) : '';
+      const displayValue = value => value === null || value === undefined ? 'no indicado' : ['string', 'number', 'boolean'].includes(typeof value) && !window.PosMessages.isTechnical(String(value)) ? String(value) : 'información no disponible';
       const values = difference?.expected !== undefined || difference?.found !== undefined
-        ? ' (esperado: ' + String(difference.expected ?? '—') + '; encontrado: ' + String(difference.found ?? '—') + ')'
+        ? ' (esperado: ' + displayValue(difference.expected) + '; encontrado: ' + displayValue(difference.found) + ')'
         : '';
-      const reason = String(difference?.reason || 'Hay datos que no coinciden con el archivo original.');
+      const reason = window.PosMessages.text(difference?.reason, 'Hay datos que no coinciden con el archivo original.');
       const example = field ? field + values + '. ' + reason : reason;
       if (!group.examples.includes(example)) group.examples.push(example);
     }
     for (const [key, group] of byModule) {
-      const module = moduleNames[key] || key;
+      const module = moduleNames[key] || 'Información';
       pendingMessages.push(module + ': ' + packageCountLabel(group.count, 'diferencia', 'diferencias') + (group.examples.length ? '. Ejemplo: ' + group.examples.join(' / ') : '.'));
     }
     const uniqueMessages = [...new Set(pendingMessages.filter(Boolean))];
@@ -845,12 +858,12 @@
     const batchId = archivePreview.priorBatch?.id;
     for (const [entity, items] of groups) {
       const details = node('details');
-      details.append(node('summary', '', (labels[entity] || entity) + ': ' + items.length.toLocaleString('es-NI') + ' registros con alertas'));
+      details.append(node('summary', '', (labels[entity] || 'Información') + ': ' + items.length.toLocaleString('es-NI') + ' registros con alertas'));
       const list = node('div', 'migration-identity-record-list');
       for (const record of items) {
         const item = node('article', 'migration-identity-record');
-        const title = node('strong', '', (labels[entity] || entity) + ' · referencia ' + record.reference);
-        const context = Object.entries(record.context || {}).map(([key, value]) => key + ': ' + value).join(' · ');
+        const title = node('strong', '', (labels[entity] || 'Información') + ' · referencia ' + record.reference);
+        const context = Object.entries(record.context || {}).map(([key, value]) => contextLabel(key) + ': ' + value).join(' · ');
         const note = context ? node('small', '', context) : null;
         const identity = node('small', '', record.identity === 'OTHER_BUSINESS' ? 'Asociado a otra identidad; bloqueado.' : record.identityReason === 'SHARED_ID' ? 'Usa el identificador antiguo compartido y también tiene otra alerta.' : record.identity === 'LEGACY' ? 'Su procedencia todavía requiere revisión.' : 'Requiere revisar duplicados o relaciones.');
         item.append(title);
@@ -888,7 +901,7 @@
                 record.reviewDecision = { decision: choice, recordStatus: result.recordStatus };
                 renderArchiveIdentityDetails();
               } catch (failure) {
-                record.reviewError = failure?.message || 'No se pudo guardar la decisi\u00f3n.';
+      record.reviewError = window.PosMessages.fromError(failure, 'No se pudo guardar la decisión.');
               } finally {
                 identityReviewBusyKey = '';
                 renderArchiveIdentityDetails();
@@ -971,7 +984,7 @@
       updateArchiveApplyButton();
     } catch (failure) {
       if (token !== archivePreviewToken) return;
-      el('migrationArchiveStatus').textContent = failure?.message || 'No se pudo validar el paquete. No se guardó información.';
+      el('migrationArchiveStatus').textContent = window.PosMessages.fromError(failure, 'No se pudo validar el paquete. No se guardó información.');
       updateArchiveApplyButton();
     }
   }
@@ -993,11 +1006,11 @@
     el('migrationArchiveStatus').textContent = 'Comprobando nuevamente el archivo antes de importarlo…';
     try {
       const fresh = await previewArchiveRequest(String(target.id), packageValue, packageFileSha256);
-      if (fresh.packageSha256 !== archivePreview.packageSha256 || fresh.fileSha256 !== packageFileSha256 || String(fresh.targetBusinessId) !== String(target.id)) throw new Error('El archivo o el negocio seleccionado cambiaron desde la revisión. Vuelve a revisar el paquete.');
-      if (!fresh.eligibleToArchive) throw new Error(fresh.blockers?.[0] || 'El archivo no puede importarse en este negocio.');
+      if (fresh.packageSha256 !== archivePreview.packageSha256 || fresh.fileSha256 !== packageFileSha256 || String(fresh.targetBusinessId) !== String(target.id)) throw window.PosMessages.expected('El archivo o el negocio seleccionado cambiaron desde la revisión. Vuelve a revisar el paquete.');
+      if (!fresh.eligibleToArchive) throw window.PosMessages.expected(fresh.blockers?.[0] || 'El archivo no puede importarse en este negocio.');
       el('migrationArchiveStatus').textContent = 'Guardando el archivo original y la confirmación de este negocio…';
       const result = await archiveMigrationRequest(String(target.id), packageValue, true, packageFileSha256);
-      if (String(destination()?.id) !== String(target.id) || result.packageSha256 !== fresh.packageSha256 || result.fileSha256 !== packageFileSha256) throw new Error('La respuesta no coincide con el archivo y negocio seleccionados. El negocio permanece bloqueado.');
+      if (String(destination()?.id) !== String(target.id) || result.packageSha256 !== fresh.packageSha256 || result.fileSha256 !== packageFileSha256) throw window.PosMessages.expected('La respuesta no coincide con el archivo y negocio seleccionados. El negocio permanece bloqueado.');
       archivePreview = { ...fresh, priorBatch: { id: result.batchId, status: result.status }, legacyIdentityConfirmation: result.identityConfirmation, blockers: result.blockers };
       if (archivePreview.identityReview) archivePreview.identityReview.batchConfirmation = result.identityConfirmation;
       updateArchiveStageMessages(result);
@@ -1009,7 +1022,7 @@
         : '';
       el('migrationArchiveStatus').textContent = 'Archivo protegido.' + identityConfirmationMessage + ' Importando ahora los datos disponibles en los módulos del POS y conciliando sus relaciones…';
       const migrationResult = await projectMigrationOperationsRequest(String(target.id), String(result.batchId));
-      if (String(destination()?.id) !== String(target.id) || migrationResult.batchId !== result.batchId || migrationResult.businessId !== String(target.id)) throw new Error('La respuesta de importación no coincide con el negocio seleccionado. El negocio permanece bloqueado.');
+      if (String(destination()?.id) !== String(target.id) || migrationResult.batchId !== result.batchId || migrationResult.businessId !== String(target.id)) throw window.PosMessages.expected('La respuesta de importación no coincide con el negocio seleccionado. El negocio permanece bloqueado.');
       renderFullMigrationOutcome(migrationResult);
       renderArchiveIdentityDetails();
       await refreshArchiveIdentityDecisions(target.id, result.batchId);
@@ -1019,7 +1032,7 @@
       setFullMigrationStage('reconciliation', 'pending');
       el('migrationFullDifferences').classList.remove('hidden');
       const item = document.createElement('li');
-      item.textContent = failure?.message || 'No se pudo completar la importación. El archivo local sigue disponible para reintentar.';
+      item.textContent = window.PosMessages.fromError(failure, 'No se pudo completar la importación. El archivo local sigue disponible para reintentar.');
       el('migrationFullDifferenceList').replaceChildren(item);
       el('migrationArchiveStatus').textContent = 'Migración pendiente. No se confirmó una conciliación completa y el negocio permanece inactivo.';
       el('migrationArchiveStatus').dataset.state = 'invalid';
@@ -1058,11 +1071,11 @@
       details.append(detailsSummary);
       const detailList = document.createElement('ul');
       const detailRows = paymentRows.length
-        ? paymentRows.map(payment => 'ID original ' + payment.sourcePaymentId + ' · Fecha ' + date(payment.date) + ' · Estado original: ' + (payment.originalStatus || 'No disponible') + ' · Aplicado a la deuda')
+        ? paymentRows.map(payment => 'Abono local de referencia ' + payment.sourcePaymentId + ' · Fecha ' + date(payment.date) + ' · Estado original: ' + (payment.originalStatus || 'No disponible') + ' · Aplicado a la deuda')
         : pendingIssues.map(issue => issue.message);
       detailList.replaceChildren(...detailRows.map(message => {
         const row = document.createElement('li');
-        row.textContent = message;
+        row.textContent = window.PosMessages.text(message, 'No se pudo mostrar el detalle de este abono.');
         return row;
       }));
       details.append(detailList);
@@ -1074,7 +1087,7 @@
       const warning = !issue.blocking && ['VOID_PAYMENT', 'UNALLOCATED_GENERAL_PAYMENT'].includes(issue.code);
       item.className = issue.blocking ? 'migration-error' : warning ? 'migration-warn' : 'migration-info';
       item.dataset.blocking = String(issue.blocking);
-      item.textContent = (issue.blocking ? 'Bloqueo: ' : warning ? 'Advertencia: ' : 'Información: ') + issue.message;
+      item.textContent = (issue.blocking ? 'Bloqueo: ' : warning ? 'Advertencia: ' : 'Información: ') + window.PosMessages.text(issue.message, 'No se pudo verificar este registro. Contacta al administrador.');
       return item;
     }));
     list.replaceChildren(...rows);
@@ -1098,12 +1111,11 @@
     try {
       const result = await previewCreditRequest(String(target.id), packageValue);
       if (token !== creditPreviewToken || requestToken !== packageReadToken || !canAccess() || destination()?.id !== target.id) return;
-      if (result.previewOnly !== true || typeof result.canImport !== 'boolean' || typeof result.eligible !== 'boolean') throw new Error('Respuesta de conciliación inválida.');
+      if (result.previewOnly !== true || typeof result.canImport !== 'boolean' || typeof result.eligible !== 'boolean') throw window.PosMessages.expected('No se pudo validar el resultado de la conciliación.');
       creditPreview = result;
-      const labels = { PAID: 'Pagada', OPEN: 'Pendiente', OVERDUE: 'Vencida', CANCELLED: 'Anulada', INVALID: 'Datos inválidos' };
       const date = value => value ? new Date(value).toLocaleString('es-NI', { timeZone: 'America/Managua' }) : '—';
-      creditRows('migrationCreditInvoices', result.invoices.map(row => [row.clientName, row.invoiceNumber, row.sourceSaleId, date(row.date) + ' / ' + date(row.dueAt), 'C$' + row.total, 'C$' + row.paid, 'C$' + row.balance, labels[row.status] || row.status]));
-      creditRows('migrationCreditPayments', result.payments.map(row => [row.sourcePaymentId + ' / ' + row.clientName, row.allocations.map(part => 'Factura ' + part.invoiceNumber + ': C$' + part.amount).join('; ') || (row.general ? 'General sin distribución' : row.sourceSaleId), date(row.date), 'C$' + row.amount, row.paymentMethod, row.originalStatus, row.cancelled ? 'Anulado; no descuenta' : row.appliesToDebt ? 'Aplicado históricamente' : 'Requiere revisión']));
+      creditRows('migrationCreditInvoices', result.invoices.map(row => [row.clientName, row.invoiceNumber, row.sourceSaleId, date(row.date) + ' / ' + date(row.dueAt), 'C$' + row.total, 'C$' + row.paid, 'C$' + row.balance, STATUS_LABELS[row.status] || 'Por revisar']));
+      creditRows('migrationCreditPayments', result.payments.map(row => [row.sourcePaymentId + ' / ' + row.clientName, row.allocations.map(part => 'Factura ' + part.invoiceNumber + ': C$' + part.amount).join('; ') || (row.general ? 'General sin distribución' : row.sourceSaleId), date(row.date), 'C$' + row.amount, PAYMENT_LABELS[row.paymentMethod] || 'Otro medio', STATUS_LABELS[row.originalStatus] || 'Por revisar', row.cancelled ? 'Anulado; no descuenta' : row.appliesToDebt ? 'Aplicado históricamente' : 'Requiere revisión']));
       creditRows('migrationCreditClients', result.clients.map(row => [row.clientName, row.declaredDebt, row.openingDebt, row.invoiceBalance, row.calculatedDebt, row.difference]));
       const totals = result.totals;
       el('migrationCreditTotals').textContent = totals.invoices + ' facturas · ' + totals.payments + ' abonos · Total C$' + totals.total + ' · Aplicado C$' + totals.paid + ' · Saldo C$' + totals.balance + (result.importable ? ' · Ya importadas: ' + result.importable.invoicesAlreadyImported + ' facturas / ' + result.importable.paymentGroupsAlreadyImported + ' abonos' : '');
@@ -1122,7 +1134,7 @@
       if (token !== creditPreviewToken || requestToken !== packageReadToken || !canAccess()) return;
       creditPreview = null;
       status.dataset.state = 'invalid';
-      status.textContent = failure?.message || 'No se pudo conciliar. La importación permanece bloqueada.';
+      status.textContent = window.PosMessages.fromError(failure, 'No se pudo conciliar. La importación permanece bloqueada.');
       renderCreditMigrationButton();
     } finally {
       if (token === creditPreviewToken) { section.setAttribute('aria-busy', 'false'); el('migrationCreditRefreshBtn').disabled = false; }
@@ -1209,7 +1221,7 @@
       completed = true;
     } catch (failure) {
       if (!canAccess() || requestToken !== packageReadToken) return;
-      const message = failure?.message || 'No se pudo completar la migración de créditos.';
+      const message = window.PosMessages.fromError(failure, 'No se pudo completar la migración de créditos.');
       el('migrationCreditStatus').dataset.state = 'invalid';
       el('migrationCreditStatus').textContent = message;
       errorBox.textContent = message;
@@ -1291,7 +1303,7 @@
     } catch (failure) {
       if (token !== inventoryPreviewToken || requestToken !== packageReadToken || !canAccess()) return;
       gateStatus.dataset.state = 'invalid';
-      gateStatus.textContent = failure?.message || 'No se pudo revisar el inventario destino.';
+      gateStatus.textContent = window.PosMessages.fromError(failure, 'No se pudo revisar el inventario destino.');
       gateStatus.classList.remove('hidden');
       renderInventoryMigrationButton();
     }
@@ -1347,7 +1359,7 @@
     } catch (failure) {
       if (!canAccess() || requestToken !== packageReadToken) return;
       status.dataset.state = 'invalid';
-      status.textContent = failure?.message || 'No se pudo completar la migración de inventario.';
+      status.textContent = window.PosMessages.fromError(failure, 'No se pudo completar la migración de inventario.');
       errorBox.textContent = status.textContent;
       errorBox.classList.remove('hidden');
     } finally {
@@ -1489,7 +1501,7 @@
       if (token !== salesPreviewToken || requestToken !== packageReadToken || !canAccess()) return;
       gateStatus.dataset.state = 'invalid';
       el('migrationSalesGateTitle').textContent = 'No se pudo revisar la migración';
-      el('migrationSalesGateWarnings').replaceChildren(node('li', 'migration-error', failure?.message || 'No se pudieron revisar las ventas del paquete.'));
+      el('migrationSalesGateWarnings').replaceChildren(node('li', 'migration-error', window.PosMessages.fromError(failure, 'No se pudieron revisar las ventas del paquete.')));
       gateStatus.classList.remove('hidden');
       renderSalesMigrationButton();
     }
@@ -1570,7 +1582,7 @@
     } catch (failure) {
       if (!canAccess() || requestToken !== packageReadToken) return;
       status.dataset.state = 'invalid';
-      status.textContent = failure?.message || 'No se pudo completar la migración de ventas.';
+      status.textContent = window.PosMessages.fromError(failure, 'No se pudo completar la migración de ventas.');
       errorBox.textContent = status.textContent;
       errorBox.classList.remove('hidden');
     } finally {
@@ -1660,7 +1672,7 @@
     } catch (failure) {
       if (token !== purchasesPreviewToken || requestToken !== packageReadToken || !canAccess()) return;
       gateStatus.dataset.state = 'invalid';
-      gateStatus.textContent = failure?.message || 'No se pudieron revisar las compras del paquete.';
+      gateStatus.textContent = window.PosMessages.fromError(failure, 'No se pudieron revisar las compras del paquete.');
       gateStatus.classList.remove('hidden');
       renderPurchasesMigrationButton();
     }
@@ -1718,7 +1730,7 @@
     } catch (failure) {
       if (!canAccess() || requestToken !== packageReadToken) return;
       status.dataset.state = 'invalid';
-      status.textContent = failure?.message || 'No se pudo completar la migración de compras.';
+      status.textContent = window.PosMessages.fromError(failure, 'No se pudo completar la migración de compras.');
       errorBox.textContent = status.textContent;
       errorBox.classList.remove('hidden');
     } finally {
@@ -1798,7 +1810,7 @@
     } catch (failure) {
       if (!canAccess() || requestToken !== packageReadToken) return;
       status.dataset.state = 'invalid';
-      status.textContent = failure?.message || 'No se pudo completar la migración básica.';
+      status.textContent = window.PosMessages.fromError(failure, 'No se pudo completar la migración básica.');
       const errorBox = el('migrationBasicConfirmError');
       errorBox.textContent = status.textContent;
       errorBox.classList.remove('hidden');
@@ -1876,7 +1888,7 @@
     el('migrationPackageStatus').textContent = '';
     let value;
     try {
-      if (!file || !/\.json$/i.test(file.name) || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 32 * 1024 * 1024 || !window.crypto?.subtle) throw new Error('Invalid package file');
+    if (!file || !/\.json$/i.test(file.name) || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 32 * 1024 * 1024 || !window.crypto?.subtle) throw window.PosMessages.expected('Selecciona un archivo .json válido, de hasta 32 MB, e inténtalo de nuevo.');
       const bytes = await file.arrayBuffer();
       packageFileSha256 = Array.from(new Uint8Array(await window.crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
       const rawText = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -2088,7 +2100,7 @@
       status.textContent = 'Resumen calculado exclusivamente desde el paquete JSON. No se consulto el POS local ni se enviaron datos al servidor.';
       renderReport();
     } catch (failure) {
-      status.textContent = failure?.message || 'No se pudo resumir el paquete JSON.';
+      status.textContent = window.PosMessages.fromError(failure, 'No se pudo resumir el paquete.');
     } finally {
       loading = false;
       el('migrationRefreshBtn').disabled = false;

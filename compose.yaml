@@ -1,0 +1,132 @@
+name: pos-docker-local
+
+x-backend-environment: &backend-environment
+  NODE_ENV: production
+  HOST: 0.0.0.0
+  PORT: 3000
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_NAME: pos_docker_local
+  DB_USER: pos_app
+  DB_PASSWORD: ${MYSQL_APP_PASSWORD:?Set MYSQL_APP_PASSWORD in the private .env file}
+  CORS_ORIGINS: ${CORS_ORIGINS:?Set exact browser origins in the private .env file}
+  CSRF_SECRET: ${CSRF_SECRET:?Set CSRF_SECRET in the private .env file}
+  COOKIE_SAME_SITE: lax
+  TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+  IMAGE_STORAGE_DIR: /var/lib/pos/product-images
+  DB_CONNECTION_LIMIT: 10
+  DB_CONNECT_TIMEOUT_MS: 5000
+  HEALTH_TIMEOUT_MS: 5000
+  SHUTDOWN_TIMEOUT_MS: 15000
+  JSON_LIMIT_BYTES: 1048576
+
+services:
+  mysql:
+    image: mysql:8.4.13
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+    environment:
+      MYSQL_DATABASE: pos_docker_local
+      MYSQL_USER: pos_app
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?Set MYSQL_APP_PASSWORD in the private .env file}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in the private .env file}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD-SHELL", 'MYSQL_PWD="$$MYSQL_ROOT_PASSWORD" mysql --user=root --database="$$MYSQL_DATABASE" --execute="SELECT 1" >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 1m
+
+  backend:
+    image: pos-local-backend:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment: *backend-environment
+    volumes:
+      - product_images:/var/lib/pos/product-images
+    expose:
+      - "3000"
+    networks:
+      - edge
+      - database
+    depends_on:
+      mysql:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 4s
+      retries: 5
+      start_period: 25s
+    restart: unless-stopped
+    stop_grace_period: 25s
+
+  frontend:
+    image: pos-local-frontend:latest
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "127.0.0.1:${POS_HTTP_PORT:-8080}:80"
+    networks:
+      - edge
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:rw,nosuid,nodev,noexec,size=32m
+      - /var/run:rw,nosuid,nodev,noexec,size=4m
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 4s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    image: pos-local-backend:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    profiles: [tools]
+    entrypoint: ["node", "backend/scripts/migrate-all.cjs"]
+    command: ["--plan", "--target", "pos_docker_local", "--confirm-target", "pos_docker_local", "--install-base-schema"]
+    environment: *backend-environment
+    networks:
+      - database
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+networks:
+  edge:
+    driver: bridge
+  database:
+    driver: bridge
+    internal: true
+
+volumes:
+  mysql_data:
+  product_images:

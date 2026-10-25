@@ -1,4 +1,4 @@
-const APP_ORIGIN = "http://127.0.0.1:5500";
+const APP_ORIGIN = new URL(process.env.POS_LOCAL_TEST_ORIGIN || "http://127.0.0.1:5500").origin;
 const reportedExternalFailures = new Set();
 
 function monitorRequests(page, errors) {

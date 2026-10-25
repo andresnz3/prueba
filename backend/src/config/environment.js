@@ -20,6 +20,7 @@ function readConfig(env = process.env) {
   return {
     images: require('./images').readImageConfig(env, mode),
     mode, host: required('HOST'), port: integer('PORT', 3000, 1, 65535), origins,
+    trustProxyHops: integer('TRUST_PROXY_HOPS', 0, 0, 2),
     jsonLimit: integer('JSON_LIMIT_BYTES', 16384, 1024, 1048576),
     healthTimeout: integer('HEALTH_TIMEOUT_MS', 4000, 100, 30000),
     shutdownTimeout: integer('SHUTDOWN_TIMEOUT_MS', 10000, 100, 60000),

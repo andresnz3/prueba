@@ -104,10 +104,10 @@ test('existing-target API verifies the same ID, protection review and explicit C
   await assert.rejects(client.inspectExistingMigrationTarget('1'), error => error.code === 'INVALID_INPUT');
 });
 
-test('missing 012/013 protection migrations is explained without hiding the server error', async () => {
+test('missing import protection is explained without exposing schema version details', async () => {
   const { client } = setup({ missingProtection: true });
   await client.me();
-  await assert.rejects(client.inspectExistingMigrationTarget('2'), error => error.code === 'MIGRATION_GATE_SCHEMA_REQUIRED' && error.status === 503 && error.message === 'Para usar la importación segura deben aplicarse las migraciones 012 y 013 en el servidor. No se modificó ningún negocio.');
+  await assert.rejects(client.inspectExistingMigrationTarget('2'), error => error.code === 'MIGRATION_GATE_SCHEMA_REQUIRED' && error.status === 503 && error.message === 'La importación todavía no está disponible. Contacta al administrador del sistema; no se modificó ningún negocio.');
 });
 
 test('catalog projection API is CSRF-protected and never claims full completion', async () => {

@@ -14,6 +14,7 @@ test.afterEach(async ({ page }) => { expect(errors.get(page)).toEqual([]); });
 
 async function login(page) {
   await page.route('https://**/*', route => route.abort());
+  await page.route('**/vendor/xlsx/xlsx.full.min.js', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: '' }));
   await page.addInitScript(() => {
     const col = index => { let value = index + 1, result = ''; while (value) { value -= 1; result = String.fromCharCode(65 + value % 26) + result; value = Math.floor(value / 26); } return result; };
     window.XLSX = {

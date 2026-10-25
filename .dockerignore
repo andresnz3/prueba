@@ -1,0 +1,17 @@
+.git
+.codex
+.agents
+**/node_modules
+**/.env
+**/.env.*
+!**/.env.example
+dist
+test-results
+test-results-connected
+tests
+tests-connected
+tests-connectedhelpers
+backups
+docker-backups
+.backups
+prueba-compras.json

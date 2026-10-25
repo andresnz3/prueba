@@ -3,7 +3,7 @@ const { createHash } = require('node:crypto');
 const { httpError } = require('../middleware/errors');
 const { fixed, units } = require('./inventory-values');
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const modules = Object.freeze({ PURCHASE: 'purchases', CANCEL_PURCHASE: 'purchases', EXPENSE: 'expenses', CANCEL_EXPENSE: 'expenses', SUPPLIER_PAYMENT: 'payables', CUSTOMER_PAYMENT_VOID: 'clients', SUPPLIER_PAYMENT_VOID: 'payables', CASH_MANUAL: 'cash' });
+const modules = Object.freeze({ PURCHASE: 'purchases', EDIT_PURCHASE: 'purchases', CANCEL_PURCHASE: 'purchases', EXPENSE: 'expenses', CANCEL_EXPENSE: 'expenses', SUPPLIER_PAYMENT: 'payables', CUSTOMER_PAYMENT_VOID: 'clients', SUPPLIER_PAYMENT_VOID: 'payables', CASH_MANUAL: 'cash' });
 function createFinancialService({ repo, auth, config }) {
   async function permitted(db, current, module) {
     const [valid] = await repo.rows(db, 'SELECT id FROM sessions WHERE business_id=? AND id=? AND revoked_at IS NULL AND expires_at>UTC_TIMESTAMP(3) AND created_at>TIMESTAMPADD(SECOND,-?,UTC_TIMESTAMP(3))', [current.business_id, current.session_id, config.absoluteSeconds]);

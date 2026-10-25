@@ -7,7 +7,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "eslint .",
     "check:encoding": "node scripts/check-text-encoding.cjs",
-    "test:local-browser": "node scripts/run-local-playwright.cjs"
+    "check:vendor": "node scripts/check-vendored-assets.cjs",
+    "test:local-browser": "node scripts/run-local-playwright.cjs",
+    "test:docker:frontend": "node scripts/test-docker-frontend.cjs"
   },
   "repository": {
     "type": "git",

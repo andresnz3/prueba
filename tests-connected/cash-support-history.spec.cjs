@@ -27,8 +27,8 @@ async function seedCashHistory() {
     for (let index = 0; index < 32; index++) {
       const direction = index % 2 === 0 ? 'IN' : 'OUT';
       await pool.execute(
-        'INSERT INTO cash_movements (business_id,cash_session_id,user_id,type,direction,amount,description,status,created_at,is_historical,source_actor,source_status,source_method) VALUES (?,?,?, ?,?,?,?,\'CONFIRMED\',?,TRUE,?,\'CONFIRMED\',\'CASH\')',
-        [targetBusinessId, sessionIds[index % sessionIds.length], owner.id, direction === 'IN' ? 'MANUAL_ENTRY' : 'MANUAL_EXIT', direction, (index + 1).toFixed(2), 'Migrated historical movement ' + (index + 1), '2026-09-' + String(10 + index % 5).padStart(2, '0') + ' 12:00:00.000', 'Legacy cashier']
+        'INSERT INTO cash_movements (business_id,cash_session_id,user_id,type,direction,amount,description,status,created_at,is_historical,source_actor,source_status,source_method) VALUES (?,?,?, ?,?,?,?,\'CONFIRMED\',?,TRUE,?,\'CONFIRMED\',?)',
+        [targetBusinessId, sessionIds[index % sessionIds.length], owner.id, direction === 'IN' ? 'MANUAL_ENTRY' : 'MANUAL_EXIT', direction, (index + 1).toFixed(2), 'Migrated historical movement ' + (index + 1), '2026-09-' + String(10 + index % 5).padStart(2, '0') + ' 12:00:00.000', 'Legacy cashier', index < 2 ? null : 'CASH']
       );
     }
     const [[snapshot]] = await pool.execute('SELECT (SELECT COUNT(*) FROM cash_sessions WHERE business_id=?) AS sessions,(SELECT COUNT(*) FROM cash_movements WHERE business_id=?) AS movements,(SELECT SUM(amount) FROM cash_movements WHERE business_id=?) AS amount,(SELECT SUM(opening_amount) FROM cash_sessions WHERE business_id=?) AS opening', [targetBusinessId, targetBusinessId, targetBusinessId, targetBusinessId]);
@@ -67,7 +67,7 @@ test('Caja histórica del negocio administrado permite reintento sin pantalla en
   await page.locator('#navCajaBtn').click();
   await expect(page.locator('#cajaView')).toBeVisible();
   await expect(page.locator('#cashLoadStatus')).toBeVisible();
-  await expect(page.locator('#cashLoadMessage')).toContainText('No se pudo cargar Caja');
+  await expect(page.locator('#cashLoadMessage')).toContainText('No se pudo cargar Caja. Revisa la conexión e inténtalo nuevamente.');
   await expect(page.locator('#retryCashLoadBtn')).toBeVisible();
   await expect(page.locator('#abrirCajaBtn')).toBeDisabled();
   await expect(page.locator('#salesView')).toBeHidden();
@@ -89,6 +89,10 @@ test('Caja histórica del negocio administrado permite reintento sin pantalla en
   await expect(page.locator('#cashLoadStatus')).toBeHidden();
   await expect(page.locator('#cajaHistorialBody tr[data-table-date]')).toHaveCount(5);
   await expect(page.locator('#cajaMovimientosBody tr[data-table-date]')).toHaveCount(32);
+  const movementText = await page.locator('#cajaMovimientosBody').innerText();
+  expect(movementText).toContain('Ingreso manual');
+  expect(movementText).toContain('Retiro manual');
+  expect(movementText).not.toMatch(/MANUAL_(?:ENTRY|EXIT)/);
   await expect(page.locator('#abrirCajaBtn')).toBeEnabled();
   const noCloseData = page.locator('#cajaHistorialBody tr[data-table-date]').filter({ hasText: 'No registrado' }).last();
   await noCloseData.getByRole('button', { name: 'Detalles' }).click();

@@ -6,6 +6,7 @@
   const LEGACY_BUSINESS_ID = '00000000-0000-0000-0000-000000000000';
   const STORE_NAMES = ['products', 'clients', 'suppliers', 'sales', 'purchases', 'cajaSessions', 'inventory_movements', 'abonos', 'gastos', 'audit_logs', 'saleOrders', 'sync_queue'];
   const STORE_LABELS = { products: 'Productos', clients: 'Clientes', suppliers: 'Proveedores', sales: 'Ventas', purchases: 'Compras', cajaSessions: 'Caja', inventory_movements: 'Inventario', abonos: 'Abonos', gastos: 'Gastos', audit_logs: 'Auditoría', saleOrders: 'Órdenes pendientes', sync_queue: 'Operaciones locales pendientes' };
+  const FIELD_LABELS = { business_id: 'negocio de origen', clienteId: 'cliente relacionado', clientId: 'cliente relacionado', proveedorId: 'proveedor relacionado', supplierId: 'proveedor relacionado', productoId: 'producto relacionado', productId: 'producto relacionado', facturaId: 'factura relacionada', saleId: 'venta relacionada', compraId: 'compra relacionada', purchaseId: 'compra relacionada', cajaSessionId: 'sesión de Caja relacionada', cashSessionId: 'sesión de Caja relacionada', referenciaId: 'registro relacionado' };
   const normalizeFieldName = key => key.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
   const SAFE_RELATION_KEYS = new Set([
     'id', 'clienteId', 'proveedorId', 'productoId', 'productId', 'facturaId', 'compraId', 'ventaId',
@@ -27,6 +28,7 @@
   ];
   const el = id => document.getElementById(id);
   const text = value => String(value ?? '').trim();
+  const fieldLabel = value => FIELD_LABELS[value] || 'referencia relacionada';
   const norm = value => text(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
   const countText = value => Number(value || 0).toLocaleString('es-NI');
   let packageData = null;
@@ -164,7 +166,7 @@
   }
 
   async function readOnlySnapshot(identity) {
-    if (!(await Dexie.exists(DB_NAME))) throw new Error('No se encontró la base local POS_OfflineDB en este navegador.');
+    if (!(await Dexie.exists(DB_NAME))) throw window.PosMessages.expected('No se encontró información anterior de este POS en este dispositivo.');
     const db = await new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME);
       request.onupgradeneeded = () => request.transaction.abort();
@@ -284,7 +286,7 @@
     const warnings = WARNING_LABELS.map(([code, label]) => ({ code, label, count: warningCounts[code] }));
     if (snapshot.missingStores.length) warnings.push({
       code: 'LOCAL_STORES_NOT_PRESENT', label: 'Tiendas locales no encontradas', count: snapshot.missingStores.length,
-      detail: 'No se detectaron: ' + snapshot.missingStores.join(', ') + '. Verifica que esta instalación haya abierto el negocio local con la versión actual antes de exportar.'
+      detail: 'No encontramos información de estos módulos: ' + snapshot.missingStores.map(name => STORE_LABELS[name] || 'otro módulo').join(', ') + '. Abre el negocio en este POS y vuelve a generar el archivo.'
     });
     if (snapshot.tables.sync_queue.length) warnings.push({
       code: 'LOCAL_QUEUE_REQUIRES_REVIEW', label: 'Operaciones locales pendientes de revisión', count: snapshot.tables.sync_queue.length,
@@ -343,11 +345,11 @@
       const list = document.createElement('ul');
       for (const row of value.legacyReferences) {
         const item = document.createElement('li');
-        item.textContent = `Referencia ${row.id} · ${row.identity === 'shared' ? 'ID compartido' : row.identity === 'inferred' ? 'ID encontrado en los datos, no guardado en la configuración' : 'sin ID de negocio'}`;
+        item.textContent = `Referencia ${row.id} · ${row.identity === 'shared' ? 'identificador antiguo compartido' : row.identity === 'inferred' ? 'identificador encontrado en los datos, no guardado en los ajustes' : 'sin identificación del negocio'}`;
         list.append(item);
       }
       for (const row of value.otherBusinessReferences) {
-        const item = document.createElement('li'); item.textContent = `Referencia ${row.id} · otra identidad: ${row.businessId}`; list.append(item);
+        const item = document.createElement('li'); item.textContent = `Referencia ${row.id} · asociada a otro negocio`; list.append(item);
       }
       for (const row of value.duplicateReferences) {
         const item = document.createElement('li'); item.textContent = `Referencia repetida ${row.id} · aparición ${row.duplicate}`; list.append(item);
@@ -357,7 +359,7 @@
     }
     for (const issue of review.referenceIssues) {
       const item = document.createElement('p');
-      item.textContent = `${STORE_LABELS[issue.module] || issue.module}: referencia ${issue.record}, campo ${issue.field} → ${issue.target} ${issue.value} (${issue.issue === 'CROSS_BUSINESS_REFERENCE' ? 'otra identidad' : 'no encontrada'}).`;
+      item.textContent = `${STORE_LABELS[issue.module] || 'Información'}: referencia ${issue.record}, ${fieldLabel(issue.field)} ${issue.issue === 'CROSS_BUSINESS_REFERENCE' ? 'asociada a otro negocio' : 'no encontrada'}.`;
       container.append(item);
     }
     if (review.referenceIssuesTruncated) {
@@ -433,7 +435,7 @@
     el('migrationExportDownloadBtn').disabled = true;
     el('migrationExportReview').classList.add('hidden');
     const status = el('migrationExportStatus');
-    status.textContent = 'Leyendo POS_OfflineDB en modo solo lectura…';
+    status.textContent = 'Revisando la información guardada anteriormente en este POS…';
     try {
       const identity = readLocalConfig();
       const snapshot = await readOnlySnapshot(identity);
@@ -478,15 +480,15 @@
       renderWarnings(warnings);
       renderIdentityReview(snapshot.identityReview);
       const idNote = snapshot.businessId
-        ? (snapshot.idSource === 'inferred' ? 'Se encontró un único identificador en los registros, pero no estaba guardado en la configuración; esos registros aún requieren confirmación.' : 'Se usó el identificador persistente de esta instalación.')
-        : 'No hay ID local por negocio; el paquete incluye el grupo heredado de POS_OfflineDB y podría contener datos guardados con nombres anteriores.';
-      el('migrationExportScope').textContent = idNote + (snapshot.excludedRecords ? ' Se excluyeron ' + countText(snapshot.excludedRecords) + ' registros con otros business_id.' : '') + ' La lectura no modificó ningún registro.';
+        ? (snapshot.idSource === 'inferred' ? 'Encontramos una identificación común en los registros, pero no estaba guardada en los ajustes; todavía requiere confirmación.' : 'Se usó la identificación guardada para esta instalación.')
+        : 'No encontramos una identificación propia para esta instalación. El archivo conserva los registros antiguos y no usa el nombre del negocio para atribuirlos automáticamente.';
+      el('migrationExportScope').textContent = idNote + (snapshot.excludedRecords ? ' Se excluyeron ' + countText(snapshot.excludedRecords) + ' registros identificados como pertenecientes a otro negocio.' : '') + ' La revisión no modificó ningún registro.';
       el('migrationExportFilename').textContent = 'Nombre del archivo: ' + name;
       el('migrationExportReview').classList.remove('hidden');
       el('migrationExportDownloadBtn').disabled = false;
       status.textContent = 'Resumen listo. Revisa los conteos y advertencias antes de descargar.';
     } catch (failure) {
-      status.textContent = 'No se pudo generar el resumen: ' + (failure?.message || 'error desconocido') + '.';
+      status.textContent = window.PosMessages.fromError(failure, 'No se pudo revisar la información anterior. No se modificaron los datos; inténtalo de nuevo.');
     } finally {
       busy = false;
       el('migrationExportGenerateBtn').disabled = false;

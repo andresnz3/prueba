@@ -65,6 +65,16 @@ for (const key of ['HOST', 'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSW
 for (const [key, value] of [['DB_PORT', '3307abc'], ['PORT', '0'], ['DB_CONNECTION_LIMIT', '0'], ['DB_CONNECT_TIMEOUT_MS', '-1'], ['HEALTH_TIMEOUT_MS', 'Infinity'], ['JSON_LIMIT_BYTES', '99999999'], ['NODE_ENV', 'invalid'], ['CORS_ORIGINS', '*'], ['CORS_ORIGINS', 'https://example.com/path']]) {
   test('config rechaza ' + key + '=' + value, () => assert.throws(() => readConfig({ ...valid, [key]: value })));
 }
+for (const value of ['-1', '3', 'true']) {
+  test('config rechaza TRUST_PROXY_HOPS=' + value, () => assert.throws(() => readConfig({ ...valid, TRUST_PROXY_HOPS: value })));
+}
+test('config confia solo en los saltos de proxy declarados', () => {
+  assert.equal(readConfig(valid).trustProxyHops, 0);
+  assert.equal(readConfig({ ...valid, TRUST_PROXY_HOPS: '1' }).trustProxyHops, 1);
+  assert.equal(readConfig({ ...valid, TRUST_PROXY_HOPS: '2' }).trustProxyHops, 2);
+  assert.equal(createApp({ config: readConfig(valid), checkDatabase: async () => {} }).get('trust proxy'), 0);
+  assert.equal(createApp({ config: readConfig({ ...valid, TRUST_PROXY_HOPS: '1' }), checkDatabase: async () => {} }).get('trust proxy'), 1);
+});
 test('config valida sin valores de credenciales por defecto', () => {
   assert.equal(readConfig(valid).database.port, 3307);
   assert.equal(readConfig(valid).database.database, 'pos_multitenant');

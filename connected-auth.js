@@ -19,7 +19,7 @@
   let systemAdminDeleteBusiness = null, systemAdminDeleteTrigger = null, systemAdminDeletePreview = null, systemAdminDeletePreviewToken = 0, systemAdminPaymentBusiness = null, systemAdminPaymentTrigger = null;
   const assertGeneration = value => { if (generation !== value) throw new window.PosApiError('STALE_REQUEST'); };
   let expiryTimer, grantTimer, busy = false, passwordUserId = null, userPage = 0;
-  function message(id, text) { el(id).textContent = text; el(id).classList.remove('hidden'); }
+  function message(id, text) { el(id).textContent = window.PosMessages.text(text, 'No se pudo completar la solicitud. Inténtalo nuevamente.'); el(id).classList.remove('hidden'); }
   function clearPasswords() { for (const id of ['loginPassword', 'gestorPassword', 'newUserPassword', 'changedUserPassword']) el(id).value = ''; }
   const isSystemAdmin = () => Boolean(identity && identity.username === 'andres' && identity.role === 'ADMIN' && String(identity.businessId) === '1');
   const effectiveBusinessId = () => supportContext?.businessId || ownerBusinessId;
@@ -55,7 +55,7 @@
   function error(error, target = 'connectedNotice') {
     if (error.code === 'STALE_REQUEST') return;
     if (error.code === 'INVALID_SESSION') { expire(); return; }
-    message(target, error.message || 'No se pudo completar la solicitud.');
+    message(target, window.PosMessages.fromError(error, 'No se pudo completar la solicitud. Inténtalo nuevamente.'));
   }
   function scheduleExpiry(value) {
     clearTimeout(expiryTimer);
@@ -109,7 +109,7 @@
   function systemAdminDeleteError(text, { inputInvalid = true } = {}) {
     const field = el('systemAdminDeleteInput');
     const errorText = el('systemAdminDeleteError');
-    errorText.textContent = text;
+    errorText.textContent = window.PosMessages.text(text, 'No se pudo completar la eliminación. Inténtalo nuevamente.');
     errorText.classList.remove('hidden');
     if (inputInvalid) field.setAttribute('aria-invalid', 'true');
   }
@@ -155,7 +155,7 @@
       summary.textContent = 'No se pudo cargar el resumen. No es posible confirmar la eliminación.';
       systemAdminDeletePreview = null;
       confirm.disabled = true;
-      systemAdminDeleteError(failure.message || 'No se pudo preparar la eliminación de forma segura.', { inputInvalid: false });
+        systemAdminDeleteError(window.PosMessages.fromError(failure, 'No se pudo preparar la eliminación de forma segura. Inténtalo nuevamente.'), { inputInvalid: false });
     }
   }
   function openSystemAdminDeleteModal(business, trigger) {
@@ -230,7 +230,7 @@
       }
       const actions = document.createElement('td');
       const users = document.createElement('button'); users.type = 'button'; users.className = 'btn btn-secondary'; users.textContent = 'Ver usuarios';
-      users.addEventListener('click', () => { systemAdminSelectedBusinessId = business.id; updateSystemAdminBusinessOptions(); selectSystemAdminTab('users'); }); actions.append(users);
+      users.addEventListener('click', () => { systemAdminSelectedBusinessId = business.id; el('systemAdminUserBusinessId').value = business.id; updateSystemAdminBusinessOptions(); selectSystemAdminTab('users'); }); actions.append(users);
       if (business.id === '1') {
         const protectedLabel = document.createElement('span'); protectedLabel.className = 'system-admin-help'; protectedLabel.textContent = 'Negocio del sistema'; actions.append(protectedLabel);
       } else if (business.migrationState === 'PENDING') {
@@ -281,7 +281,8 @@
     const body = el('systemAdminUsersBody'); body.replaceChildren();
     for (const user of systemAdminUsers) {
       const row = document.createElement('tr'); row.dataset.userId = user.id;
-      for (const text of [user.username, user.fullName, systemAdminBusinesses.find(business => business.id === user.businessId)?.name || user.businessId, user.role, user.active ? 'Activo' : 'Inactivo']) {
+      const roleLabel = user.role === 'ADMIN' ? 'Administrador' : user.role === 'VENDEDOR' ? 'Vendedor' : 'Por revisar';
+      for (const text of [user.username, user.fullName, systemAdminBusinesses.find(business => business.id === user.businessId)?.name || 'Negocio no disponible', roleLabel, user.active ? 'Activo' : 'Inactivo']) {
         const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
       }
       const actions = document.createElement('td');
@@ -434,7 +435,7 @@
     for (const id of ['systemAdminPaymentAmount', 'systemAdminPaymentDate']) el(id).setAttribute('aria-invalid', 'false');
   }
   function systemAdminPaymentError(text, fieldId) {
-    const errorText = el('systemAdminPaymentError'); errorText.textContent = text; errorText.classList.remove('hidden');
+    const errorText = el('systemAdminPaymentError'); errorText.textContent = window.PosMessages.text(text, 'No se pudo completar el pago. Revisa la información e inténtalo nuevamente.'); errorText.classList.remove('hidden');
     const field = el(fieldId); field.setAttribute('aria-invalid', 'true'); field.focus();
   }
   function closeSystemAdminPaymentModal({ restoreFocus = true } = {}) {
@@ -461,7 +462,7 @@
       if (business.monthly) el('systemAdminPaymentAmount').focus(); else el('systemAdminPaymentTitle').focus();
     } catch (failure) {
       if (failure.code === 'INVALID_SESSION') error(failure, 'systemAdminMessage');
-      else { const field = business.monthly ? 'systemAdminPaymentAmount' : 'systemAdminPaymentTitle'; systemAdminPaymentError(failure.message || 'No se pudo cargar el historial de pagos.', field); }
+      else { const field = business.monthly ? 'systemAdminPaymentAmount' : 'systemAdminPaymentTitle'; systemAdminPaymentError(window.PosMessages.fromError(failure, 'No se pudo cargar el historial de pagos. Inténtalo de nuevo.'), field); }
     }
   }
   function renderSystemAdminPaymentHistory(payments) {
@@ -587,7 +588,7 @@
       // Si una cookie valida permanecio tras una interrupcion, restaurar solo la misma identidad.
       const value = await api.login(el('loginUsername').value.trim(), el('loginPassword').value);
       clearPasswords(); await establish(value);
-    } catch (failure) { if (identity) expire(failure.message); else error(failure, 'loginError'); }
+    } catch (failure) { if (identity) expire(window.PosMessages.fromError(failure, 'La sesión no pudo recuperarse. Inicia sesión nuevamente.')); else error(failure, 'loginError'); }
     finally { clearPasswords(); button.disabled = false; busy = false; }
   }
   async function logout() {
@@ -638,7 +639,7 @@
       const row = document.createElement('tr'); row.dataset.userId = user.id;
       for (const text of [user.username, user.fullName]) { const cell = document.createElement('td'); cell.textContent = text; row.append(cell); }
       const roleCell = document.createElement('td'), select = document.createElement('select'); select.setAttribute('aria-label', 'Rol de ' + user.username);
-      for (const value of ['VENDEDOR', 'ADMIN']) { const option = new Option(value, value); select.add(option); } select.value = user.role; roleCell.append(select); row.append(roleCell);
+      for (const value of ['VENDEDOR', 'ADMIN']) { const option = new Option(value === 'ADMIN' ? 'Administrador' : 'Vendedor', value); select.add(option); } select.value = user.role; roleCell.append(select); row.append(roleCell);
       const state = document.createElement('td'); state.textContent = user.active ? 'Activo' : 'Inactivo'; row.append(state);
       const actions = document.createElement('td');
       function action(text, callback) {
@@ -700,7 +701,7 @@
       if (failure.code === 'INVALID_SESSION') error(failure, 'systemAdminMessage');
       else {
         const fieldId = failure.field === 'paymentDate' ? 'systemAdminPaymentDate' : 'systemAdminPaymentAmount';
-        systemAdminPaymentError(failure.message || 'No se pudo registrar el pago.', fieldId);
+        systemAdminPaymentError(window.PosMessages.fromError(failure, 'No se pudo registrar el pago. Revisa la información e inténtalo nuevamente.'), fieldId);
       }
     } finally {
       busy = false; modal.removeAttribute('aria-busy');
@@ -747,7 +748,7 @@
         if (systemAdminDeletePreview) systemAdminDeleteError('La información cambió. Revisa el resumen actualizado y escribe ELIMINAR otra vez.', { inputInvalid: false });
       }
       else if (modal.classList.contains('hidden')) error(failure, 'systemAdminMessage');
-      else systemAdminDeleteError(failure.message || 'No se pudo eliminar el negocio.');
+      else systemAdminDeleteError(window.PosMessages.fromError(failure, 'No se pudo eliminar el negocio. Inténtalo nuevamente.'));
     } finally {
       busy = false;
       modal.removeAttribute('aria-busy');
@@ -759,6 +760,7 @@
   });
   el('systemAdminUserBusinessId').addEventListener('change', async () => {
     if (!canAccessSystemAdmin() || systemAdminTab !== 'users') return;
+    systemAdminSelectedBusinessId = el('systemAdminUserBusinessId').value;
     clearSystemAdminMessage();
     try { await verify(); await refreshSystemAdminUsers(); }
     catch (failure) { error(failure, 'systemAdminMessage'); }
@@ -883,7 +885,7 @@
   (async () => {
     busy = true; mode.disabled = true; el('loginForm').querySelector('button').disabled = true;
     try { await establish(await api.me()); }
-    catch (failure) { if (identity) expire(failure.message); else if (failure.code !== 'INVALID_SESSION') error(failure, 'loginError'); }
+    catch (failure) { if (identity) expire(window.PosMessages.fromError(failure, 'La sesión no pudo recuperarse. Inicia sesión nuevamente.')); else if (failure.code !== 'INVALID_SESSION') error(failure, 'loginError'); }
     finally { busy = false; mode.disabled = false; el('loginForm').querySelector('button').disabled = false; }
   })();
 })();

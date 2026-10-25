@@ -45,6 +45,7 @@
   }
   function field(id, message, focus = true) {
     const node = document.getElementById(id); if (!node) return;
+    message = window.PosMessages?.text(message, 'Revisa este campo e inténtalo nuevamente.') || 'Revisa este campo e inténtalo nuevamente.';
     const errorId = id + 'FieldError'; let error = document.getElementById(errorId);
     const slot = feedbackSlot(node);
     if (!error) { error = document.createElement('small'); error.id = errorId; error.className = 'field-error'; error.dataset.fieldId = id; error.setAttribute('role', 'alert'); slot?.append(error); }

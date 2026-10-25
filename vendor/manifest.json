@@ -1,0 +1,42 @@
+{
+  "libraries": {
+    "dexie": {
+      "version": "3.2.7",
+      "license": "Apache-2.0",
+      "source": "https://www.npmjs.com/package/dexie/v/3.2.7"
+    },
+    "html5-qrcode": {
+      "version": "2.3.8",
+      "license": "Apache-2.0",
+      "source": "https://www.npmjs.com/package/html5-qrcode/v/2.3.8"
+    },
+    "html2pdf.js": {
+      "version": "0.14.0",
+      "license": "MIT",
+      "bundledDependencies": {
+        "jspdf": "4.2.1",
+        "dompurify": "3.4.17",
+        "html2canvas": "1.4.1"
+      },
+      "source": "https://github.com/eKoopmans/html2pdf.js/releases/tag/v0.14.0"
+    },
+    "xlsx": {
+      "version": "0.20.3",
+      "license": "Apache-2.0",
+      "source": "https://docs.sheetjs.com/docs/getting-started/installation/standalone/"
+    },
+    "Inter Variable": {
+      "version": "5.3.0",
+      "license": "OFL-1.1",
+      "source": "https://www.npmjs.com/package/@fontsource-variable/inter/v/5.3.0"
+    }
+  },
+  "sha256": {
+    "vendor/dexie/dexie.min.js": "d8986a1552b49a7d8cb085a92c66985aebf3bb33b64ad6f7baed2461d9b647ff",
+    "vendor/fonts/inter-latin-ext-wght-normal.woff2": "34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956",
+    "vendor/fonts/inter-latin-wght-normal.woff2": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62",
+    "vendor/html2pdf/html2pdf.bundle.min.js": "60fddbc32dfb63d8c9be888af458dde368e536566f39c7ffff11063fa5f6e27d",
+    "vendor/html5-qrcode/html5-qrcode.min.js": "660b12437b1d747e3e68b8be0685c08cb728140110ad213f167b14b66f8b1d8e",
+    "vendor/xlsx/xlsx.full.min.js": "cc015130aa8521e7f088f88898eba949ccdcbfb38df0bd129b44b7273c3a6f41"
+  }
+}

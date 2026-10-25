@@ -10,10 +10,10 @@
   const formatDate = value => value ? new Date(value).toLocaleDateString() : '-';
   const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase();
   const clientMatches = (client, query) => [client.name, client.phone, client.ruc, client.id].some(value => normalize(value).includes(normalize(query)));
-  const statusText = value => ({ OPEN: 'Pendiente', OVERDUE: 'Vencida', PAID: 'Pagada', CANCELLED: 'Anulada', PENDING_CONFIRMATION: 'Abono pendiente de confirmar' }[value] || value);
+  const statusText = value => ({ OPEN: 'Pendiente', OVERDUE: 'Vencida', PAID: 'Pagada', CANCELLED: 'Anulada', PENDING_CONFIRMATION: 'Abono pendiente de confirmar' }[value] || 'Por revisar');
   function message(text, kind = 'success') {
     const node = el('clientsNotice'); if (!node) return;
-    node.textContent = text; node.className = 'message ' + kind;
+    node.textContent = window.PosMessages.text(text, 'No se pudo completar la solicitud. Inténtalo nuevamente.'); node.className = 'message ' + kind;
     node.classList.toggle('hidden', !text);
   }
   async function allPages(method, q = '') {
@@ -93,7 +93,7 @@
       clients = nextClients; receivables = nextReceivables;
       renderClients(); renderReceivables(); message('');
       if (isUserSearching && !selectedClientSuggestionId) clientAutocomplete?.refresh();
-    } catch (error) { if (request === pageRequest) message(error.message, 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
+    } catch (error) { if (request === pageRequest) message(window.PosMessages.fromError(error, 'No se pudieron cargar los clientes y sus saldos. Actualiza la pantalla e inténtalo de nuevo.'), 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
   }
   function fillCreditSelect(values, selected) {
     const select = el('creditClientSelect'); if (!select) return;
@@ -119,7 +119,7 @@
       const keepSelection = explicitSelection || (current && normalize(current.name) === normalize(el('creditClientSearch')?.value));
       fillCreditSelect(values, keepSelection ? selected : '');
     }
-    catch (error) { if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else window.showAlert(error.message); }
+    catch (error) { if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else window.showAlert(window.PosMessages.fromError(error, 'No se pudo cargar la lista de clientes. Actualiza la pantalla e inténtalo de nuevo.')); }
   }
   function edit(id) {
     const client = clients.find(item => item.id === String(id)); if (!client) return;
@@ -143,13 +143,13 @@
       await loadCreditClients(value?.id);
       if (value?.id) el('creditClientSearch').value = value.name;
       message(id ? 'Cliente actualizado.' : 'Cliente creado.');
-    } catch (error) { message(error.message, 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
+    } catch (error) { message(window.PosMessages.fromError(error, 'No se pudo guardar el cliente. Revisa la información e inténtalo de nuevo.'), 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { button.disabled = false; }
   }
   async function toggle(id) {
     const client = clients.find(item => item.id === String(id)); if (!client) return;
     try { await api(apiClient => apiClient.setClientActive(id, !client.active)); await load(); await loadCreditClients(); message(client.active ? 'Cliente inactivado.' : 'Cliente activado.'); }
-    catch (error) { message(error.message, 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
+    catch (error) { message(window.PosMessages.fromError(error, 'No se pudo actualizar el cliente. Inténtalo de nuevo.'), 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
   }
   async function statement(id) {
     try {
@@ -224,7 +224,7 @@
       }
       window.PosPeriodFilters?.filterTable('statementTableBody', window.PosPeriodFilters.range('statement'));
       el('statementModal').classList.remove('hidden');
-    } catch (error) { message(error.message, 'error'); }
+    } catch (error) { message(window.PosMessages.fromError(error, 'No se pudo cargar el historial del cliente. Inténtalo de nuevo.'), 'error'); }
   }
   function openPayment(id) {
     const item = receivables.find(value => value.id === String(id)); if (!item || item.status === 'CANCELLED' || item.remaining === '0.00') return;

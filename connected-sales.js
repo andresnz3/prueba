@@ -3,7 +3,7 @@
 (() => {
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
-  const financialKinds = ['PURCHASE', 'CANCEL_PURCHASE', 'EXPENSE', 'CANCEL_EXPENSE', 'SUPPLIER_PAYMENT', 'CUSTOMER_PAYMENT_VOID', 'SUPPLIER_PAYMENT_VOID', 'CASH_MANUAL'];
+  const financialKinds = ['PURCHASE', 'EDIT_PURCHASE', 'CANCEL_PURCHASE', 'EXPENSE', 'CANCEL_EXPENSE', 'SUPPLIER_PAYMENT', 'CUSTOMER_PAYMENT_VOID', 'SUPPLIER_PAYMENT_VOID', 'CASH_MANUAL'];
   let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, displayedCashSessions = [], salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0;
   const state = () => window.PosRuntime.salesInput();
   const scope = () => { const s = state(); return 'posOperation_' + encodeURIComponent(window.POS_API_BASE_URL) + '_' + s.businessId + '_' + s.userId; };
@@ -12,6 +12,9 @@
     if (!value) return null;
     try { const result = JSON.parse(value); if (/^[a-f0-9-]{36}$/.test(result.key) && [...financialKinds, 'SALE', 'CANCEL', 'OPEN_CASH', 'CLOSE_CASH', 'PREPARE_ORDER', 'ORDER_CHARGE', 'ORDER_CANCEL', 'PAYMENT_CONFIRM', 'CUSTOMER_PAYMENT'].includes(result.kind)) return result; } catch { /* Invalid marker stays blocked until checked. */ }
     throw new Error('No se pudo leer la referencia de la operación pendiente.');
+  }
+  function cashMovementDescription(value) {
+    return String(value || '').replace(/(·\s*)(CASH|CARD|TRANSFER|CREDIT)\b/g, (_, separator, method) => separator + ({ CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia', CREDIT: 'Crédito' })[method]);
   }
   function notice(text = '') { el('saleOperationMessage').textContent = text; el('saleOperationMessage').classList.toggle('hidden', !text); el('recoverSaleBtn').classList.toggle('hidden', !text); }
   function showPending() { if (pending()) notice('Hay una operación cuyo resultado debe comprobarse antes de volver a cobrar. Requiere conexión.'); else notice(); }
@@ -96,7 +99,7 @@
       for (const id of ['summaryTodaySales', 'summaryTotalSales', 'summaryCashSales', 'summaryCardSales', 'summaryTransferSales', 'summaryCreditSales', 'summaryTotalExpenses']) { const node = el(id); if (node) node.textContent = '—'; }
       renderHistoryList('lowStockList', [], 'No disponible sin autorización de Reportes.', value => value);
       renderHistoryList('topSellingList', [], 'No disponible sin autorización de Reportes.', value => value);
-      setHistoryStatus(error.code === 'MODULE_FORBIDDEN' ? 'Los indicadores requieren autorización para Reportes. El historial de ventas sigue disponible.' : error.message || 'No se pudieron cargar los indicadores conectados.');
+      setHistoryStatus(error.code === 'MODULE_FORBIDDEN' ? 'Los indicadores requieren autorización para Reportes. El historial de ventas sigue disponible.' : window.PosMessages.fromError(error, 'No se pudieron cargar los indicadores. Actualiza la pantalla e inténtalo de nuevo.'));
       if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
     }
   }
@@ -151,7 +154,7 @@
       document.dispatchEvent(new Event('connected:report-data-changed'));
       return;
     }
-    if (['PURCHASE', 'CANCEL_PURCHASE', 'SUPPLIER_PAYMENT', 'SUPPLIER_PAYMENT_VOID'].includes(result.kind)) {
+    if (['PURCHASE', 'EDIT_PURCHASE', 'CANCEL_PURCHASE', 'SUPPLIER_PAYMENT', 'SUPPLIER_PAYMENT_VOID'].includes(result.kind)) {
       await window.PosPurchases.operationCompleted(result, recovered);
       document.dispatchEvent(new Event('connected:report-data-changed'));
       return;
@@ -233,8 +236,9 @@
       }
       if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
       else {
-        if (['CASH_INVALID', 'CASH_INSUFFICIENT'].includes(error.code)) window.PosValidation.field('connectedCashReceived', error.message);
-        showAlert(error.message + (uncertain(error) ? ' Comprueba el estado de la operación antes de cobrar nuevamente.' : ''));
+        const safeMessage = window.PosMessages.fromError(error, 'No se pudo completar la operación. Revisa su estado antes de volver a intentarlo.');
+        if (['CASH_INVALID', 'CASH_INSUFFICIENT'].includes(error.code)) window.PosValidation.field('connectedCashReceived', safeMessage);
+        showAlert(safeMessage + (uncertain(error) ? ' Comprueba el estado de la operación antes de cobrar nuevamente.' : ''));
       }
       showPending();
     } finally { busy = false; }
@@ -306,7 +310,7 @@
       el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : 'Cobrar';
       el('connectedCheckoutModal').classList.remove('hidden');
       (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus();
-    } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
+    } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo completar la operación. Inténtalo de nuevo.')); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { busy = false; }
   }
   async function confirm() {
@@ -362,7 +366,7 @@
       el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; updateCashChangePreview(); window.PosValidation.clear(el('connectedCheckoutModal'));
        el('confirmConnectedSaleBtn').textContent = quote.paymentMethod === 'CREDIT' ? 'Facturar a crédito' : quote.priceChanged ? 'Confirmar precio y cobrar' : 'Cobrar orden';
       el('connectedCheckoutModal').classList.remove('hidden'); refreshed = true;
-    } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
+    } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo completar la operación. Inténtalo de nuevo.')); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { busy = false; el('confirmConnectedSaleBtn').disabled = false; if (refreshed) (quote.paymentMethod === 'CASH' ? el('connectedCashReceived') : el('confirmConnectedSaleBtn')).focus(); }
   }
   async function confirmPayment(id) {
@@ -468,11 +472,13 @@
       movementsBody.replaceChildren();
       for (const movement of overview.movements) {
         const method = movement.paymentMethod === 'CARD' ? 'Tarjeta' : movement.paymentMethod === 'TRANSFER' ? 'Transferencia' : movement.paymentMethod === 'CASH' ? 'Efectivo' : '';
+        const movementTypes = { REVERSAL: 'Reversión', MANUAL_ENTRY: 'Ingreso manual', MANUAL_EXIT: 'Retiro manual', SALE: 'Venta', CUSTOMER_PAYMENT: 'Abono de cliente', SUPPLIER_PAYMENT: 'Pago a proveedor', EXPENSE: 'Gasto', PURCHASE: 'Pago de compra', PURCHASE_CANCEL: 'Devolución de compra', CUSTOMER_PAYMENT_VOID: 'Anulación de abono', SUPPLIER_PAYMENT_VOID: 'Anulación de pago' };
+        const movementLabel = method || movementTypes[movement.type] || (movement.direction === 'IN' ? 'Ingreso' : movement.direction === 'OUT' ? 'Egreso' : 'Movimiento registrado');
         let status = movement.status === 'VOID' ? 'Anulado' : movement.status === 'PENDING' ? (method ? method + ' pendiente de confirmación' : 'Pendiente') : (method ? method + ' confirmado' : 'Confirmado');
         if (movement.status === 'CONFIRMED' && method && method !== 'Efectivo' && movement.confirmedBy) status += ' · ' + movement.confirmedBy + ' · ' + new Date(movement.confirmedAt).toLocaleString();
         const row = document.createElement('tr');
         row.dataset.tableDate = window.PosTables.dateKey(movement.createdAt);
-        for (const value of [new Date(movement.createdAt).toLocaleString(), method || (movement.type === 'REVERSAL' ? 'Reversión' : movement.type), movement.description || '', money(movement.amount), movement.userName, status]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
+        for (const value of [new Date(movement.createdAt).toLocaleString(), movementLabel, cashMovementDescription(movement.description), money(movement.amount), movement.userName, status]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
          const actionCell = document.createElement('td');
          const actionGroup = document.createElement('div'); actionGroup.className = 'cash-operation-actions';
          if (movement.status === 'PENDING' && ['CARD', 'TRANSFER'].includes(movement.paymentMethod)) { const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-sm btn-success'; button.textContent = 'Confirmar recibido'; button.dataset.action = 'confirm-payment'; button.dataset.id = movement.id; actionGroup.append(button); }
@@ -523,7 +529,7 @@
         return true;
       } catch (failure) {
         clearCashDataForRetry();
-        cashLoadStatus(failure.message ? 'No se pudo cargar Caja. ' + failure.message : 'No se pudieron cargar las sesiones y movimientos de Caja. Reintenta la carga.');
+        cashLoadStatus(window.PosMessages.fromError(failure, 'No se pudo cargar Caja. Revisa la conexión e inténtalo nuevamente.'));
         if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
         return false;
       }
@@ -536,7 +542,7 @@
   }
   async function closeDialog() {
     try { currentCash = await api(client => client.currentCash(true)); if (!currentCash) throw new window.PosApiError('CASH_CLOSED', 409); window.PosCashSummary.open(mappedCash(currentCash).connectedCloseData); }
-    catch (error) { showAlert(error.message); }
+    catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo abrir el resumen de Caja. Actualiza la pantalla e inténtalo de nuevo.')); }
   }
   async function closeCash() {
     const value = el('cajaEfectivoRealInput').value;
@@ -552,7 +558,7 @@
     if (event.detail?.id === 'history' && !el('historyView').classList.contains('hidden')) refreshHistorySummary();
   });
   document.addEventListener('connected:report-data-changed', () => {
-    if (!el('historyView').classList.contains('hidden')) loadHistory().catch(error => setHistoryStatus(error.message || 'No se pudo actualizar el historial conectado.'));
+    if (!el('historyView').classList.contains('hidden')) loadHistory().catch(error => setHistoryStatus(window.PosMessages.fromError(error, 'No se pudo actualizar el historial. Inténtalo de nuevo.')));
   });
   const auditTable = el('auditTableBody').closest('.history-table-container'); auditTable.previousElementSibling.classList.add('hidden'); auditTable.classList.add('hidden');
   const hideAuditTableTools = () => { const toolbar = auditTable.previousElementSibling; if (toolbar?.classList.contains('data-table-toolbar')) toolbar.classList.add('hidden'); };
@@ -582,7 +588,7 @@
       const value = await api(client => client.setSalesFlow(el('connectedSalesFlow').value));
       salesFlow = value.salesFlow; renderCheckoutMode(); el('connectedSalesFlowMessage').textContent = salesFlow === 'DIRECT' ? 'Venta directa activa. Cada vendedor cobra desde Venta.' : 'Cobro centralizado activo. Los vendedores preparan órdenes; un usuario con permiso de Caja las confirma y factura.';
       await load('cajaView');
-    } catch (error) { showAlert(error.message); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
+    } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo actualizar la forma de cobro. Inténtalo de nuevo.')); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
     finally { button.disabled = false; }
   });
   window.addEventListener('storage', event => { if (event.key === activeScope) showPending(); });

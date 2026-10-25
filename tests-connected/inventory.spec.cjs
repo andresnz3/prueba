@@ -178,12 +178,12 @@ test('otro negocio no ve productos ni movimientos ajenos', async ({ page }) => {
   expect((await call(page, 'products')).value.some(p => p.barcode === item.barcode)).toBe(false); expect((await call(page, 'product', product.id)).code).toBe('PRODUCT_NOT_FOUND'); expect((await call(page, 'movements', product.id)).code).toBe('PRODUCT_NOT_FOUND');
 });
 test('fallo de lectura no utiliza productos de Dexie como respaldo', async ({ page }) => {
-  await login(page); await page.route(api + '/products?**', route => route.abort()); await page.locator('#navInventoryBtn').click(); await expect(page.locator('#connectedNotice')).toContainText('conectar'); await expect(page.locator('#inventoryView')).toBeHidden();
+  await login(page); await page.route(api + '/products?**', route => route.abort()); await page.locator('#navInventoryBtn').click(); await expect(page.locator('#connectedNotice')).toContainText('No hay conexión con el sistema'); await expect(page.locator('#inventoryView')).toBeHidden();
 });
 test('fallo de escritura no crea producto fantasma ni reintenta automaticamente', async ({ page }) => {
   await login(page); await inventory(page); let writes = 0; await page.route(api + '/products', route => { writes++; return route.abort(); }); await page.locator('#addNewProductBtn').click();
   for (const [id, value] of Object.entries({ prodBarcode: 'NETWORK-' + randomBytes(4).toString('hex'), prodName: 'Fallo de red', prodCost: '2', prodStock: '0' })) await page.locator('#' + id).fill(value);
-  await page.locator('#productForm button[type=submit]').click(); await expect(page.locator('#customAlertMessage')).toContainText('conectar'); expect(writes).toBe(1); await expect(page.locator('#inventoryTableBody tr').filter({ hasText: 'Fallo de red' })).toHaveCount(0);
+  await page.locator('#productForm button[type=submit]').click(); await expect(page.locator('#customAlertMessage')).toContainText('No hay conexión con el sistema'); expect(writes).toBe(1); await expect(page.locator('#inventoryTableBody tr').filter({ hasText: 'Fallo de red' })).toHaveCount(0);
 });
 test('ventas y caja MySQL, compra exige proveedor activo, sin documentos en Dexie', async ({ page }) => {
   await login(page); await inventory(page); const item = await create(page, '3'); await page.locator('#navSalesBtn').click(); await expect(page.locator('#salesView')).toBeVisible();

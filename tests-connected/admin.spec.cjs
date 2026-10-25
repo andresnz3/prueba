@@ -160,7 +160,7 @@ test('andres administra otro negocio sin sustituir su sesión y vuelve al panel 
   await page.locator('#systemAdminRole').selectOption('ADMIN');
   await page.locator('#systemAdminUserForm button[type=submit]').click();
   const adminRow = page.locator('#systemAdminUsersBody tr').filter({ hasText: username });
-  await expect(adminRow).toBeVisible(); await expect(adminRow).toContainText(businessName); await expect(adminRow).toContainText('ADMIN'); await expect(page.locator('#systemAdminPassword')).toHaveValue('');
+  await expect(adminRow).toBeVisible(); await expect(adminRow).toContainText(businessName); await expect(adminRow).toContainText('Administrador'); await expect(page.locator('#systemAdminPassword')).toHaveValue('');
   await adminRow.getByRole('button', { name: 'Desactivar' }).click(); await expect(page.locator('#systemAdminMessage')).toContainText('administrador activo');
   await page.locator('#systemAdminUsername').fill(username + '_seller');
   await page.locator('#systemAdminFullName').fill('Vendedor de prueba');
@@ -168,7 +168,7 @@ test('andres administra otro negocio sin sustituir su sesión y vuelve al panel 
   await page.locator('#systemAdminRole').selectOption('VENDEDOR');
   await page.locator('#systemAdminUserForm button[type=submit]').click();
   const userRow = page.locator('#systemAdminUsersBody tr').filter({ hasText: username + '_seller' });
-  await expect(userRow).toBeVisible(); await expect(userRow).toContainText('VENDEDOR');
+  await expect(userRow).toBeVisible(); await expect(userRow).toContainText('Vendedor');
   await userRow.getByRole('button', { name: 'Desactivar' }).click(); await expect(userRow).toContainText('Inactivo');
   await userRow.getByRole('button', { name: 'Activar' }).click(); await expect(userRow).toContainText('Activo');
   await page.locator('#systemAdminBusinessesTab').click();

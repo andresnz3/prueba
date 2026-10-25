@@ -84,10 +84,12 @@ function createProcurementService({ repo, auth, config }) {
   }
   function publicPurchase(row) {
     const historical = Boolean(row.is_historical);
-    const paid = row.purchase_type === 'CASH' && row.status === 'COMPLETED' ? units(row.total) : units(row.paid || '0.00');
+    const paid = units(row.paid || '0.00');
     const pending = units(row.pending || '0.00');
-    const balance = row.purchase_type === 'CREDIT' && row.status !== 'CANCELLED' ? units(row.total) - paid : 0n;
-    const availableBalance = historical ? 0n : balance > pending ? balance - pending : 0n;
+    const isCredit = row.purchase_type === 'CREDIT';
+    const isCash = row.purchase_type === 'CASH' && !historical;
+    const balance = (isCredit || isCash) && row.status !== 'CANCELLED' ? units(row.total) - paid : 0n;
+    const availableBalance = historical || !isCredit ? 0n : balance > pending ? balance - pending : 0n;
     const status = row.status === 'CANCELLED' ? 'CANCELLED' : historical ? 'HISTORICAL' : pending > 0n ? 'PENDING_CONFIRMATION' : balance <= 0n ? 'PAID' : units(row.paid || '0.00') > 0n ? 'PARTIAL' : row.due_at && new Date(row.due_at).getTime() < Date.now() ? 'OVERDUE' : row.purchase_type === 'CREDIT' ? 'OPEN' : 'PAID';
     return { id: String(row.id), businessId: String(row.business_id), supplierId: row.supplier_id === null ? null : String(row.supplier_id), supplierName: row.supplier_name, supplierPhone: row.supplier_phone || '', purchaseNumber: purchaseNumber(row.id), supplierInvoiceNumber: supplierInvoiceNumber(row), invoiceNumber: row.invoice_number, purchaseType: row.purchase_type, subtotal: row.subtotal, discount: row.discount || '0.00', tax: row.tax, total: row.total, notes: row.notes || null, paid: fixed(paid, 2), pendingPayments: fixed(pending, 2), balance: fixed(balance > 0n ? balance : 0n, 2), availableBalance: fixed(availableBalance, 2), dueAt: row.due_at, status, purchaseStatus: row.status, isHistorical: historical, createdAt: row.created_at, itemCount: Number(row.item_count || 0) };
   }
@@ -101,9 +103,94 @@ function createProcurementService({ repo, auth, config }) {
     if (!row) throw httpError(404, 'PURCHASE_NOT_FOUND');
     const hasItemHistoryColumns = await hasColumn(db, 'purchase_items', 'discount') && await hasColumn(db, 'purchase_items', 'tax');
     const itemHistoryFields = hasItemHistoryColumns ? 'discount, tax' : '0.00 AS discount, 0.00 AS tax';
-    const items = await repo.rows(db, 'SELECT product_id, product_name, quantity, unit_cost, subtotal, ' + itemHistoryFields + ', total FROM purchase_items WHERE business_id = ? AND purchase_id = ? ORDER BY id', [current.business_id, id]);
+    const items = await repo.rows(db, 'SELECT id, product_id, product_name, quantity, unit_cost, subtotal, ' + itemHistoryFields + ', total FROM purchase_items WHERE business_id = ? AND purchase_id = ? ORDER BY id', [current.business_id, id]);
     const payments = await repo.rows(db, 'SELECT * FROM supplier_payments WHERE business_id = ? AND purchase_id = ? ORDER BY created_at,id', [current.business_id, id]);
-    return { ...publicPurchase(row), cancelReason: row.cancel_reason, cancelledAt: row.cancelled_at, sourceActor: row.source_actor || null, sourceCancelledBy: row.source_cancelled_by || null, items: items.map(item => ({ productId: String(item.product_id), name: item.product_name, quantity: item.quantity, unitCost: item.unit_cost, subtotal: item.subtotal, discount: item.discount, tax: item.tax, total: item.total })), payments: payments.map(item => ({ id: String(item.id), amount: item.amount, paymentMethod: item.payment_method, status: item.status, createdAt: item.created_at, isHistorical: Boolean(item.is_historical), sourceActor: item.source_actor || null, sourceCancelledBy: item.source_cancelled_by || null })) };
+    const editability = await purchaseEditability(db, current, row, items);
+    return { ...publicPurchase(row), cancelReason: row.cancel_reason, cancelledAt: row.cancelled_at, sourceActor: row.source_actor || null, sourceCancelledBy: row.source_cancelled_by || null, revision: editability.revision, editability: { allowed: editability.allowed, reason: editability.reason, message: editability.message }, items: items.map(item => ({ productId: String(item.product_id), name: item.product_name, quantity: item.quantity, unitCost: item.unit_cost, subtotal: item.subtotal, discount: item.discount, tax: item.tax, total: item.total })), payments: payments.map(item => ({ id: String(item.id), amount: item.amount, paymentMethod: item.payment_method, status: item.status, createdAt: item.created_at, isHistorical: Boolean(item.is_historical), sourceActor: item.source_actor || null, sourceCancelledBy: item.source_cancelled_by || null })) };
+  }
+  function purchaseRevision(purchase, items) {
+    const fields = ['id', 'business_id', 'user_id', 'supplier_id', 'supplier_name', 'invoice_number', 'purchase_type', 'subtotal', 'tax', 'total', 'due_at', 'status', 'created_at', 'is_historical'];
+    return digest({ purchase: fields.map(field => [field, purchase[field] ?? null]), items: items.map(item => [item.id, item.product_id, item.product_name, item.quantity, item.unit_cost, item.subtotal, item.discount || '0.00', item.tax || '0.00', item.total]) });
+  }
+  const purchaseEditReason = {
+    HISTORICAL_PURCHASE_READ_ONLY: 'Las compras históricas se conservan sin edición operativa.',
+    PURCHASE_EDIT_NOT_COMPLETED: 'Solo se pueden corregir compras completadas.',
+    PURCHASE_EDIT_CREDIT_ONLY: 'Solo se pueden corregir compras operativas completadas.',
+    PURCHASE_HAS_PAYMENT_HISTORY: 'La compra tiene pagos o intentos de pago; debe conservarse su historial.',
+    PURCHASE_HAS_CASH_MOVEMENT: 'La compra tiene movimientos de caja asociados y no admite edición directa.',
+    PURCHASE_CASH_PAYMENT_UNSAFE: 'Solo se puede corregir un pago al contado en efectivo mientras su caja original siga abierta.',
+    PURCHASE_CASH_SESSION_CLOSED: 'La caja original ya cerró. La compra no se modificó.',
+    PURCHASE_LINE_HISTORY_UNSUPPORTED: 'La factura contiene descuentos o impuestos que requieren una conciliación contable aparte.',
+    PURCHASE_INVENTORY_HISTORY_MISMATCH: 'El historial de inventario no coincide con los artículos de la factura.',
+    PURCHASE_HAS_SUBSEQUENT_MOVEMENTS: 'Hay movimientos posteriores de estos productos; la compra no admite edición directa.',
+    PURCHASE_CURRENT_COST_CHANGED: 'El costo o precio actual del producto cambió después de esta compra.',
+    PURCHASE_STOCK_MISMATCH: 'Las existencias actuales no coinciden con el último movimiento de esta compra.',
+    PURCHASE_PRODUCT_UNAVAILABLE: 'Un producto de esta compra ya no está disponible para una corrección segura.'
+  };
+  async function purchaseEditability(db, current, purchase, items, { lock = false } = {}) {
+    const revision = purchaseRevision(purchase, items);
+    let reason = null, cashPayment = null;
+    if (purchase.is_historical) reason = 'HISTORICAL_PURCHASE_READ_ONLY';
+    else if (purchase.status !== 'COMPLETED') reason = 'PURCHASE_EDIT_NOT_COMPLETED';
+    else if (!['CREDIT', 'CASH'].includes(purchase.purchase_type) || purchase.supplier_id === null) reason = 'PURCHASE_EDIT_CREDIT_ONLY';
+    else if (units(purchase.tax || '0.00') !== 0n || items.some(item => units(item.discount || '0.00') !== 0n || units(item.tax || '0.00') !== 0n || units(item.subtotal) !== units(item.total))) reason = 'PURCHASE_LINE_HISTORY_UNSUPPORTED';
+    else if (!items.length || new Set(items.map(item => String(item.product_id))).size !== items.length) reason = 'PURCHASE_INVENTORY_HISTORY_MISMATCH';
+    if (!reason) {
+      const paymentRows = await repo.rows(db, 'SELECT sp.*,m.id AS movement_id,m.type AS movement_type,m.direction AS movement_direction,m.amount AS movement_amount,m.status AS movement_status,m.cash_session_id AS movement_cash_session_id,m.reference_type AS movement_reference_type,m.reference_id AS movement_reference_id FROM supplier_payments sp LEFT JOIN cash_movements m ON m.business_id=sp.business_id AND m.supplier_payment_id=sp.id WHERE sp.business_id=? AND sp.purchase_id=? ORDER BY sp.id' + (lock ? ' FOR UPDATE' : ''), [current.business_id, String(purchase.id)]);
+      const cashRows = await repo.rows(db, 'SELECT id,supplier_payment_id FROM cash_movements WHERE business_id=? AND reference_type=\'purchases\' AND reference_id=? ORDER BY id' + (lock ? ' FOR UPDATE' : ''), [current.business_id, String(purchase.id)]);
+      if (purchase.purchase_type === 'CREDIT') {
+        if (paymentRows.length) reason = 'PURCHASE_HAS_PAYMENT_HISTORY';
+        else if (cashRows.length) reason = 'PURCHASE_HAS_CASH_MOVEMENT';
+      } else if (!paymentRows.length || paymentRows.some(payment => payment.payment_method !== 'CASH' || payment.status !== 'POSTED')) reason = 'PURCHASE_CASH_PAYMENT_UNSAFE';
+      else if (paymentRows.length !== cashRows.length) reason = 'CASH_INCONSISTENT';
+      else {
+        const movementByPayment = new Map(cashRows.map(row => [String(row.supplier_payment_id), row]));
+        let paid = 0n, cashSessionId = null;
+        for (const payment of paymentRows) {
+          const movement = movementByPayment.get(String(payment.id));
+          if (payment.cash_session_id === null || !payment.movement_id || payment.movement_type !== 'SUPPLIER_PAYMENT' || payment.movement_direction !== 'OUT' || payment.movement_status !== 'CONFIRMED' || units(payment.amount) !== units(payment.movement_amount) || String(payment.cash_session_id) !== String(payment.movement_cash_session_id) || !movement || String(payment.movement_id) !== String(movement.id) || payment.movement_reference_type !== 'purchases' || String(payment.movement_reference_id) !== String(purchase.id) || String(movement.supplier_payment_id) !== String(payment.id)) { reason = 'CASH_INCONSISTENT'; break; }
+          if (cashSessionId !== null && cashSessionId !== String(payment.cash_session_id)) { reason = 'CASH_INCONSISTENT'; break; }
+          cashSessionId = String(payment.cash_session_id);
+          paid += units(payment.amount);
+          const [reversal] = await repo.rows(db, 'SELECT id FROM cash_movements WHERE business_id=? AND reversal_of_movement_id=? LIMIT 1' + (lock ? ' FOR UPDATE' : ''), [current.business_id, String(payment.movement_id)]);
+          if (reversal) { reason = 'CASH_INCONSISTENT'; break; }
+        }
+        if (!reason && paid !== units(purchase.total)) reason = 'CASH_INCONSISTENT';
+        if (!reason) {
+          const [session] = await repo.rows(db, "SELECT id FROM cash_sessions WHERE business_id=? AND id=? AND status='OPEN'" + (lock ? ' FOR UPDATE' : ''), [current.business_id, cashSessionId]);
+          if (!session) reason = 'PURCHASE_CASH_SESSION_CLOSED';
+          else cashPayment = { cashSessionId, paymentIds: paymentRows.map(payment => String(payment.id)), movementIds: paymentRows.map(payment => String(payment.movement_id)), amount: fixed(paid, 2) };
+        }
+      }
+    }
+    if (!reason) {
+      const ownMovements = await repo.rows(db, 'SELECT id,product_id,type,quantity,stock_after,unit_cost FROM inventory_movements WHERE business_id=? AND reference_type=\'purchases\' AND reference_id=? ORDER BY id' + (lock ? ' FOR UPDATE' : ''), [current.business_id, String(purchase.id)]);
+      const movementsByProduct = new Map();
+      for (const movement of ownMovements) {
+        if (!['PURCHASE', 'PURCHASE_CANCEL'].includes(movement.type) || movement.stock_after === null) { reason = 'PURCHASE_INVENTORY_HISTORY_MISMATCH'; break; }
+        const key = String(movement.product_id), values = movementsByProduct.get(key) || { net: 0n, latest: null, rows: [] };
+        values.net += units(movement.quantity);
+        values.latest = movement;
+        values.rows.push(movement);
+        movementsByProduct.set(key, values);
+      }
+      const products = new Map();
+      if (!reason) for (const item of items) {
+        const key = String(item.product_id), history = movementsByProduct.get(key);
+        if (!history || history.net !== units(item.quantity) || history.rows.some(movement => movement.unit_cost === null || units(movement.unit_cost) !== units(item.unit_cost))) { reason = 'PURCHASE_INVENTORY_HISTORY_MISMATCH'; break; }
+        const [product] = await repo.rows(db, 'SELECT id,deleted,stock,cost,retail_margin,wholesale_margin,retail_price,wholesale_price FROM products WHERE business_id=? AND id=?' + (lock ? ' FOR UPDATE' : ''), [current.business_id, key]);
+        if (!product || product.deleted) { reason = 'PURCHASE_PRODUCT_UNAVAILABLE'; break; }
+        products.set(key, product);
+        const [later] = await repo.rows(db, 'SELECT id FROM inventory_movements WHERE business_id=? AND product_id=? AND id>? AND NOT (COALESCE(reference_type,\'\')=\'purchases\' AND COALESCE(reference_id,0)=?) LIMIT 1' + (lock ? ' FOR UPDATE' : ''), [current.business_id, key, String(history.latest.id), String(purchase.id)]);
+        if (later) { reason = 'PURCHASE_HAS_SUBSEQUENT_MOVEMENTS'; break; }
+        if (units(product.stock) !== units(history.latest.stock_after)) { reason = 'PURCHASE_STOCK_MISMATCH'; break; }
+        const oldCost = units(item.unit_cost), retailMargin = units(product.retail_margin), wholesaleMargin = units(product.wholesale_margin);
+        const expectedRetail = oldCost + (oldCost * retailMargin + 500000n) / 1000000n;
+        const expectedWholesale = oldCost + (oldCost * wholesaleMargin + 500000n) / 1000000n;
+        if (units(product.cost) !== oldCost || units(product.retail_price) !== expectedRetail || units(product.wholesale_price) !== expectedWholesale) { reason = 'PURCHASE_CURRENT_COST_CHANGED'; break; }
+      }
+    }
+    return { allowed: !reason, reason, message: reason ? purchaseEditReason[reason] || 'Esta compra requiere revisión antes de corregirse.' : null, revision, cashPayment };
   }
   const listSuppliers = (session, options, module = 'suppliers') => work(session, module, async (db, current) => {
     const query = options.q ? textSearch(options.q) : null;
@@ -168,6 +255,78 @@ function createProcurementService({ repo, auth, config }) {
     return rows.map(publicPurchase);
   });
   const getPurchaseForView = (session, id) => work(session, 'purchases', async (db, current) => getPurchase(db, current, id));
+  const editPurchase = (session, id, data) => work(session, 'purchases', (db, current) => once(db, current, 'EDIT_PURCHASE', { purchaseId: id, ...data }, async () => {
+    const [purchase] = await repo.rows(db, 'SELECT * FROM purchases WHERE business_id=? AND id=? FOR UPDATE', [current.business_id, id]);
+    if (!purchase) throw httpError(404, 'PURCHASE_NOT_FOUND');
+    const hasItemHistoryColumns = await hasColumn(db, 'purchase_items', 'discount') && await hasColumn(db, 'purchase_items', 'tax');
+    const historyFields = hasItemHistoryColumns ? 'discount, tax' : '0.00 AS discount, 0.00 AS tax';
+    const currentItems = await repo.rows(db, 'SELECT id,product_id,product_name,quantity,unit_cost,subtotal,' + historyFields + ',total FROM purchase_items WHERE business_id=? AND purchase_id=? ORDER BY id FOR UPDATE', [current.business_id, id]);
+    const eligibility = await purchaseEditability(db, current, purchase, currentItems, { lock: true });
+    if (!eligibility.allowed) throw httpError(409, eligibility.reason);
+    if (data.revision !== eligibility.revision) throw httpError(409, 'PURCHASE_REVISION_CONFLICT');
+    const inventoryBefore = await repo.rows(db, "SELECT id,product_id,type,quantity,unit_cost FROM inventory_movements WHERE business_id=? AND reference_type='purchases' AND reference_id=? ORDER BY id FOR UPDATE", [current.business_id, String(id)]);
+    const oldByProduct = new Map(currentItems.map(item => [String(item.product_id), item]));
+    const nextByProduct = new Map(data.items.map(item => [String(item.productId), item]));
+    if (oldByProduct.size !== nextByProduct.size || [...oldByProduct.keys()].some(key => !nextByProduct.has(key))) throw httpError(409, 'PURCHASE_PRODUCT_SET_LOCKED');
+    const externalInvoice = data.supplierInvoiceNumber || '';
+    const invoiceNumber = externalInvoice || purchaseNumber(id);
+    const [duplicateInvoice] = await repo.rows(db, 'SELECT id FROM purchases WHERE business_id=? AND supplier_name=? AND invoice_number=? AND id<>? LIMIT 1 FOR UPDATE', [current.business_id, purchase.supplier_name, invoiceNumber, id]);
+    if (duplicateInvoice) throw httpError(409, 'PURCHASE_DUPLICATE');
+    const lines = [];
+    let total = 0n;
+    for (const [productId, next] of nextByProduct) {
+      const old = oldByProduct.get(productId);
+      const [product] = await repo.rows(db, 'SELECT id,name,stock,cost,retail_margin,wholesale_margin,retail_price,wholesale_price FROM products WHERE business_id=? AND id=? FOR UPDATE', [current.business_id, productId]);
+      if (!product) throw httpError(409, 'PURCHASE_PRODUCT_UNAVAILABLE');
+      const quantity = units(next.quantity), unitCost = units(next.unitCost);
+      const lineTotal = (quantity * unitCost + 500n) / 1000n;
+      if (lineTotal <= 0n) throw httpError(409, 'TOTAL_LIMIT');
+      total += lineTotal;
+      const delta = quantity - units(old.quantity);
+      const stock = units(product.stock), stockAfterUnits = stock + delta;
+      if (stockAfterUnits < 0n) throw httpError(409, 'PURCHASE_EDIT_STOCK_INSUFFICIENT');
+      if (stockAfterUnits >= 1000000000000n || total >= 1000000000000n) throw httpError(409, 'TOTAL_LIMIT');
+      lines.push({ product, old, quantity, unitCost, delta, stockAfterUnits, lineTotal });
+    }
+    if (total <= 0n) throw httpError(409, 'TOTAL_LIMIT');
+    const oldTotal = units(purchase.total), cashDelta = total - oldTotal;
+    let cashSupplement = null;
+    if (eligibility.cashPayment && cashDelta < 0n) throw httpError(409, 'PURCHASE_CASH_REFUND_REQUIRED');
+    if (eligibility.cashPayment && cashDelta > 0n) {
+      if (!await auth.canAccess(current, 'cash', db)) throw httpError(403, 'MODULE_FORBIDDEN');
+      const [cash] = await repo.rows(db, "SELECT * FROM cash_sessions WHERE business_id=? AND id=? AND status='OPEN' FOR UPDATE", [current.business_id, eligibility.cashPayment.cashSessionId]);
+      if (!cash) throw httpError(409, 'PURCHASE_CASH_SESSION_CLOSED');
+      if (await cashBalance(db, current, cash) < cashDelta) throw httpError(409, 'PURCHASE_CASH_BALANCE_INSUFFICIENT');
+    }
+    for (const line of lines) {
+      const quantity = fixed(line.quantity, 3), unitCost = fixed(line.unitCost, 2), lineTotal = fixed(line.lineTotal, 2), stockAfter = fixed(line.stockAfterUnits, 3);
+      await repo.rows(db, 'UPDATE purchase_items SET quantity=?,unit_cost=?,subtotal=?,total=? WHERE business_id=? AND purchase_id=? AND id=?', [quantity, unitCost, lineTotal, lineTotal, current.business_id, id, String(line.old.id)]);
+      const retailMargin = units(line.product.retail_margin), wholesaleMargin = units(line.product.wholesale_margin);
+      const retailPrice = fixed(line.unitCost + (line.unitCost * retailMargin + 500000n) / 1000000n, 2);
+      const wholesalePrice = fixed(line.unitCost + (line.unitCost * wholesaleMargin + 500000n) / 1000000n, 2);
+      await repo.rows(db, 'UPDATE products SET stock=?,cost=?,retail_price=?,wholesale_price=? WHERE business_id=? AND id=?', [stockAfter, unitCost, retailPrice, wholesalePrice, current.business_id, String(line.product.id)]);
+      await repo.rows(db, "UPDATE inventory_movements SET unit_cost=? WHERE business_id=? AND product_id=? AND reference_type='purchases' AND reference_id=?", [unitCost, current.business_id, String(line.product.id), String(id)]);
+      if (line.delta !== 0n) {
+        const type = line.delta > 0n ? 'PURCHASE' : 'PURCHASE_CANCEL';
+        await repo.rows(db, 'INSERT INTO inventory_movements (business_id,product_id,user_id,type,quantity,stock_after,reference_type,reference_id,reason,unit_cost,created_at) VALUES (?,?,?,?,?,? ,\'purchases\',?,?,?,UTC_TIMESTAMP(3))', [current.business_id, String(line.product.id), current.user_id, type, fixed(line.delta, 3), stockAfter, String(id), 'Corrección de compra ' + purchaseNumber(id), unitCost]);
+      }
+    }
+    const amount = fixed(total, 2);
+    await repo.rows(db, 'UPDATE purchases SET invoice_number=?,subtotal=?,total=? WHERE business_id=? AND id=? AND status=\'COMPLETED\'', [invoiceNumber, amount, amount, current.business_id, id]);
+    if (eligibility.cashPayment && cashDelta > 0n) {
+      const supplementAmount = fixed(cashDelta, 2);
+      const paymentResult = await repo.rows(db, "INSERT INTO supplier_payments (business_id,user_id,supplier_id,purchase_id,cash_session_id,amount,payment_method,status,created_at) VALUES (?,?,?,?,?,?,'CASH','POSTED',UTC_TIMESTAMP(3))", [current.business_id, current.user_id, String(purchase.supplier_id), String(id), eligibility.cashPayment.cashSessionId, supplementAmount]);
+      const paymentId = String(paymentResult.insertId);
+      const movementResult = await repo.rows(db, "INSERT INTO cash_movements (business_id,cash_session_id,user_id,type,direction,amount,supplier_payment_id,reference_type,reference_id,description,status,confirmed_at,confirmed_by_user_id,created_at) VALUES (?,?,?,'SUPPLIER_PAYMENT','OUT',?,?,'purchases',?,?,'CONFIRMED',UTC_TIMESTAMP(3),?,UTC_TIMESTAMP(3))", [current.business_id, eligibility.cashPayment.cashSessionId, current.user_id, supplementAmount, paymentId, String(id), 'Pago adicional por corrección de compra ' + purchaseNumber(id), current.user_id]);
+      cashSupplement = { paymentId, movementId: String(movementResult.insertId), amount: supplementAmount };
+      await repo.audit(db, current, 'ADJUST_PURCHASE_CASH_PAYMENT', 'supplier_payments', paymentId, { purchaseId: String(id), amount: supplementAmount, cashSessionId: eligibility.cashPayment.cashSessionId, movementId: cashSupplement.movementId, operationKey: data.operationKey });
+    }
+    const inventoryAfter = await repo.rows(db, "SELECT id,product_id,type,quantity,unit_cost FROM inventory_movements WHERE business_id=? AND reference_type='purchases' AND reference_id=? ORDER BY id", [current.business_id, String(id)]);
+    const before = { invoiceNumber: purchase.invoice_number, subtotal: purchase.subtotal, tax: purchase.tax, total: purchase.total, items: currentItems.map(item => ({ productId: String(item.product_id), quantity: item.quantity, unitCost: item.unit_cost, subtotal: item.subtotal, tax: item.tax || '0.00', discount: item.discount || '0.00', total: item.total })), inventoryMovements: inventoryBefore.map(movement => ({ id: String(movement.id), productId: String(movement.product_id), type: movement.type, quantity: movement.quantity, unitCost: movement.unit_cost })) };
+    const after = { invoiceNumber, subtotal: amount, tax: purchase.tax, total: amount, items: lines.map(line => ({ productId: String(line.product.id), quantity: fixed(line.quantity, 3), unitCost: fixed(line.unitCost, 2), subtotal: fixed(line.lineTotal, 2), total: fixed(line.lineTotal, 2) })), inventoryMovements: inventoryAfter.map(movement => ({ id: String(movement.id), productId: String(movement.product_id), type: movement.type, quantity: movement.quantity, unitCost: movement.unit_cost })) };
+    await repo.audit(db, current, 'EDIT_PURCHASE', 'purchases', id, { operationKey: data.operationKey, revision: eligibility.revision, before, after, cashSupplement });
+    return { kind: 'EDIT_PURCHASE', purchase: await getPurchase(db, current, id) };
+  }));
   const getPayableForView = (session, id) => work(session, 'payables', async (db, current) => {
     const purchase = await getPurchase(db, current, id);
     if (purchase.purchaseType !== 'CREDIT' || purchase.isHistorical) throw httpError(404, 'PAYABLE_NOT_FOUND');
@@ -188,10 +347,11 @@ function createProcurementService({ repo, auth, config }) {
       ...purchases.map(row => {
         const historical = Boolean(row.is_historical);
         const total = units(row.total || '0.00');
-        const paidConfirmed = row.purchase_type === 'CASH' && row.status === 'COMPLETED' ? total : units(row.paid || '0.00');
+          const paidConfirmed = units(row.paid || '0.00');
         const pendingPayments = historical ? 0n : units(row.pending || '0.00');
         const isCredit = row.purchase_type === 'CREDIT' && row.status !== 'CANCELLED';
-        const balance = !historical && isCredit && total > paidConfirmed ? total - paidConfirmed : 0n;
+          const isInvoice = ['CREDIT', 'CASH'].includes(row.purchase_type) && row.status !== 'CANCELLED';
+          const balance = !historical && isInvoice && total > paidConfirmed ? total - paidConfirmed : 0n;
         const availableBalance = !historical && balance > pendingPayments ? balance - pendingPayments : 0n;
         return {
           date: row.created_at,
@@ -199,7 +359,7 @@ function createProcurementService({ repo, auth, config }) {
           reference: purchaseReference(row),
           supplierInvoiceNumber: supplierInvoiceNumber(row) || null,
           description: historical ? row.status === 'CANCELLED' ? 'Compra histórica anulada' : isCredit ? 'Cuenta por pagar histórica' : 'Compra histórica al contado' : row.status === 'CANCELLED' ? 'Factura de compra anulada' : row.purchase_type === 'CREDIT' ? 'Factura de compra a crédito' : 'Factura de compra al contado',
-          charge: !historical && isCredit ? row.total : '0.00',
+            charge: !historical && isInvoice ? row.total : '0.00',
           paid: '0.00',
           status: row.status,
           purchaseId: String(row.id),
@@ -298,24 +458,51 @@ function createProcurementService({ repo, auth, config }) {
     if (purchase.status !== 'COMPLETED') throw httpError(409, 'PURCHASE_CANCELLED');
     const items = await repo.rows(db, 'SELECT i.*,p.stock,p.name AS current_name FROM purchase_items i JOIN products p ON p.business_id=i.business_id AND p.id=i.product_id WHERE i.business_id=? AND i.purchase_id=? ORDER BY i.product_id FOR UPDATE', [current.business_id, id]);
     for (const item of items) if (units(item.stock) < units(item.quantity)) throw httpError(409, 'PURCHASE_CANCEL_STOCK_INSUFFICIENT');
-    const paymentRows = await repo.rows(db, 'SELECT sp.*,m.id AS movement_id,m.status AS movement_status FROM supplier_payments sp LEFT JOIN cash_movements m ON m.business_id=sp.business_id AND m.supplier_payment_id=sp.id WHERE sp.business_id=? AND sp.purchase_id=? FOR UPDATE', [current.business_id, id]);
+    const paymentRows = await repo.rows(db, 'SELECT sp.*,m.id AS movement_id,m.status AS movement_status,m.type AS movement_type,m.direction AS movement_direction,m.amount AS movement_amount,m.cash_session_id AS movement_cash_session_id,m.supplier_payment_id AS movement_payment_id,m.reference_type AS movement_reference_type,m.reference_id AS movement_reference_id FROM supplier_payments sp LEFT JOIN cash_movements m ON m.business_id=sp.business_id AND m.supplier_payment_id=sp.id WHERE sp.business_id=? AND sp.purchase_id=? FOR UPDATE', [current.business_id, id]);
     const posted = paymentRows.filter(row => row.status === 'POSTED');
     const pending = paymentRows.filter(row => row.status === 'PENDING');
-    let refund = null;
+    let refunds = [];
+    if (purchase.purchase_type === 'CASH' && paymentRows.length !== posted.length + pending.length) throw httpError(409, 'CASH_INCONSISTENT');
+    if (purchase.purchase_type === 'CASH' && posted.length && posted.reduce((sum, payment) => sum + units(payment.amount), 0n) !== units(purchase.total)) throw httpError(409, 'CASH_INCONSISTENT');
+    if (purchase.purchase_type === 'CASH' && pending.length && pending.reduce((sum, payment) => sum + units(payment.amount), 0n) !== units(purchase.total)) throw httpError(409, 'CASH_INCONSISTENT');
     if (posted.length) {
-      if (purchase.purchase_type !== 'CASH' || posted.length !== 1 || posted[0].payment_method !== 'CASH' || !posted[0].movement_id) throw httpError(409, 'PAYMENT_ALREADY_CONFIRMED');
-      refund = posted[0];
-      const [sessionRow] = await repo.rows(db, "SELECT * FROM cash_sessions WHERE business_id=? AND id=? AND status='OPEN' FOR UPDATE", [current.business_id, String(refund.cash_session_id)]);
-       if (!sessionRow) throw httpError(409, 'PURCHASE_CANCEL_REQUIRES_OPEN_CASH');
+      if (purchase.purchase_type !== 'CASH' || pending.length || posted.some(payment => payment.payment_method !== 'CASH' || !payment.movement_id)) throw httpError(409, 'PAYMENT_ALREADY_CONFIRMED');
+      const cashRows = await repo.rows(db, "SELECT id,supplier_payment_id FROM cash_movements WHERE business_id=? AND reference_type='purchases' AND reference_id=? ORDER BY id FOR UPDATE", [current.business_id, String(id)]);
+      const cashByPayment = new Map(cashRows.map(row => [String(row.supplier_payment_id), row]));
+      if (cashRows.length !== posted.length) throw httpError(409, 'CASH_INCONSISTENT');
+      let cashSessionId = null;
+      for (const payment of posted) {
+        const linked = cashByPayment.get(String(payment.id));
+        if (payment.cash_session_id === null || payment.movement_type !== 'SUPPLIER_PAYMENT' || payment.movement_status !== 'CONFIRMED' || payment.movement_direction !== 'OUT' || units(payment.movement_amount) !== units(payment.amount) || String(payment.movement_payment_id) !== String(payment.id) || String(payment.movement_cash_session_id) !== String(payment.cash_session_id) || !linked || String(linked.id) !== String(payment.movement_id) || payment.movement_reference_type !== 'purchases' || String(payment.movement_reference_id) !== String(id)) throw httpError(409, 'CASH_INCONSISTENT');
+        if (cashSessionId !== null && cashSessionId !== String(payment.cash_session_id)) throw httpError(409, 'CASH_INCONSISTENT');
+        cashSessionId = String(payment.cash_session_id);
+        const [alreadyReversed] = await repo.rows(db, 'SELECT id FROM cash_movements WHERE business_id=? AND reversal_of_movement_id=? LIMIT 1 FOR UPDATE', [current.business_id, String(payment.movement_id)]);
+        if (alreadyReversed) throw httpError(409, 'CASH_INCONSISTENT');
+      }
+      if (!await auth.canAccess(current, 'cash', db)) throw httpError(403, 'MODULE_FORBIDDEN');
+      const [sessionRow] = await repo.rows(db, "SELECT * FROM cash_sessions WHERE business_id=? AND id=? AND status='OPEN' FOR UPDATE", [current.business_id, cashSessionId]);
+      if (!sessionRow) throw httpError(409, 'PURCHASE_CANCEL_REQUIRES_OPEN_CASH');
+      refunds = posted;
     }
     if (pending.length) {
+      if (purchase.purchase_type !== 'CASH' || paymentRows.length !== pending.length) throw httpError(409, 'CASH_INCONSISTENT');
+      const cashRows = await repo.rows(db, "SELECT id,supplier_payment_id FROM cash_movements WHERE business_id=? AND reference_type='purchases' AND reference_id=? ORDER BY id FOR UPDATE", [current.business_id, String(id)]);
+      if (cashRows.length !== pending.length) throw httpError(409, 'CASH_INCONSISTENT');
+      const cashByPayment = new Map(cashRows.map(row => [String(row.supplier_payment_id), row]));
+      let pendingCashSessionId = null;
       for (const payment of pending) {
+        const linked = cashByPayment.get(String(payment.id));
+        if (!['CARD', 'TRANSFER'].includes(payment.payment_method) || payment.cash_session_id === null || !payment.movement_id || payment.movement_type !== 'SUPPLIER_PAYMENT' || payment.movement_status !== 'PENDING' || payment.movement_direction !== 'OUT' || units(payment.movement_amount) !== units(payment.amount) || String(payment.movement_payment_id) !== String(payment.id) || String(payment.movement_cash_session_id) !== String(payment.cash_session_id) || !linked || String(linked.id) !== String(payment.movement_id) || payment.movement_reference_type !== 'purchases' || String(payment.movement_reference_id) !== String(id)) throw httpError(409, 'CASH_INCONSISTENT');
+        if (pendingCashSessionId !== null && pendingCashSessionId !== String(payment.cash_session_id)) throw httpError(409, 'CASH_INCONSISTENT');
+        pendingCashSessionId = String(payment.cash_session_id);
+        if (!await auth.canAccess(current, 'cash', db)) throw httpError(403, 'MODULE_FORBIDDEN');
         await repo.rows(db, "UPDATE supplier_payments SET status='VOID',cancelled_at=UTC_TIMESTAMP(3),cancelled_by=?,cancel_reason=? WHERE business_id=? AND id=? AND status='PENDING'", [current.user_id, data.reason, current.business_id, String(payment.id)]);
-        if (payment.movement_id) await repo.rows(db, "UPDATE cash_movements SET status='VOID' WHERE business_id=? AND id=? AND status='PENDING'", [current.business_id, String(payment.movement_id)]);
+        await repo.rows(db, "UPDATE cash_movements SET status='VOID' WHERE business_id=? AND id=? AND status='PENDING'", [current.business_id, String(payment.movement_id)]);
       }
     }
-    if (refund) {
-       await repo.rows(db, 'INSERT INTO cash_movements (business_id,cash_session_id,user_id,type,direction,amount,reference_type,reference_id,reversal_of_movement_id,description,status,created_at) VALUES (?,?,?,\'REVERSAL\',\'IN\',?,\'purchases\',?,?,?,\'CONFIRMED\',UTC_TIMESTAMP(3))', [current.business_id, String(refund.cash_session_id), current.user_id, refund.amount, String(id), String(refund.movement_id), 'Devolución de compra ' + purchaseReference(purchase) + ' · ' + data.reason]);
+    if (purchase.purchase_type === 'CASH' && !paymentRows.length) throw httpError(409, 'CASH_INCONSISTENT');
+    for (const refund of refunds) {
+      await repo.rows(db, 'INSERT INTO cash_movements (business_id,cash_session_id,user_id,type,direction,amount,reference_type,reference_id,reversal_of_movement_id,description,status,confirmed_at,confirmed_by_user_id,created_at) VALUES (?,?,?,\'REVERSAL\',\'IN\',?,\'purchases\',?,?,?,\'CONFIRMED\',UTC_TIMESTAMP(3),?,UTC_TIMESTAMP(3))', [current.business_id, String(refund.cash_session_id), current.user_id, refund.amount, String(id), String(refund.movement_id), 'Devolución de compra ' + purchaseReference(purchase) + ' · ' + data.reason, current.user_id]);
       await repo.rows(db, "UPDATE supplier_payments SET status='VOID',cancelled_at=UTC_TIMESTAMP(3),cancelled_by=?,cancel_reason=? WHERE business_id=? AND id=? AND status='POSTED'", [current.user_id, data.reason, current.business_id, String(refund.id)]);
     }
     for (const item of items) {
@@ -324,7 +511,7 @@ function createProcurementService({ repo, auth, config }) {
        await repo.rows(db, 'INSERT INTO inventory_movements (business_id,product_id,user_id,type,quantity,stock_after,reference_type,reference_id,reason,unit_cost,created_at) VALUES (?,?,?,\'PURCHASE_CANCEL\',?,?,\'purchases\',?,?,?,UTC_TIMESTAMP(3))', [current.business_id, String(item.product_id), current.user_id, fixed(-units(item.quantity), 3), stockAfter, String(id), 'Anulación ' + purchaseReference(purchase) + ' · ' + data.reason, item.unit_cost]);
     }
     await repo.rows(db, "UPDATE purchases SET status='CANCELLED',cancelled_at=UTC_TIMESTAMP(3),cancelled_by=?,cancel_reason=? WHERE business_id=? AND id=? AND status='COMPLETED'", [current.user_id, data.reason, current.business_id, id]);
-    await repo.audit(db, current, 'CANCEL_PURCHASE', 'purchases', id, { reason: data.reason, operationKey: data.operationKey });
+    await repo.audit(db, current, 'CANCEL_PURCHASE', 'purchases', id, { reason: data.reason, operationKey: data.operationKey, reversedPaymentIds: refunds.map(payment => String(payment.id)) });
     return { kind: 'CANCEL_PURCHASE', purchase: await getPurchase(db, current, id) };
   }));
   const payInvoice = (session, id, data) => work(session, 'payables', (db, current) => once(db, current, 'SUPPLIER_PAYMENT', { purchaseId: id, ...data }, async () => {
@@ -348,7 +535,8 @@ function createProcurementService({ repo, auth, config }) {
     const result = await repo.rows(db, 'INSERT INTO supplier_payments (business_id,user_id,supplier_id,purchase_id,cash_session_id,amount,payment_method,status,created_at) VALUES (?,?,?,?,?,?,?,?,UTC_TIMESTAMP(3))', [current.business_id, current.user_id, String(purchase.supplier_id), id, cash ? String(cash.id) : null, data.amount, data.paymentMethod, status]);
     const paymentId = String(result.insertId);
      const reference = purchaseReference(purchase);
-     if (cash) await repo.rows(db, 'INSERT INTO cash_movements (business_id,cash_session_id,user_id,type,direction,amount,supplier_payment_id,reference_type,reference_id,description,status,created_at) VALUES (?,?,?,\'SUPPLIER_PAYMENT\',\'OUT\',?,?,\'supplier_payments\',?,?,?,UTC_TIMESTAMP(3))', [current.business_id, String(cash.id), current.user_id, data.amount, paymentId, paymentId, 'Pago ' + reference + ' · ' + (status === 'PENDING' ? data.paymentMethod + ' pendiente' : 'Efectivo'), status === 'PENDING' ? 'PENDING' : 'CONFIRMED']);
+    const paymentMethodLabel = { CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia' }[data.paymentMethod] || 'Otro medio de pago';
+    if (cash) await repo.rows(db, 'INSERT INTO cash_movements (business_id,cash_session_id,user_id,type,direction,amount,supplier_payment_id,reference_type,reference_id,description,status,created_at) VALUES (?,?,?,\'SUPPLIER_PAYMENT\',\'OUT\',?,?,\'supplier_payments\',?,?,?,UTC_TIMESTAMP(3))', [current.business_id, String(cash.id), current.user_id, data.amount, paymentId, paymentId, 'Pago ' + reference + ' · ' + (status === 'PENDING' ? paymentMethodLabel + ' pendiente' : 'Efectivo'), status === 'PENDING' ? 'PENDING' : 'CONFIRMED']);
     await repo.audit(db, current, 'POST_SUPPLIER_PAYMENT', 'supplier_payments', paymentId, { purchaseId: String(id), amount: data.amount, paymentMethod: data.paymentMethod, status, operationKey: data.operationKey });
     const [user] = await repo.rows(db, 'SELECT full_name FROM users WHERE business_id=? AND id=?', [current.business_id, current.user_id]);
      return { kind: 'SUPPLIER_PAYMENT', payment: { id: paymentId, businessId: String(current.business_id), purchaseId: String(id), supplierId: String(purchase.supplier_id), purchaseNumber: purchaseNumber(id), supplierInvoiceNumber: supplierInvoiceNumber(purchase), invoiceNumber: purchase.invoice_number, amount: data.amount, paymentMethod: data.paymentMethod, status, createdAt: new Date().toISOString(), userName: user.full_name } };
@@ -358,6 +546,6 @@ function createProcurementService({ repo, auth, config }) {
     const [summary] = await repo.rows(db, "SELECT COALESCE(SUM(p.total-(SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='POSTED')),0.00) AS balance,COALESCE(SUM((SELECT COALESCE(SUM(sp.amount),0.00) FROM supplier_payments sp WHERE sp.business_id=p.business_id AND sp.purchase_id=p.id AND sp.status='PENDING')),0.00) AS pending FROM purchases p WHERE p.business_id=? AND p.purchase_type='CREDIT' AND p.status='COMPLETED'" + historicalFilter, [current.business_id]);
     return { businessId: String(current.business_id), balance: summary.balance || '0.00', pendingPayments: summary.pending || '0.00' };
   });
-  return { listSuppliers, getSupplier, createSupplier, updateSupplier, setSupplierActive, purchaseProducts, createPurchaseProduct, listPurchases, getPurchase: getPurchaseForView, getPayable: getPayableForView, listPayables, statement, recordPurchase, cancelPurchase, payInvoice, payablesSummary };
+  return { listSuppliers, getSupplier, createSupplier, updateSupplier, setSupplierActive, purchaseProducts, createPurchaseProduct, listPurchases, getPurchase: getPurchaseForView, editPurchase, getPayable: getPayableForView, listPayables, statement, recordPurchase, cancelPurchase, payInvoice, payablesSummary };
 }
 module.exports = { createProcurementService };

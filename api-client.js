@@ -55,14 +55,14 @@
     PAYMENT_CONFIRMATION_PENDING: 'Hay un pago pendiente de confirmar para esta factura.',
     ORDER_PAYMENT_CHANGED: 'El medio de pago del pedido cambi\u00f3. Vuelve a cotizarlo.',
     CREDIT_HAS_PAYMENTS: 'No se puede anular la factura mientras tenga abonos registrados.',
-    CREDIT_MIGRATION_REQUIRED: 'Clientes y cuentas por cobrar requieren la migraci\u00f3n 004 aprobada. Consulta al administrador.',
-    SALES_MIGRATION_REQUIRED: 'Ventas y caja requieren las migraciones 002 y 003 aprobadas. Consulta al administrador.',
+    CREDIT_MIGRATION_REQUIRED: 'Las cuentas por cobrar todavía no están disponibles. Contacta al administrador del sistema antes de continuar.',
+    SALES_MIGRATION_REQUIRED: 'Las ventas conectadas todavía no están disponibles. Contacta al administrador del sistema antes de continuar.',
     EXPENSE_CASH_CLOSED: 'Abre una caja antes de registrar un gasto en efectivo.',
     CASH_BALANCE_INSUFFICIENT: 'La caja no tiene saldo suficiente para registrar este movimiento.',
     EXPENSE_NOT_FOUND: 'No se encontró ese gasto en este negocio.',
     EXPENSE_CANCELLED: 'El gasto ya está anulado.',
     EXPENSE_CASH_MOVEMENT_MISSING: 'No se puede anular este gasto porque falta su movimiento de caja. Solicita revisión al administrador.',
-    SUPPLIER_PAYMENT_MIGRATION_REQUIRED: 'Los pagos a proveedor con tarjeta o transferencia requieren la migración 005. El efectivo sigue disponible; solicita autorización antes de migrar la base principal.',
+    SUPPLIER_PAYMENT_MIGRATION_REQUIRED: 'Los pagos a proveedores con tarjeta o transferencia todavía no están disponibles. Contacta al administrador del sistema.',
     SUPPLIER_CASH_CLOSED: 'Abre una caja antes de registrar una compra en efectivo o pagar una factura de proveedor en efectivo.',
     PURCHASE_CANCEL_REQUIRES_OPEN_CASH: 'Abre la caja donde se registró el pago en efectivo antes de anular esta compra.',
     SUPPLIER_DUPLICATE: 'Ya existe un proveedor con ese nombre en este negocio.',
@@ -75,11 +75,11 @@
     PAYABLE_NOT_FOUND: 'No se encontró la cuenta por pagar de esa factura.',
     PAYABLE_ALREADY_PAID: 'La factura ya está pagada.',
     PURCHASE_PRODUCT_IMAGE_UNAVAILABLE: 'La creación rápida de producto desde Compras no admite cargar una fotografía.',
-    PROCUREMENT_MIGRATION_REQUIRED: 'Compras y cuentas por pagar necesitan las migraciones conectadas aprobadas.',
-    NETWORK_ERROR: 'No se pudo conectar con el servidor. Comprueba tu conexión',
-    INVALID_RESPONSE: 'El servidor devolvió una respuesta inesperada.',
-    CASH_RESPONSE_INVALID: 'La respuesta de Caja no tiene el formato esperado o pertenece a otro negocio. Actualiza la pantalla e inténtalo de nuevo.',
-    INVALID_CREDENTIALS: 'El usuario o la contraseña son incorrectos (Credenciales incorrectas).',
+    PROCUREMENT_MIGRATION_REQUIRED: 'Compras y cuentas por pagar todavía no están disponibles. Contacta al administrador del sistema.',
+    NETWORK_ERROR: 'No hay conexión con el sistema. Revisa internet e inténtalo de nuevo.',
+    INVALID_RESPONSE: 'No pudimos procesar la respuesta. Actualiza la pantalla e inténtalo nuevamente.',
+    CASH_RESPONSE_INVALID: 'No se pudieron cargar los datos de Caja. Actualiza la pantalla e inténtalo de nuevo; si continúa, contacta al administrador.',
+    INVALID_CREDENTIALS: 'El usuario o la contraseña no coinciden.',
     INVALID_SESSION: 'La sesión venció o fue revocada. Inicia sesión nuevamente.',
     CSRF_FAILED: 'No se pudo validar la solicitud. Intenta nuevamente.',
     MODULE_FORBIDDEN: 'Este módulo requiere autorización de un administrador.',
@@ -89,9 +89,9 @@
     SYSTEM_ADMIN_REQUIRED: 'Solo el administrador del sistema puede acceder a esta sección.',
     MIGRATION_PACKAGE_INVALID: 'El paquete no contiene los datos válidos para esta migración.',
     MIGRATION_BASIC_REQUIRED: 'Primero completa la migración básica de productos para este negocio.',
-    MIGRATION_INVENTORY_SCHEMA_REQUIRED: 'La base conectada requiere la migración de inventario inicial antes de usar esta función.',
+    MIGRATION_INVENTORY_SCHEMA_REQUIRED: 'Esta función todavía no está disponible. Contacta al administrador del sistema antes de continuar.',
     MIGRATION_TARGET_INACTIVE: 'El negocio conectado destino no está activo.',
-    MIGRATION_GATE_SCHEMA_REQUIRED: 'Para usar la importación segura deben aplicarse las migraciones 012 y 013 en el servidor. No se modificó ningún negocio.',
+    MIGRATION_GATE_SCHEMA_REQUIRED: 'La importación todavía no está disponible. Contacta al administrador del sistema; no se modificó ningún negocio.',
     MIGRATION_TARGET_PROTECTED: 'El negocio principal del sistema no puede usarse como destino.',
     MIGRATION_TARGET_ALREADY_PREPARED: 'Este negocio ya está reservado para una importación o ya tiene un proceso iniciado.',
     MIGRATION_TARGET_HAS_DATA: 'Este negocio ya contiene operaciones o información que no se puede sustituir. No se modificó.',
@@ -115,10 +115,10 @@
     BUSINESS_DELETE_PREVIEW_REQUIRED: 'Vuelve a abrir el resumen antes de confirmar la eliminación.',
     BUSINESS_DELETE_PREVIEW_STALE: 'La información del negocio cambió desde que se mostró el resumen. Revisa el resumen actualizado antes de confirmar.',
     BUSINESS_DELETE_CONFIRMATION_REQUIRED: 'Eliminación cancelada. Debes escribir exactamente ELIMINAR.',
-    SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED: 'La gestión de planes y pagos necesita la migración 006 aprobada. Consulta al administrador del sistema.',
+    SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED: 'La gestión de planes y pagos todavía no está disponible. Contacta al administrador del sistema.',
     BUSINESS_PLAN_INVALID: 'Selecciona uno de los planes disponibles.',
     BUSINESS_PLAN_SCHEMA_UNSUPPORTED: 'El plan guardado no es compatible. Consulta al administrador del sistema.',
-    BUSINESS_PLAN_STANDARD_MIGRATION_REQUIRED: 'El plan Estándar necesita una actualización pendiente del sistema. No se modificó el negocio.',
+    BUSINESS_PLAN_STANDARD_MIGRATION_REQUIRED: 'El plan Estándar todavía no está disponible. No se modificó el negocio; contacta al administrador del sistema.',
     BUSINESS_PLAN_REQUIRED: 'Asigna un plan al negocio antes de crear o reactivar usuarios.',
     BUSINESS_PLAN_USER_LIMIT_EXCEEDED: 'Se alcanzaría el máximo de usuarios activos del plan. No se modificó el negocio.',
     BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED: 'El plan permite un administrador activo por negocio. No se modificó la cuenta ni el plan.',
@@ -147,13 +147,14 @@
     IMAGE_STORAGE_UNAVAILABLE: 'El almacenamiento de fotografias del servidor no esta disponible.',
     IMAGE_QUOTA_EXCEEDED: 'El negocio alcanzo su limite de almacenamiento de fotografias.',
     IMAGE_BUSY: 'El servidor esta procesando otras fotografias. Intenta nuevamente en unos segundos.',
-    BUSINESS_SETTINGS_MIGRATION_REQUIRED: 'La configuracion central del negocio necesita la migracion 011.',
-    MIGRATION_ARCHIVE_SCHEMA_REQUIRED: 'Para usar la importación segura, el servidor necesita la migración 012. No se modificó el negocio.',
+    BUSINESS_SETTINGS_MIGRATION_REQUIRED: 'La configuración del negocio todavía no está disponible. Contacta al administrador del sistema.',
+    MIGRATION_ARCHIVE_SCHEMA_REQUIRED: 'La importación todavía no está disponible. Contacta al administrador del sistema; no se modificó el negocio.',
     MIGRATION_PACKAGE_CHANGED: 'El paquete local cambió después de iniciar la migración. Recupera el mismo archivo guardado para reanudarla.',
     MIGRATION_ARCHIVE_CONFIRMATION_REQUIRED: 'Confirma que el paquete pertenece al negocio destino.',
     MIGRATION_BATCH_CONFLICT: 'El lote de migración cambió. Consulta su estado antes de reintentar.',
-    MIGRATION_OPERATIONAL_SCHEMA_REQUIRED: 'El servidor necesita la migración 014 para importar y conciliar las operaciones históricas.',
-    MIGRATION_ZERO_INVENTORY_SCHEMA_REQUIRED: 'El servidor necesita la migración 015 para conservar los eventos históricos de inventario sin cambio de existencias.',
+    MIGRATION_OPERATIONAL_SCHEMA_REQUIRED: 'La importación de operaciones históricas todavía no está disponible. Contacta al administrador del sistema.',
+    MIGRATION_ZERO_INVENTORY_SCHEMA_REQUIRED: 'La importación de ciertos movimientos históricos todavía no está disponible. Contacta al administrador del sistema.',
+    MIGRATION_ORDER_SNAPSHOT_SCHEMA_REQUIRED: 'La importación de órdenes antiguas todavía no está disponible. Contacta al administrador del sistema.',
     MIGRATION_TARGET_USER_REQUIRED: 'Antes de migrar, crea una cuenta para el negocio destino con un usuario y una contraseña nuevos. No se copian las contraseñas del POS local.',
     MIGRATION_CATALOG_RECONCILIATION_REQUIRED: 'Los datos del catálogo no pudieron comprobarse. El negocio permanece bloqueado; revisa el resultado y vuelve a intentar con el mismo archivo.',
     MIGRATION_STAGE_IN_PROGRESS: 'La importación de este negocio ya está en curso. Consulta su estado antes de volver a intentarlo.',
@@ -166,7 +167,7 @@
       MIGRATION_IDENTITY_ALREADY_REVIEWED: 'Este registro ya tiene una decisión guardada. No se reemplazó.',
       MIGRATION_RECORD_NOT_FOUND: 'No se encontró el registro pendiente en el archivo de migración.',
     MIGRATION_BATCH_NOT_FOUND: 'No se encontró el lote de migración para este negocio.',
-    BUSINESS_SETTINGS_EXISTS: 'Ya existe configuracion en MySQL. La copia de este dispositivo no se importo.',
+    BUSINESS_SETTINGS_EXISTS: 'Ya hay información comercial guardada en el negocio. La copia de este dispositivo no se importó.',
     LEGACY_SETTINGS_BUSINESS_MISMATCH: 'El nombre de la configuracion local no coincide con el negocio conectado. No se importo.',
     TOO_MANY_ATTEMPTS: 'Demasiados intentos. Espera antes de intentar nuevamente.',
     BARCODE_EXISTS: 'Ese c\u00f3digo de barras ya existe en este negocio.',
@@ -175,13 +176,33 @@
     INSUFFICIENT_STOCK: 'No hay existencias suficientes para esa salida.',
     STOCK_LIMIT: 'Las existencias superan el l\u00edmite permitido.',
     PRODUCT_ARCHIVED: 'El producto est\u00e1 archivado; su historial se conserva.',
-    DATABASE_UNAVAILABLE: 'La base de datos no est\u00e1 disponible. Intenta consultar nuevamente.',
+    DATABASE_UNAVAILABLE: 'El sistema está temporalmente fuera de servicio. Inténtalo de nuevo en unos minutos.',
     RETRY_OPERATION: 'La operaci\u00f3n no se complet\u00f3 por concurrencia. Consulta el inventario antes de reintentar.',
-    INTERNAL_ERROR: 'El servidor no pudo completar la solicitud.',
-    REPORTS_UNAVAILABLE: 'Los reportes conectados no están disponibles con la versión actual del servidor.'
+    INTERNAL_ERROR: 'Ocurrió un problema al completar la solicitud. Actualiza la pantalla y vuelve a intentarlo; si continúa, contacta al administrador.',
+    REPORTS_UNAVAILABLE: 'Los reportes no están disponibles en este momento. Inténtalo más tarde o contacta al administrador.'
   };
+  const technicalMessage = /\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+\b|\b(?:Internal Server Error|Bad Request|Unauthorized|Forbidden|Not Found|Method Not Allowed|Service Unavailable|Invalid Input|Request Failed|Failed to Fetch|NetworkError|Unhandled Promise Rejection|Cannot read properties|Access Denied|TypeError|ReferenceError|SyntaxError|RangeError|ConstraintError|DatabaseClosedError|DOMException|AbortError|IndexedDB|Dexie|MySQL|Docker|Node(?:\.js)?|Express|SQL(?:STATE)?|API|endpoint|database|backend|frontend|server|node_modules|ECONN[A-Z]+|ER_[A-Z0-9_]+)\b|\b(?:status(?:\s+code)?|estado|c[oó]digo de error)\s*(?:HTTP\s*)?[45]\d{2}\b|\b(?:HTTP|Error)\s*[45]\d{2}\b|\bundefined|null|NaN\b|\[object Object\]|\/api\/|\b(?:GET|POST|PUT|PATCH|DELETE)\s+\/|\bat\s+[^\n]+\.(?:js|cjs):\d+|\b(?:ID|UUID)\s+(?:local|interno|de MySQL|de la base de datos)\b|^\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b/im;
+  const technicalCamelCase = /\b[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]*\b/;
+  function containsTechnicalMessage(value) { return typeof value !== 'string' || technicalMessage.test(value) || technicalCamelCase.test(value); }
+  function expectedUserError(message, fallback = 'No se pudo completar la operación. Revisa la información e inténtalo de nuevo.') {
+    const value = typeof message === 'string' && message.trim() ? message.trim() : fallback;
+    return Object.assign(new Error(containsTechnicalMessage(value) ? fallback : value), { userFacing: true });
+  }
+  function userFacingText(value, fallback = 'No se pudo completar la solicitud. Contacta al administrador si el problema continúa.') {
+    return expectedUserError(value, fallback).message;
+  }
+  function userFacingErrorMessage(error, fallback = 'No se pudo completar la operación. Actualiza la pantalla e inténtalo nuevamente.') {
+    if (error?.userFacing === true && typeof error.message === 'string' && !containsTechnicalMessage(error.message)) {
+      if (typeof error.code !== 'string' || Object.hasOwn(messages, error.code)) return error.message;
+    }
+    return userFacingText(fallback, 'No se pudo completar la solicitud. Contacta al administrador si el problema continúa.');
+  }
   class ApiError extends Error {
-    constructor(code, status = 0) { super(messages[code] || 'No se pudo completar la solicitud.'); this.code = code; this.status = status; }
+    constructor(code, status = 0) {
+      const message = messages[code] || 'No se pudo completar la solicitud. Contacta al administrador si el problema continúa.';
+      super(containsTechnicalMessage(message) ? 'No se pudo completar la solicitud. Contacta al administrador si el problema continúa.' : message);
+      this.code = code; this.status = status; this.userFacing = true;
+    }
   }
   function user(value) {
     if (!value || typeof value.id !== 'string' || typeof value.businessId !== 'string' || !/^[1-9]\d{0,19}$/.test(value.id) || !/^[1-9]\d{0,19}$/.test(value.businessId) || !['ADMIN', 'VENDEDOR'].includes(value.role) || typeof value.username !== 'string' || typeof value.fullName !== 'string' || value.active !== true) throw new ApiError('INVALID_RESPONSE');
@@ -260,8 +281,8 @@
         const serverMessage = data?.error?.message;
         const businessDeleteCodes = ['BUSINESS_NOT_FOUND', 'BUSINESS_DELETE_PROTECTED', 'BUSINESS_DELETE_BLOCKED', 'BUSINESS_DELETE_SCHEMA_UNSUPPORTED', 'BUSINESS_DELETE_PREVIEW_REQUIRED', 'BUSINESS_DELETE_PREVIEW_STALE', 'BUSINESS_DELETE_CONFIRMATION_REQUIRED'];
         const businessPlanCodes = ['SYSTEM_ADMIN_BILLING_MIGRATION_REQUIRED', 'BUSINESS_PLAN_INVALID', 'BUSINESS_PLAN_SCHEMA_UNSUPPORTED', 'BUSINESS_PLAN_REQUIRED', 'BUSINESS_PLAN_STANDARD_MIGRATION_REQUIRED', 'BUSINESS_PLAN_USER_LIMIT_EXCEEDED', 'BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED', 'BUSINESS_PLAN_DOWNGRADE_BLOCKED', 'BUSINESS_PLAN_ACTIVATION_BLOCKED', 'BUSINESS_PLAN_NOT_MONTHLY', 'PAYMENT_AMOUNT_INVALID', 'PAYMENT_DATE_FUTURE'];
-        if ((businessDeleteCodes.includes(code) || businessPlanCodes.includes(code)) && typeof serverMessage === 'string' && serverMessage.trim() && serverMessage.length <= 500) error.message = serverMessage.trim();
-        else if (typeof receivedCode === 'string' && !Object.prototype.hasOwnProperty.call(messages, code)) error.message = 'El servidor devolvi\u00f3 el error ' + code + '.';
+        if ((businessDeleteCodes.includes(code) || businessPlanCodes.includes(code)) && typeof serverMessage === 'string' && serverMessage.trim() && serverMessage.length <= 500 && !containsTechnicalMessage(serverMessage)) error.message = serverMessage.trim();
+        // Los códigos desconocidos se conservan para diagnóstico, pero nunca se presentan al usuario.
         const details = data?.error?.details;
         const numericDetails = details && typeof details === 'object' && !Array.isArray(details) && Object.values(details).every(item => Number.isSafeInteger(item) && item >= 0) ? details : null;
         if (numericDetails && ['BUSINESS_PLAN_USER_LIMIT_EXCEEDED', 'BUSINESS_PLAN_DOWNGRADE_BLOCKED', 'BUSINESS_PLAN_ACTIVATION_BLOCKED'].includes(code) && Number.isSafeInteger(numericDetails.activeUsers) && Number.isSafeInteger(numericDetails.maximumUsers)) {
@@ -529,6 +550,7 @@
     async purchases(offset = 0, q = '') { const value = await this.#request('/purchases?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : '')); if (!Array.isArray(value?.purchases) || value.purchases.length > 100) throw new ApiError('INVALID_RESPONSE'); return value.purchases; }
     async purchase(id) { const value = await this.#request('/purchases/' + encodeURIComponent(id)); if (value?.purchase?.businessId !== this.#effectiveBusinessId() || !Array.isArray(value.purchase.items)) throw new ApiError('INVALID_RESPONSE'); return value.purchase; }
     async createPurchase(data) { const value = this.#salesResult(await this.#write('/purchases', 'POST', data)); if (value?.purchase?.businessId !== this.#effectiveBusinessId()) throw new ApiError('INVALID_RESPONSE'); return value.purchase; }
+    async updatePurchase(id, data) { const value = this.#salesResult(await this.#write('/purchases/' + encodeURIComponent(id), 'PATCH', data)); if (value?.kind !== 'EDIT_PURCHASE' || value.purchase?.businessId !== this.#effectiveBusinessId() || value.purchase.id !== String(id) || !Array.isArray(value.purchase.items)) throw new ApiError('INVALID_RESPONSE'); return value; }
     async cancelPurchase(id, data) { const value = this.#salesResult(await this.#write('/purchases/' + encodeURIComponent(id) + '/cancel', 'POST', data)); if (value?.purchase?.businessId !== this.#effectiveBusinessId() || value.purchase.status !== 'CANCELLED') throw new ApiError('INVALID_RESPONSE'); return value.purchase; }
     async payables(offset = 0, q = '') { const value = await this.#request('/payables?limit=100&offset=' + encodeURIComponent(offset) + (q ? '&q=' + encodeURIComponent(q) : '')); if (!Array.isArray(value?.payables) || value.payables.length > 100) throw new ApiError('INVALID_RESPONSE'); return value.payables; }
     async payable(id) { const value = await this.#request('/payables/' + encodeURIComponent(id)); if (value?.purchase?.businessId !== this.#effectiveBusinessId() || value.purchase.purchaseType !== 'CREDIT' || !Array.isArray(value.purchase.items)) throw new ApiError('INVALID_RESPONSE'); return value.purchase; }
@@ -1273,4 +1295,5 @@
   }
   window.PosApiClient = PosApiClient;
   window.PosApiError = ApiError;
+  window.PosMessages = Object.freeze({ expected: expectedUserError, fromError: userFacingErrorMessage, text: userFacingText, isTechnical: containsTechnicalMessage });
 })();

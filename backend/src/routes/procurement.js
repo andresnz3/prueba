@@ -33,6 +33,7 @@ function procurementRoutes(authentication, service) {
   router.get('/purchases', async (req, res) => res.json({ purchases: await service.listPurchases(req.auth, page(req.query)) }));
   router.post('/purchases', async (req, res) => res.status(201).json(await service.recordPurchase(req.auth, values.purchase(req.body))));
   router.get('/purchases/:id', async (req, res) => { v.body(req.query, []); res.json({ purchase: await service.getPurchase(req.auth, v.id(req.params.id)) }); });
+  router.patch('/purchases/:id', async (req, res) => res.json(await service.editPurchase(req.auth, v.id(req.params.id), values.purchaseEdit(req.body))));
   router.post('/purchases/:id/cancel', async (req, res) => res.json(await service.cancelPurchase(req.auth, v.id(req.params.id), values.cancellation(req.body))));
   router.get('/payables', async (req, res) => res.json({ payables: await service.listPayables(req.auth, page(req.query)) }));
   router.get('/payables/summary', async (req, res) => { v.body(req.query, []); res.json({ summary: await service.payablesSummary(req.auth) }); });

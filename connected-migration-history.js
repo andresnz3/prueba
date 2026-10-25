@@ -27,6 +27,10 @@
     categories: [['Categorías originales', ['categories']]]
   });
   const monetaryFields = new Set(['total', 'discount', 'descuento', 'tax', 'impuesto', 'cost', 'costo', 'retailPrice', 'precio', 'wholesalePrice', 'precioMayorista', 'creditLimit', 'limiteCredito', 'openingBalance', 'debt', 'deuda', 'amount', 'monto', 'openingAmount', 'montoInicial', 'estimatedTotal']);
+  const statusLabels = Object.freeze({ OPEN: 'Pendiente', OVERDUE: 'Vencida', PAID: 'Pagada', CANCELLED: 'Anulada', CANCELADA: 'Anulada', PENDING: 'Pendiente', PENDING_CONFIRMATION: 'Por confirmar', POSTED: 'Registrado', CONFIRMED: 'Confirmado', VOID: 'Anulado', COMPLETED: 'Completada', HISTORICAL: 'Histórica' });
+  const paymentLabels = Object.freeze({ CASH: 'Efectivo', CARD: 'Tarjeta', TRANSFER: 'Transferencia', CREDIT: 'Crédito', BANK: 'Banco', OTHER: 'Otro medio' });
+  const movementLabels = Object.freeze({ SALE: 'Venta', CUSTOMER_PAYMENT: 'Abono de cliente', SUPPLIER_PAYMENT: 'Pago a proveedor', REVERSAL: 'Reversión', MANUAL_ENTRY: 'Entrada manual', MANUAL_EXIT: 'Salida manual', EXPENSE: 'Gasto', PURCHASE: 'Compra', ADJUSTMENT: 'Ajuste de inventario' });
+  const actionLabels = Object.freeze({ CREATE: 'Registro creado', UPDATE: 'Registro actualizado', DELETE: 'Registro eliminado', LOGIN: 'Inicio de sesión', LOGOUT: 'Cierre de sesión', SALE: 'Venta registrada', PURCHASE: 'Compra registrada', CANCEL: 'Operación anulada', PAYMENT: 'Abono registrado', EXPENSE: 'Gasto registrado', INVENTORY_ADJUSTMENT: 'Inventario ajustado' });
   const sections = new Map();
   const text = value => String(value ?? '').trim();
 
@@ -37,15 +41,19 @@
 
   function displayValue(key, value) {
     if (value === null || value === undefined || value === '') return '';
+    if (/^(?:status|estado)$/i.test(key)) return statusLabels[value] || 'Por revisar';
+    if (/^(?:paymentMethod|metodoPago|medioPago)$/i.test(key)) return paymentLabels[value] || 'Otro medio';
+    if (/^(?:type|tipo|entity|modulo)$/i.test(key)) return movementLabels[value] || 'Registro';
+    if (/^(?:action|accion|actionCode)$/i.test(key)) return actionLabels[value] || 'Actividad registrada';
+    if (/^(?:role|rol)$/i.test(key)) return ({ ADMIN: 'Administrador', VENDEDOR: 'Vendedor' })[value] || 'Usuario';
+    if (/^(?:direction|direccion)$/i.test(key)) return ({ IN: 'Entrada', OUT: 'Salida' })[value] || 'Movimiento';
+    if (/^salesFlow$/i.test(key)) return ({ DIRECT: 'Venta directa', CENTRALIZED: 'Cobro centralizado' })[value] || 'Modalidad por revisar';
     if (/^(fechaTS|createdAt|date|fecha|openedAt|closedAt|dueDate|dueAt|cancelledAt)$/i.test(key)) return formatDate(value);
     if (monetaryFields.has(key) && /^-?\d+(?:\.\d+)?$/.test(String(value))) return 'C$' + Number(value).toFixed(2);
     if (typeof value === 'boolean') return value ? 'Sí' : 'No';
     if (Array.isArray(value)) return value.length + ' registro(s)';
-    if (typeof value === 'object') {
-      const entries = Object.entries(value).slice(0, 6).map(([name, amount]) => name + ': ' + (monetaryFields.has(name) && /^-?\d+(?:\.\d+)?$/.test(String(amount)) ? 'C$' + Number(amount).toFixed(2) : text(amount)));
-      return entries.join(' · ');
-    }
-    return text(value);
+    if (typeof value === 'object') return Object.keys(value).length + ' datos disponibles';
+    return window.PosMessages.text(text(value), 'Información no disponible.');
   }
 
   function createSection(view, module) {
@@ -121,7 +129,7 @@
       }
       if (list.childElementCount) article.append(list);
       if (record.pendingReason) {
-        const note = document.createElement('p'); note.className = 'connected-migration-history-pending'; note.textContent = record.pendingReason; article.append(note);
+        const note = document.createElement('p'); note.className = 'connected-migration-history-pending'; note.textContent = window.PosMessages.text(record.pendingReason, 'Este dato requiere una revisión antes de utilizarse.'); article.append(note);
       }
       return article;
     }

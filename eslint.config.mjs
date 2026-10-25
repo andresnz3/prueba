@@ -3,6 +3,9 @@ import js from "@eslint/js";
 
 export default [
   {
+    ignores: ["vendor/**", "dist/**"]
+  },
+  {
     files: ["**/*.js", "**/*.cjs"],
     ignores: ["backend/**"],
     languageOptions: {

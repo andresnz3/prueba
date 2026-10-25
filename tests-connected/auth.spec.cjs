@@ -47,7 +47,7 @@ test('no acepta usuarios locales en modo conectado y explica que no existen', as
   await open(page); await page.locator('#loginUsername').fill('localonly'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#loginError')).toContainText('No existe un usuario'); await expect(page.locator('#app')).toBeHidden(); await expect(page.locator('#loginPassword')).toHaveValue('');
 });
 test('autorizacion temporal, rechazo de contrasena incorrecta y revocacion al cambiar', async ({ page }) => {
-  await open(page); await login(page, 'browserseller'); await page.locator('#navInventoryBtn').click(); await page.locator('#grantAdminUsername').fill('browseradmin'); await page.locator('#gestorPassword').fill('wrong'); await page.locator('#authForm button[type=submit]').click(); await expect(page.locator('#authError')).toContainText('Credenciales incorrectas'); await expect(page.locator('#gestorPassword')).toHaveValue('');
+  await open(page); await login(page, 'browserseller'); await page.locator('#navInventoryBtn').click(); await page.locator('#grantAdminUsername').fill('browseradmin'); await page.locator('#gestorPassword').fill('wrong'); await page.locator('#authForm button[type=submit]').click(); await expect(page.locator('#authError')).toContainText('no coinciden'); await expect(page.locator('#gestorPassword')).toHaveValue('');
   await page.locator('#gestorPassword').fill(password); await page.locator('#authForm button[type=submit]').click(); await expect(page.locator('#inventoryView')).toBeVisible();
   await page.locator('#navSalesBtn').click(); await expect(page.locator('#salesView')).toBeVisible();
   const access = await page.evaluate(async () => { try { await new window.PosApiClient(window.POS_API_BASE_URL).access('inventory'); return 'allowed'; } catch (e) { return e.code; } }); expect(access).toBe('MODULE_FORBIDDEN');
@@ -79,13 +79,13 @@ test('ADMIN crea vendedor, modifica rol/estado y cambia contrasena con API', asy
   await page.screenshot({ path: test.info().outputPath('users-desktop.png'), fullPage: true });
 });
 test('errores de conexion al login visibles sin acceso offline conectado', async ({ page }) => {
-  await page.route(apiBase + '/**', route => route.abort()); await open(page); await expect(page.locator('#loginError')).toContainText('conectar'); await expect(page.locator('#app')).toBeHidden();
+  await page.route(apiBase + '/**', route => route.abort()); await open(page); await expect(page.locator('#loginError')).toContainText('No hay conexión con el sistema'); await expect(page.locator('#app')).toBeHidden();
 });
 test('error de conexion al navegar oculta datos y no concede permisos', async ({ page }) => {
-  await open(page); await login(page, 'browserseller'); await page.route(apiBase + '/**', route => route.abort()); await page.locator('#navInventoryBtn').click(); await expect(page.locator('#connectedNotice')).toContainText('conectar'); await expect(page.locator('#inventoryView')).toBeHidden();
+  await open(page); await login(page, 'browserseller'); await page.route(apiBase + '/**', route => route.abort()); await page.locator('#navInventoryBtn').click(); await expect(page.locator('#connectedNotice')).toContainText('No hay conexión con el sistema'); await expect(page.locator('#inventoryView')).toBeHidden();
 });
 test('respuesta invalida del servidor no crea identidad', async ({ page }) => {
-  await page.route(apiBase + '/auth/me', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })); await open(page); await expect(page.locator('#loginError')).toContainText('inesperada'); await expect(page.locator('#app')).toBeHidden();
+  await page.route(apiBase + '/auth/me', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })); await open(page); await expect(page.locator('#loginError')).toContainText('No pudimos procesar la respuesta'); await expect(page.locator('#app')).toBeHidden();
 });
 test('no persiste contrasenas, tokens o CSRF en almacenamiento web', async ({ page }) => {
   await open(page); await login(page, 'browserseller'); await authorize(page);
@@ -107,7 +107,7 @@ test('modo local no invoca API y cambio de modalidad recarga sin conservar ident
   expect(await page.locator('#connectedPurchaseNumberField').evaluate(node => node.classList.contains('hidden'))).toBe(true);
   const localDateStyle = await page.locator('#reporteDesdeInput').evaluate(input => ({ scheme: getComputedStyle(input).colorScheme, background: getComputedStyle(input).backgroundColor, calendar: getComputedStyle(input, '::-webkit-calendar-picker-indicator').display }));
   expect(localDateStyle).toEqual({ scheme: 'light', background: 'rgb(255, 255, 255)', calendar: 'block' });
-  await page.locator('#logoutBtn').click(); await page.locator('#authMode').selectOption('connected'); await expect(page).toHaveURL(/mode=connected/); await expect(page.locator('#loginScreen')).toBeVisible(); expect(await page.evaluate(() => currentUser)).toBeNull();
+  await page.locator('#logoutBtn').click(); await page.locator('#authMode').selectOption('connected'); await expect(page).toHaveURL(/mode=connected/); await expect(page.locator('#loginScreen')).toBeVisible(); await expect(page.locator('#app')).toBeHidden(); expect(await page.locator('#loginPassword').inputValue()).toBe('');
 });
 
 test('respuesta tardia no reabre una sesion vencida', async ({ page }) => {

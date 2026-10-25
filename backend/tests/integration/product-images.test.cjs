@@ -32,7 +32,7 @@ function client(base) {
 }
 test('Integracion MySQL y almacenamiento privado de fotografias',async t=>{
   const root=await imageDirectory();t.after(()=>removeImages(root));
-  const config={...readConfig(),images:{root,quota:256*1024*1024}},authConfig=readAuthConfig({CSRF_SECRET:randomBytes(32).toString('hex'),AUTH_RATE_MAX:'100'});
+  const config={...readConfig(),jsonLimit:16384,images:{root,quota:256*1024*1024}},authConfig=readAuthConfig({CSRF_SECRET:randomBytes(32).toString('hex'),AUTH_RATE_MAX:'100'});
   const pool=createDatabasePool({...config.database,database});t.after(()=>pool.end());
   const business=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Images A'])).insertId),otherBusiness=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Images B'])).insertId);
   const hash=await hashPassword(password);

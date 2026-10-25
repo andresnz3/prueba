@@ -8,7 +8,7 @@ const password = 'Synthetic-user-password-123!';
 const target = process.env.POS_TEST_BUSINESS_B;
 async function panel(page) {
  await page.goto('/?mode=connected'); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('Browser-fixture-password-123!'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
- await page.locator('#navSystemAdminBtn').click(); await page.locator('#systemAdminUsersTab').click(); await page.locator('#systemAdminUserBusinessId').selectOption(target);
+ await page.locator('#navSystemAdminBtn').click(); await page.locator('#systemAdminUsersTab').click(); await page.locator('#systemAdminUserBusinessId').selectOption(target); await expect(page.locator('#systemAdminUserBusinessId')).toHaveValue(target); await expect(page.locator('#systemAdminUsersCapacity')).toContainText('usuarios activos');
 }
 async function fill(page, username, role = 'ADMIN') {
  await page.locator('#systemAdminUsername').fill(username); await page.locator('#systemAdminFullName').fill('yo2'); await page.locator('#systemAdminPassword').fill(password); await page.locator('#systemAdminRole').selectOption(role);
@@ -26,7 +26,7 @@ function poolForTest() {
  return createDatabasePool({...config.database,database});
 }
 for(const role of ['ADMIN','VENDEDOR']) test('panel creates active '+role+', hashes password, logs in and isolates business',async({page,browser})=>{
- await panel(page);let businessTarget=target;if(role==='ADMIN'){businessTarget=await page.evaluate(async()=>{const api=new window.PosApiClient(window.POS_API_BASE_URL);await api.me();return(await api.createAdminBusiness('Admin-only '+crypto.randomUUID(),'CONECTADO_BASICO')).id;});await page.reload();await expect(page.locator('#app')).toBeVisible();await page.locator('#navSystemAdminBtn').click();await page.locator('#systemAdminUsersTab').click();await page.locator('#systemAdminUserBusinessId').selectOption(businessTarget);}const username='user_'+randomUUID().slice(0,8);const pool=poolForTest();
+ await panel(page);let businessTarget=target;if(role==='ADMIN'){businessTarget=await page.evaluate(async()=>{const api=new window.PosApiClient(window.POS_API_BASE_URL);await api.me();return(await api.createAdminBusiness('Admin-only '+crypto.randomUUID(),'CONECTADO_BASICO')).id;});await page.reload();await expect(page.locator('#app')).toBeVisible();await page.locator('#navSystemAdminBtn').click();await page.locator('#systemAdminUsersTab').click();await page.locator('#systemAdminUserBusinessId').selectOption(businessTarget);await expect(page.locator('#systemAdminUserBusinessId')).toHaveValue(String(businessTarget));await expect(page.locator('#systemAdminUsersCapacity')).toContainText('0 de 3 usuarios activos');}const username='user_'+randomUUID().slice(0,8);const pool=poolForTest();
  const tables=['sales','purchases','products','inventory_movements','cash_sessions','cash_movements'];
  try{
   const counts=async()=>{const values=[];for(const table of tables)values.push(Number((await pool.execute('SELECT COUNT(*) n FROM '+table))[0][0].n));return values;};
@@ -34,7 +34,7 @@ for(const role of ['ADMIN','VENDEDOR']) test('panel creates active '+role+', has
   const pending=page.waitForResponse(r=>r.request().method()==='POST'&&r.url().endsWith('/admin/businesses/'+businessTarget+'/users'));
   await page.locator('#systemAdminUserForm button').click();const response=await pending;expect(response.status()).toBe(201);const created=(await response.json()).user;
   expect(created).toMatchObject({username,fullName:'yo2',role,active:true,businessId:businessTarget});expect(created.password_hash).toBeUndefined();
-  await expect(page.locator('#systemAdminUsersBody tr').filter({hasText:username})).toContainText(role);await expect(page.locator('#systemAdminPassword')).toHaveValue('');
+  await expect(page.locator('#systemAdminUsersBody tr').filter({hasText:username})).toContainText(role==='ADMIN'?'Administrador':'Vendedor');await expect(page.locator('#systemAdminPassword')).toHaveValue('');
   const [rows]=await pool.execute('SELECT business_id,role,active,password_hash FROM users WHERE username=?',[username]);expect(rows).toHaveLength(1);expect(String(rows[0].business_id)).toBe(businessTarget);expect(rows[0].role).toBe(role);expect(Number(rows[0].active)).toBe(1);expect(rows[0].password_hash).toMatch(/^\$argon2id\$/);expect(await verifyPassword(rows[0].password_hash,password)).toBe(true);expect(rows[0].password_hash).not.toBe(password);
   const loginContext=await browser.newContext();try{
    const userPage=await loginContext.newPage();await userPage.goto('/?mode=connected');await userPage.locator('#loginUsername').fill(username);await userPage.locator('#loginPassword').fill(password);await userPage.locator('#loginForm button[type=submit]').click();await expect(userPage.locator('#app')).toBeVisible();

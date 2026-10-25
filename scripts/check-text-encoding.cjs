@@ -4,7 +4,10 @@ const { readdirSync, readFileSync } = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const SKIP_DIRS = new Set(['.git', '.codex', '.aws', 'node_modules', 'dist', 'test-results', 'test-results-connected', 'playwright-report', 'coverage']);
+// Third-party minified assets are byte-verified by check:vendor. Their license
+// and compatibility strings can contain question marks/replacement markers;
+// scan authored text separately to avoid treating vendor data as UI copy.
+const SKIP_DIRS = new Set(['.git', '.codex', '.aws', 'node_modules', 'dist', 'vendor', 'test-results', 'test-results-connected', 'playwright-report', 'coverage']);
 const TEXT_EXTENSIONS = new Set([
   '.bat', '.cjs', '.conf', '.css', '.csv', '.html', '.ini', '.java', '.js', '.json', '.jsonc', '.jsx',
   '.md', '.mjs', '.ps1', '.py', '.sh', '.sql', '.svg', '.toml', '.ts', '.tsx', '.txt', '.xml', '.yaml', '.yml'

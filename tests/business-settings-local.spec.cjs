@@ -55,8 +55,10 @@ test('la configuración local permanece en este navegador y se refleja en el com
     let captured;
     const originalClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () { captured = { href: this.href, filename: this.download }; };
+    const xlsx = window.XLSX;
+    window.XLSX = undefined;
     try { window.exportarTablaCSV('utf8CsvFixture', 'prueba_utf8'); }
-    finally { HTMLAnchorElement.prototype.click = originalClick; fixture.remove(); }
+    finally { window.XLSX = xlsx; HTMLAnchorElement.prototype.click = originalClick; fixture.remove(); }
     return captured;
   });
   expect(csvExport.filename).toMatch(/^prueba_utf8_.*\.csv$/);

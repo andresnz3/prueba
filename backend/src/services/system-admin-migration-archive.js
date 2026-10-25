@@ -8,6 +8,7 @@ const SOURCE_STORES = Object.freeze({
   cashSessions: 'cashSessions', inventoryMovements: 'inventoryMovements', abonos: 'abonos',
   expenses: 'expenses', auditLogs: 'auditLogs', saleOrders: 'saleOrders', syncQueue: 'syncQueue'
 });
+const STORE_LABELS = Object.freeze({ products: 'Productos', productos: 'Productos', clients: 'Clientes', clientes: 'Clientes', suppliers: 'Proveedores', proveedores: 'Proveedores', sales: 'Ventas', ventas: 'Ventas', purchases: 'Compras', compras: 'Compras', cashSessions: 'Caja', cash_sessions: 'Caja', caja: 'Caja', inventoryMovements: 'Inventario', inventory_movements: 'Inventario', inventario: 'Inventario', abonos: 'Abonos', payments: 'Abonos', expenses: 'Gastos', gastos: 'Gastos', auditLogs: 'Auditoría', audit_logs: 'Auditoría', auditoria: 'Auditoría', saleOrders: 'Órdenes pendientes', sale_orders: 'Órdenes pendientes', ordenes: 'Órdenes pendientes', syncQueue: 'Operaciones pendientes', sync_queue: 'Operaciones pendientes', configuration: 'Configuración comercial', configuracion: 'Configuración comercial', categories: 'Categorías', categorias: 'Categorías' });
 const MAX_RECORDS_PER_TYPE = 50000;
 const CHUNK_SIZE = 100;
 const LEGACY_BUSINESS_ID = '00000000-0000-0000-0000-000000000000';
@@ -68,14 +69,14 @@ function recordKey(row, index, seen) {
   if (candidate !== undefined) {
     const id = String(candidate).trim();
     if (id.length > 112 || hasControlChars(id)) {
-      return { key: 'row:' + hash(canonical(row)) + ':' + index, issue: 'El identificador local no cabe en la clave de origen permitida; requiere revisión.' };
+      return { key: 'row:' + hash(canonical(row)) + ':' + index, issueCode: 'INVALID_LOCAL_ID', issue: 'La referencia de este registro no se puede verificar; requiere revisión.' };
     }
     const count = seen.get(id) || 0;
     seen.set(id, count + 1);
-    return { key: count ? 'id:' + id + ':duplicate:' + count : 'id:' + id, issue: count ? 'El identificador local está repetido; se conservó cada fila y sus relaciones requieren revisión.' : null };
+      return { key: count ? 'id:' + id + ':duplicate:' + count : 'id:' + id, issueCode: count ? 'DUPLICATE_LOCAL_ID' : null, issue: count ? 'La referencia de este registro está repetida; se conservó cada fila y sus relaciones requieren revisión.' : null };
   }
   const fingerprint = hash(canonical(row));
-  return { key: 'row:' + fingerprint + ':' + index, issue: 'La fila no contiene un identificador local estable; se conservó por posición y no se verificaron sus relaciones.' };
+  return { key: 'row:' + fingerprint + ':' + index, issueCode: 'MISSING_LOCAL_ID', issue: 'La fila no contiene un identificador local estable; se conservó por posición y no se verificaron sus relaciones.' };
 }
 
 function firstSubsetMismatch(previous, current, path = '') {
@@ -233,8 +234,8 @@ function buildArchivePlan(packageValue) {
       const relatedIssues = analysis.issues.filter(issue => issue.entity === entity && issue.recordId === rowId);
       const reasons = [];
       if (duplicate) moduleReview.duplicates++;
-      if (duplicate && !identityKey.issue) reasons.push('DUPLICATE_LOCAL_ID: The source identifier occurs more than once in this module.');
-      if (identityKey.issue) reasons.push(identityKey.issue.includes('repetido') ? 'DUPLICATE_LOCAL_ID: ' + identityKey.issue : 'MISSING_LOCAL_ID: ' + identityKey.issue);
+      if (duplicate && !identityKey.issueCode) reasons.push('DUPLICATE_LOCAL_ID: La referencia del registro está repetida en este módulo.');
+      if (identityKey.issueCode) reasons.push(identityKey.issueCode + ': ' + identityKey.issue);
       if (legacy) reasons.push('IDENTITY_UNCONFIRMED: El ID de este registro no permite confirmar a qué negocio pertenece.');
       if (relatedIssues.length) {
         moduleReview.inconsistentReferences += relatedIssues.length;
@@ -279,9 +280,8 @@ function buildArchivePlan(packageValue) {
     counts[entity] = rows.length;
     if (moduleReview.references.length === 1000) moduleReview.referencesTruncated = true;
   }
-  if (packageValue.version >= 2 && missingStores.length) blockers.push('El paquete 2 declara todas las tiendas locales; faltan: ' + missingStores.join(', ') + '.');
-  if (packageValue.version === 1) blockers.push('El archivo versión 1 no incluye gastos, auditoría local, órdenes pendientes ni cola de sincronización. No se asumirán vacíos: se migrarán los datos disponibles y la migración quedará pendiente hasta verificar esos módulos.');
-  if (missingStores.length && packageValue.version >= 2) blockers.push('Hay tiendas locales sin exportar.');
+  if (packageValue.version >= 2 && missingStores.length) blockers.push('El archivo debe incluir todos los módulos. No encontramos: ' + missingStores.map(name => STORE_LABELS[name] || 'otro módulo').join(', ') + '. Abre el POS local con la versión actual y vuelve a generar el archivo.');
+  if (packageValue.version === 1) blockers.push('El archivo versión 1 no incluye gastos, auditoría, órdenes pendientes ni operaciones pendientes. No se asumirán vacíos: se migrarán los datos disponibles y el negocio seguirá bloqueado hasta revisar esos módulos.');
   const config = packageValue.data.configuration;
   if (config !== undefined) {
     if (!config || typeof config !== 'object' || Array.isArray(config)) throw httpError(400, 'MIGRATION_PACKAGE_INVALID');
@@ -313,7 +313,7 @@ function buildArchivePlan(packageValue) {
   if (scope.idSource === 'ambiguous' || concreteBusinessIds.size > 1) blockers.push('El origen local declara más de un identificador; revisa y separa los negocios antes de migrar.');
   if (!identity.sourceBusinessId && !identityTotals.sharedId) blockers.push('El archivo no contiene una identidad persistente del origen. Se requiere evidencia del negocio y revisión de sus registros sin identificar.');
   if (Number(scope.excludedRecords) > 0) blockers.push('La exportación excluyó ' + Number(scope.excludedRecords) + ' registros asociados a otra identidad. Deben revisarse por separado.');
-  if (Array.isArray(scope.missingStores) && scope.missingStores.length) blockers.push('La exportación no encontró las tiendas locales: ' + scope.missingStores.join(', ') + '.');
+  if (Array.isArray(scope.missingStores) && scope.missingStores.length) blockers.push('La exportación no encontró algunos módulos locales: ' + [...new Set(scope.missingStores.map(name => STORE_LABELS[name] || 'otro módulo'))].join(', ') + '.');
   if (omissions.count) blockers.push('Se retiraron ' + omissions.count + ' campos sensibles o identificadores de cuenta; no se copiaron contraseñas ni credenciales locales.');
   if (identityTotals.otherBusiness) securityBlockers.push('Hay registros asociados a otra identidad de negocio; no se guardarán junto al destino seleccionado.');
   if (concreteBusinessIds.size > 1) securityBlockers.push('El paquete contiene varios identificadores concretos de negocio; no se guardará.');

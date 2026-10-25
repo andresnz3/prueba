@@ -88,7 +88,7 @@ test('Caja excluye ventas migradas de operaciones y conserva el cierre',async({p
   const overview=await call(page,'cashOverview'),historical=overview.operationSales.find(value=>value.id===historicalId);
   expect(historical).toBeUndefined();
   expect(overview.movements.some(value=>value.saleId===historicalId)).toBe(false);expect(overview.expectedAmount).toBe('0.00');
-  const reportAfter=await call(page,'connectedReport');expect(Number(reportAfter.sales.total)-Number(reportBefore.sales.total)).toBe(47);expect(reportAfter.sales.count-reportBefore.sales.count).toBe(1);
+    const reportAfter=await call(page,'connectedReport');const toCents=value=>{const [units,fraction='00']=String(value).split('.');return Number(units)*100+Number(fraction.padEnd(2,'0').slice(0,2));};expect(toCents(reportAfter.sales.total)-toCents(reportBefore.sales.total)).toBe(4700);expect(reportAfter.sales.count-reportBefore.sales.count).toBe(1);
   await page.locator('#navCajaBtn').click();
   const row=page.locator('#cajaOperacionesBody tr').filter({hasText:'#000027'});await expect(row).toHaveCount(0);await expect(page.locator('#cajaOperacionesBody')).not.toContainText(internalReference);
   const closed=(await call(page,'cashSessions')).find(value=>value.id===cash.id);expect(closed.expectedAmount).toBe('100.00');
