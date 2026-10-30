@@ -115,3 +115,16 @@ test('El perfil de producción separa base, proyecto e imágenes sin publicar My
   assert.doesNotMatch(mysql + backend, /^\s+ports:/m);
   assert.match(read('deploy/contabo/Caddyfile.example'), /reverse_proxy 127\.0\.0\.1:8080/);
 });
+
+test('Production overlay allows local licensing to be disabled without weakening core settings', () => {
+  const compose = read('compose.production.yaml');
+  for (const name of ['LOCAL_LICENSE_CODE_PEPPER', 'LOCAL_LICENSE_SIGNING_KEY_ID', 'LOCAL_LICENSE_SIGNING_PRIVATE_KEY']) {
+    assert.match(compose, new RegExp(`${name}: \\$\\{${name}:-\\}`));
+    assert.doesNotMatch(compose, new RegExp(`${name}: \\$\\{${name}:\\?`));
+  }
+  assert.match(compose, /POS_DATABASE_NAME:\?Set/);
+  assert.match(read('compose.yaml'), /MYSQL_ROOT_PASSWORD:\s*\$\{MYSQL_ROOT_PASSWORD:\?Set/);
+  assert.match(read('compose.yaml'), /MYSQL_APP_PASSWORD:\?Set/);
+  assert.match(read('compose.yaml'), /CSRF_SECRET:\?Set/);
+  assert.match(read('compose.yaml'), /CORS_ORIGINS:\?Set/);
+});

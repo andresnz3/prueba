@@ -11,9 +11,10 @@ services:
       NODE_ENV: production
       DB_NAME: ${POS_DATABASE_NAME:?Set POS_DATABASE_NAME in the private production env file}
       TRUST_PROXY_HOPS: "2"
-      LOCAL_LICENSE_CODE_PEPPER: ${LOCAL_LICENSE_CODE_PEPPER:?Configure the production license pepper}
-      LOCAL_LICENSE_SIGNING_KEY_ID: ${LOCAL_LICENSE_SIGNING_KEY_ID:?Configure the production signing key ID}
-      LOCAL_LICENSE_SIGNING_PRIVATE_KEY: ${LOCAL_LICENSE_SIGNING_PRIVATE_KEY:?Configure the production signing private key}
+      # Omit all three values to disable local license issuance temporarily.
+      LOCAL_LICENSE_CODE_PEPPER: ${LOCAL_LICENSE_CODE_PEPPER:-}
+      LOCAL_LICENSE_SIGNING_KEY_ID: ${LOCAL_LICENSE_SIGNING_KEY_ID:-}
+      LOCAL_LICENSE_SIGNING_PRIVATE_KEY: ${LOCAL_LICENSE_SIGNING_PRIVATE_KEY:-}
 
   frontend:
     image: ${POS_FRONTEND_IMAGE:-pos-frontend:production}
