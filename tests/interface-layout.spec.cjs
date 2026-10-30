@@ -39,7 +39,7 @@ test('local navigation keeps every module at the shared content start without a 
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto('/');
   await page.locator('#loginUsername').fill('andres');
-  await page.locator('#loginPassword').fill('4321');
+  await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!');
   await page.locator('#loginForm button[type="submit"]').click();
   await expect(page.locator('#app')).toBeVisible();
 

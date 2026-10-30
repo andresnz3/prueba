@@ -2,14 +2,15 @@
 const { Router } = require('express');
 const v = require('../middleware/validation');
 const { authMiddleware } = require('../middleware/authentication');
-const { createAuthRateLimit } = require('../middleware/auth-rate-limit');
+const { createDistributedLoginRateLimit, createDistributedReauthorizationRateLimit } = require('../middleware/auth-rate-limit');
 const { loginCsrf, cookies, hashToken, sessionCsrf } = require('../services/tokens');
 const { publicUser } = require('../repositories/auth');
 const { httpError } = require('../middleware/errors');
 function authRoutes({ repo, auth, users, config }) {
   const router = Router();
   const m = authMiddleware(repo, config);
-  const rate = createAuthRateLimit(config);
+  const loginRate = createDistributedLoginRateLimit({ repo, config });
+  const reauthorizationRate = createDistributedReauthorizationRateLimit({ repo, config });
   router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   router.use((req, res, next) => {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !req.is('application/json')) throw httpError(415, 'JSON_REQUIRED');
@@ -29,7 +30,7 @@ function authRoutes({ repo, auth, users, config }) {
     res.cookie(config.preCookieName, csrfToken, { ...m.cookieOptions, maxAge: 600000 });
     res.json({ csrfToken });
   });
-  router.post('/auth/login', m.loginProtection, rate, async (req, res) => {
+  router.post('/auth/login', m.loginProtection, loginRate, async (req, res) => {
     const data = v.body(req.body, ['username', 'password']);
     const input = { username: v.username(data.username), password: v.password(data.password) };
     const result = await auth.login(input, { ip: req.ip.slice(0, 45), agent: (req.get('User-Agent') || '').slice(0, 512) });
@@ -57,7 +58,7 @@ function authRoutes({ repo, auth, users, config }) {
     res.clearCookie(config.cookieName, m.cookieOptions); res.clearCookie(config.supportCookieName, m.cookieOptions); res.status(204).end();
   });
   router.post('/auth/renew', async (req, res) => { v.body(req.body, []); res.json(setSession(res, await auth.renew(req.ownerAuth || req.auth))); });
-  router.post('/auth/authorizations', rate, async (req, res) => {
+  router.post('/auth/authorizations', reauthorizationRate, async (req, res) => {
     const data = v.body(req.body, ['module', 'adminUsername', 'adminPassword']);
     const module = v.moduleName(data.module); if (module === 'sales') v.invalid();
     res.status(201).json(await auth.authorize(req.auth, { module, adminUsername: v.username(data.adminUsername), adminPassword: v.password(data.adminPassword) }));

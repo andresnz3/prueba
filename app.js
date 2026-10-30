@@ -7,6 +7,7 @@ const connectedMode = new URLSearchParams(location.search).get('mode') === 'conn
 const LEGACY_LOCAL_BUSINESS_ID = '00000000-0000-0000-0000-000000000000';
 let DEFAULT_BUSINESS_ID = LEGACY_LOCAL_BUSINESS_ID;
 let CONNECTED_EFFECTIVE_BUSINESS_ID = null;
+let LOCAL_LICENSE_BUSINESS_ID = null;
 function createPosDatabase(name) {
 const db = new Dexie(name);
 db.version(9).stores({
@@ -23,22 +24,16 @@ db.version(9).stores({
     audit_logs: '++id, business_id, fechaTS, usuario, modulo, accion'
 });
 db.version(10).stores({ saleOrders: "id, business_id, status, createdAt" });
+db.version(11).stores({ localAuth: "key" });
 return db;
 }
 let localDB = connectedMode ? null : createPosDatabase('POS_OfflineDB');
-
-const USERS = [
-    { username: "andres", password: "4321", role: "gestor" },
-    { username: "gestor", password: "4321", role: "gestor" },
-    { username: "sergio", password: "4321", role: "gestor" },
-    { username: "sergio", password: "1234", role: "vendedor" },
-    { username: "vendedor1", password: "1234", role: "vendedor" }
-];
 
 let products = [], clients = [], suppliers = [], purchasesHistory = [], salesHistory = [], cart = [];
 let cajaActual = null, cajaHistorial = [], gastosHistory = [], abonosHistory = [], auditHistory = [];
 let buyerType = "retail", paymentMethod = "cash", currentUser = null;
 let unlockedModuleId = null;
+let localLicenseLegacy = false;
 let renderizandoCarrito = false;
 let saleNumber = 1, totalTemporal = 0, descuentoPct = 0, descuentoMonto = 0, pendingAdminView = null, tempImageBase64 = null, tempConfigLogoBase64 = null, tempConfigLogoFile = null, tempConfigLogoPreviewUrl = null;
 let procesandoVenta = false;
@@ -78,6 +73,7 @@ function localBusinessRows(table, stateField, stateValue) {
 }
 window.PosLocalIdentity = Object.freeze({
     currentId() { return connectedMode ? null : DEFAULT_BUSINESS_ID; },
+    stableId() { return connectedMode ? null : LOCAL_LICENSE_BUSINESS_ID; },
     matches(row) {
         if (connectedMode) return false;
         const id = String(row?.business_id ?? row?.businessId ?? '').trim().toLowerCase();
@@ -94,6 +90,19 @@ function createLocalBusinessId() {
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+function ensureLocalLicenseBusinessIdentity() {
+    if (connectedMode) return null;
+    const key = 'posLocalLicenseBusinessId';
+    const isUuidV4 = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+    try {
+        const saved = localStorage.getItem(key);
+        if (isUuidV4(saved)) return saved.toLowerCase();
+        const id = createLocalBusinessId();
+        if (!isUuidV4(id)) return null;
+        localStorage.setItem(key, id);
+        return id;
+    } catch { return null; }
 }
 function hasLocalControlCharacters(value) {
     return Array.from(String(value)).some(character => {
@@ -128,21 +137,19 @@ if (!connectedMode) {
     const identity = ensureLocalBusinessIdentity(sysConfig);
     sysConfig = identity.config;
     if (identity.id) DEFAULT_BUSINESS_ID = identity.id;
+    LOCAL_LICENSE_BUSINESS_ID = ensureLocalLicenseBusinessIdentity();
 }
 
 let reporteDesdeTS = null, reporteHastaTS = null;
+let localDataReady = false;
 
 const loginScreen = document.getElementById("loginScreen"), app = document.getElementById("app"), barcodeInput = document.getElementById("barcodeInput"), searchProductInput = document.getElementById("searchProductInput"), cameraScannerContainer = document.getElementById("cameraScannerContainer");
 
-function isAdmin(viewId) { if (connectedMode) return window.PosConnected?.canManageModule(viewId) || false; return !!currentUser && (currentUser.role === "gestor" || unlockedModuleId !== null); }
+function isAdmin(viewId) { if (connectedMode) return window.PosConnected?.canManageModule(viewId) || false; return Boolean(currentUser) && viewId !== "systemAdminView"; }
 
 function puedeAccederAVista(viewId) {
     if (connectedMode) return window.PosConnected?.canView(viewId) || false;
-    if (viewId === "salesView") return true;
-    if (!currentUser) return false;
-    if (viewId === "upgradeView") return true;
-    if (currentUser.role === "gestor") return true;
-    return viewId === unlockedModuleId;
+    return Boolean(currentUser) && viewId !== "systemAdminView";
 }
 
 function escapeHtml(str) {
@@ -376,7 +383,7 @@ async function initApp() {
     if (connectedMode) {
         products = []; clients = []; suppliers = []; salesHistory = []; purchasesHistory = [];
         abonosHistory = []; gastosHistory = []; auditHistory = []; cajaHistorial = []; cajaActual = null;
-        return;
+        return true;
     }
     try {
         products = await localDB.products.toArray() || [];
@@ -408,12 +415,273 @@ async function initApp() {
 
         await initCaja();
         actualizarCarrito();
-    } catch (err) { console.error("Error cargando base de datos local:", err.message); }
+        localDataReady = true;
+        return true;
+    } catch {
+        localDataReady = false;
+        showLocalDataLoadError();
+        return false;
+    }
 }
+function showLocalDataLoadError() {
+    const message = document.getElementById("localDataLoadError");
+    if (message) {
+        message.textContent = "No pudimos cargar toda la información guardada en este equipo. No registres operaciones todavía. Actualiza la página y, si el problema continúa, solicita ayuda. Tus datos no se borraron.";
+        message.classList.remove("hidden");
+    }
+    document.getElementById("localOwnerSetupForm")?.classList.add("hidden");
+    document.getElementById("loginForm")?.classList.add("hidden");
+    loginScreen?.classList.remove("hidden");
+    app?.classList.add("hidden");
+    const description = document.getElementById("modeDescription");
+    if (description) description.textContent = "No se pudo cargar la información guardada en este equipo.";
+}
+function showLocalAuthError(message) {
+    const element = document.getElementById("localOwnerSetupMessage");
+    if (!element) return;
+    element.textContent = message;
+    element.classList.remove("hidden");
+}
+
+function setLocalAuthScreen() {
+    if (connectedMode) return;
+    const setupForm = document.getElementById("localOwnerSetupForm");
+    const loginForm = document.getElementById("loginForm");
+    const description = document.getElementById("modeDescription");
+    if (!localDataReady) {
+        showLocalDataLoadError();
+        setupForm?.classList.add("hidden");
+        loginForm?.classList.add("hidden");
+        return;
+    }
+    const state = window.PosLocalAuth?.status?.() || "unavailable";
+    const ready = window.PosLocalAuth?.supported?.() === true;
+    const licenseState = window.PosLocalLicense?.status?.() || "UNAVAILABLE";
+    const gate = document.getElementById("localLicenseGate");
+    const legacyPrompt = document.getElementById("localLicenseLegacyPrompt");
+    const legacyActivate = document.getElementById("localLicenseLegacyActivateBtn");
+    const legacyActions = document.getElementById("localLicenseLegacyActions");
+    const recoveryActions = document.getElementById("localLicenseRecoveryActions");
+    const licenseBlocking = ["REVOKED", "TRANSFERRED", "INVALID"].includes(licenseState);
+    const gateRequired = licenseBlocking || (!localLicenseLegacy && licenseState !== "ACTIVE");
+    gate?.classList.toggle("hidden", !gateRequired);
+    legacyPrompt?.classList.toggle("hidden", !localLicenseLegacy || licenseState === "ACTIVE" || licenseBlocking);
+    legacyActivate?.classList.toggle("hidden", !localLicenseLegacy || licenseState === "ACTIVE" || licenseBlocking);
+    legacyActions?.classList.toggle("hidden", !localLicenseLegacy || licenseBlocking);
+    recoveryActions?.classList.toggle("hidden", !licenseBlocking);
+    if (gateRequired) {
+        setupForm?.classList.add("hidden"); loginForm?.classList.add("hidden");
+        const title = document.getElementById("localLicenseTitle");
+        const intro = document.getElementById("localLicenseIntro");
+        const recoveryText = document.getElementById("localLicenseRecoveryText");
+        const submit = document.getElementById("localLicenseSubmit");
+        if (licenseBlocking) {
+            if (title) title.textContent = licenseState === "REVOKED" ? "Licencia revocada" : licenseState === "TRANSFERRED" ? "Licencia transferida" : "No se pudo validar la autorización";
+            if (intro) intro.textContent = "No se puede iniciar esta instalación con la autorización guardada. La información comercial permanece en este navegador.";
+            if (recoveryText) recoveryText.textContent = "Tus datos no se eliminaron. Descarga una copia o contacta al administrador para recuperar la licencia.";
+            if (submit) submit.textContent = "Activar otra licencia";
+        } else {
+            if (title) title.textContent = "Activar el POS local";
+            if (intro) intro.textContent = "Ingresa el código de compra para activar esta instalación. La licencia es permanente y tus datos comerciales permanecen en este navegador.";
+            if (submit) submit.textContent = "Activar licencia";
+        }
+        return;
+    }
+    if (state === "missing" && ready) {
+        setupForm?.classList.remove("hidden");
+        loginForm?.classList.add("hidden");
+        if (description) description.textContent = "Configura una cuenta del propietario para este equipo. La información guardada se conservará.";
+        return;
+    }
+    if (state === "configured" && ready) {
+        setupForm?.classList.add("hidden");
+        loginForm?.classList.remove("hidden");
+        if (description) description.textContent = "Acceso del propietario configurado para este equipo.";
+        return;
+    }
+    setupForm?.classList.remove("hidden");
+    loginForm?.classList.add("hidden");
+    if (description) description.textContent = "No se pudo verificar el acceso local en este navegador.";
+    if (state === "invalid") showLocalAuthError("La configuración de acceso está dañada. Tus datos siguen guardados; solicita ayuda antes de continuar.");
+    else if (!ready) showLocalAuthError("Este navegador no ofrece la protección necesaria para configurar el acceso. Abre el POS desde localhost o una conexión segura.");
+    else showLocalAuthError("No se pudo abrir el acceso local. Tus datos no se han modificado.");
+}
+
+function enterLocalOwner(username) {
+    if (!connectedMode && !localDataReady) { showLocalDataLoadError(); return; }
+    currentUser = { username, displayName: username };
+    loginScreen?.classList.add("hidden");
+    app?.classList.remove("hidden");
+    const seller = document.getElementById("sellerName");
+    if (seller) seller.textContent = username;
+    const roleBadge = document.getElementById("roleBadge");
+    if (roleBadge) roleBadge.textContent = "Propietario";
+    unlockedModuleId = null;
+    switchView("salesView");
+    actualizarCatalogo();
+}
+
 const appInitialization = new Promise(resolve => {
-    const initialize = () => { if (connectedMode) resolve(); else initApp().then(resolve); };
+    const initialize = () => {
+        if (connectedMode) { resolve(); return; }
+        initApp().then(async loaded => {
+            if (!loaded) { resolve(); return; }
+            try { await window.PosLocalAuth.load(localDB); }
+            catch (error) { console.error("No se pudo leer la configuración de acceso local:", error); }
+            try { await window.PosLocalLicense.load(); }
+            catch { /* Una falla del servicio no invalida una autorización local permanente. */ }
+            try {
+                const stored = await Promise.all(['products', 'clients', 'suppliers', 'sales', 'purchases', 'cajaSessions', 'gastos', 'abonos', 'inventory_movements', 'saleOrders'].map(name => localDB.table(name).count()));
+                localLicenseLegacy = window.PosLocalAuth.status() === 'configured' || stored.some(count => count > 0);
+            } catch { localLicenseLegacy = window.PosLocalAuth.status() === 'configured'; }
+            setLocalAuthScreen();
+            resolve();
+        });
+    };
     if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", initialize, { once: true });
     else initialize();
+});
+
+document.getElementById("localOwnerSetupForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    await appInitialization;
+    if (connectedMode) return;
+    if (!localDataReady) { showLocalDataLoadError(); return; }
+    if (["REVOKED", "TRANSFERRED", "INVALID"].includes(window.PosLocalLicense?.status?.())) { setLocalAuthScreen(); return; }
+    const username = document.getElementById("localOwnerUsername").value.trim();
+    const password = document.getElementById("localOwnerPassword").value;
+    const confirmation = document.getElementById("localOwnerPasswordConfirm").value;
+    const submit = document.getElementById("localOwnerSetupSubmit");
+    const message = document.getElementById("localOwnerSetupMessage");
+    message?.classList.add("hidden");
+    if (password !== confirmation) { showLocalAuthError("Las contraseñas no coinciden."); return; }
+    submit.disabled = true;
+    try {
+        const prepared = await window.PosLocalAuth.prepare(username, password);
+        await localDB.transaction('rw', localDB.audit_logs, localDB.localAuth, async () => {
+            await localDB.audit_logs.count();
+            await window.PosLocalAuth.load(localDB);
+            if (window.PosLocalAuth.status() !== 'missing') throw new Error('OWNER_ALREADY_CONFIGURED');
+            await window.PosLocalAuth.save(prepared);
+        });
+        document.getElementById("localOwnerSetupForm")?.reset();
+        try { await window.PosLocalAuth.load(localDB); } catch { /* Se conserva el mensaje principal si la base está ocupada. */ }
+        setLocalAuthScreen();
+        enterLocalOwner(username);
+        await registrarAuditoria('SESION', 'LOCAL_OWNER_SETUP', 'Configuró el acceso del propietario');
+        await registrarAuditoria('SESION', 'LOGIN', 'Inicio de sesión del propietario');
+    } catch (error) {
+        const messages = {
+            OWNER_USERNAME_INVALID: "El nombre de usuario debe tener entre 3 y 100 caracteres: letras, números, punto, guion o guion bajo.",
+            OWNER_PASSWORD_INVALID: "La contraseña debe tener al menos 12 caracteres y no superar 256 bytes.",
+            OWNER_CRYPTO_UNAVAILABLE: "Este navegador no ofrece la protección necesaria. Abre el POS desde localhost o una conexión segura.",
+            OWNER_STORAGE_UNAVAILABLE: "No se pudo guardar el acceso. Comprueba el espacio disponible del navegador e inténtalo de nuevo.",
+            OWNER_ALREADY_CONFIGURED: "La cuenta del propietario ya está configurada. Inicia sesión con ella.",
+            OWNER_CREDENTIAL_INVALID: "No se pudo validar la cuenta. Revisa los datos e inténtalo de nuevo."
+        };
+        try { await window.PosLocalAuth.load(localDB); } catch { /* Se conserva el mensaje principal si la base está ocupada. */ }
+        setLocalAuthScreen();
+        if (window.PosLocalAuth.status() === 'configured') {
+            const loginError = document.getElementById("loginError");
+            if (loginError) { loginError.textContent = messages[error?.message] || "La cuenta ya está configurada. Inicia sesión con ella."; loginError.classList.remove("hidden"); }
+        } else showLocalAuthError(messages[error?.message] || "No se pudo configurar el acceso. Tus datos del negocio se conservaron.");
+    } finally { submit.disabled = false; }
+});
+
+function setLocalLicenseMessage(text, isError = true) {
+    const message = document.getElementById('localLicenseMessage');
+    if (!message) return;
+    message.textContent = text;
+    message.classList.toggle('error', isError);
+    message.classList.toggle('success', !isError);
+    message.classList.remove('hidden');
+}
+
+document.getElementById('localLicenseForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    await appInitialization;
+    if (connectedMode || !window.PosLocalLicense) return;
+    const form = event.currentTarget;
+    const input = document.getElementById('localLicenseCode');
+    const button = document.getElementById('localLicenseSubmit');
+    const message = document.getElementById('localLicenseMessage');
+    if (!form.reportValidity()) return;
+    message?.classList.add('hidden');
+    button.disabled = true;
+    try {
+        const state = await window.PosLocalLicense.activate(input.value);
+        if (state === 'REVOKED' || state === 'TRANSFERRED') {
+            setLocalAuthScreen();
+            setLocalLicenseMessage(state === 'REVOKED' ? 'Esta licencia está revocada. Tus datos siguen disponibles para descargar una copia.' : 'Esta licencia fue transferida a otro equipo. Tus datos siguen disponibles para descargar una copia.');
+            return;
+        }
+        if (state !== 'ACTIVE') throw new Error('LOCAL_LICENSE_UNAVAILABLE');
+        form.reset();
+        const setupNote = document.getElementById('localOwnerSetupNote');
+        if (setupNote) setupNote.textContent = 'Licencia activada. Configura o inicia el acceso del propietario; tus datos comerciales permanecerán en este equipo.';
+        setLocalAuthScreen();
+        const next = window.PosLocalAuth.status() === 'missing' ? document.getElementById('localOwnerUsername') : document.getElementById('loginUsername');
+        next?.focus();
+    } catch (failure) {
+        const messages = {
+            LOCAL_LICENSE_CODE_INVALID: 'Revisa el código e inténtalo nuevamente.',
+            LOCAL_LICENSE_CRYPTO_UNAVAILABLE: 'Este navegador no ofrece la protección necesaria. Abre el POS desde localhost o una conexión segura.',
+            LOCAL_LICENSE_BUSINESS_ID_UNAVAILABLE: 'No pudimos confirmar la identidad guardada de este negocio. Tus datos se conservaron; vuelve a intentarlo o contacta al administrador.',
+            LOCAL_LICENSE_SIGNATURE_INVALID: 'No se pudo confirmar la autorización recibida. Inténtalo nuevamente o contacta al administrador.',
+            LOCAL_LICENSE_RATE_LIMITED: 'Se realizaron varios intentos. Espera antes de probar de nuevo.',
+            LOCAL_LICENSE_NOT_CONFIGURED: 'La activación todavía no está disponible. Tus datos permanecen en este navegador; contacta al administrador.',
+            LOCAL_LICENSE_SERVER_UNAVAILABLE: 'No se pudo conectar con el servicio de licencias. Comprueba tu conexión e inténtalo nuevamente.',
+            LOCAL_LICENSE_UNAVAILABLE: 'No se pudo validar esta licencia. Revisa el código o contacta al administrador autorizado.'
+        };
+        setLocalLicenseMessage(messages[failure?.message] || 'No se pudo activar el POS. Tus datos se conservaron y puedes volver a intentarlo.');
+    } finally { button.disabled = false; }
+});
+
+document.getElementById('localLicenseContinueLegacyBtn')?.addEventListener('click', async () => {
+    await appInitialization;
+    if (connectedMode || !localLicenseLegacy || ['REVOKED', 'TRANSFERRED', 'INVALID'].includes(window.PosLocalLicense?.status?.())) return;
+    setLocalAuthScreen();
+    document.getElementById('localOwnerUsername')?.focus();
+});
+
+document.getElementById('localLicenseLegacyActivateBtn')?.addEventListener('click', async () => {
+    await appInitialization;
+    if (connectedMode || !localLicenseLegacy) return;
+    document.getElementById('localLicenseGate')?.classList.remove('hidden');
+    document.getElementById('localOwnerSetupForm')?.classList.add('hidden');
+    document.getElementById('loginForm')?.classList.add('hidden');
+    document.getElementById('localLicenseCode')?.focus();
+});
+
+document.getElementById('localLicenseExportBtn')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const downloadButton = document.getElementById('localLicenseExportDownloadBtn');
+    button.disabled = true;
+    downloadButton?.classList.add('hidden');
+    document.getElementById('localLicenseMessage')?.classList.add('hidden');
+    try {
+        if (connectedMode || typeof window.PosLocalMigrationExport?.prepareRecoveryCopy !== 'function') throw new Error('LOCAL_EXPORT_UNAVAILABLE');
+        await window.PosLocalMigrationExport.prepareRecoveryCopy();
+        button.classList.add('hidden');
+        downloadButton?.classList.remove('hidden');
+        setLocalLicenseMessage('La copia está lista. Pulsa «Descargar copia de mis datos» para guardarla.', false);
+        downloadButton?.focus();
+    } catch {
+        setLocalLicenseMessage('No se pudo preparar la copia. Tus datos siguen guardados; inténtalo nuevamente o solicita ayuda.');
+    } finally { button.disabled = false; }
+});
+
+document.getElementById('localLicenseExportDownloadBtn')?.addEventListener('click', event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    document.getElementById('localLicenseMessage')?.classList.add('hidden');
+    try {
+        if (connectedMode || typeof window.PosLocalMigrationExport?.downloadRecoveryCopy !== 'function') throw new Error('LOCAL_EXPORT_UNAVAILABLE');
+        window.PosLocalMigrationExport.downloadRecoveryCopy();
+        setLocalLicenseMessage('La copia de tus datos se descargó en este dispositivo.', false);
+    } catch {
+        setLocalLicenseMessage('No se pudo descargar la copia. Tus datos siguen guardados; vuelve a intentarlo.');
+    } finally { button.disabled = false; }
 });
 
 async function registrarAuditoria(modulo, accion, detalleTexto) {
@@ -553,20 +821,13 @@ window.confirmarAnularRegistro = function() {
     if (anularRegistroCallback) anularRegistroCallback(motivo);
 };
 
-document.getElementById("toggleLoginPasswordBtn")?.addEventListener("click", (event) => {
-    const button = event.currentTarget; const input = document.getElementById("loginPassword"); if (!input) return;
-    const showPassword = input.type === "password"; input.type = showPassword ? "text" : "password";
-    button.setAttribute("aria-pressed", String(showPassword));
-    button.setAttribute("aria-label", showPassword ? "Ocultar contraseña" : "Mostrar contraseña");
-    button.title = showPassword ? "Ocultar contraseña" : "Mostrar contraseña";
-    button.querySelector(".password-toggle-eye")?.classList.toggle("hidden", showPassword);
-    button.querySelector(".password-toggle-eye-off")?.classList.toggle("hidden", !showPassword);
-});
-
 document.getElementById("loginForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     await appInitialization;
     if (connectedMode) { await window.PosConnected.login(); return; }
+    if (!localDataReady) { showLocalDataLoadError(); return; }
+    if (["REVOKED", "TRANSFERRED", "INVALID"].includes(window.PosLocalLicense?.status?.())) { setLocalAuthScreen(); return; }
+    if (window.PosLocalAuth?.status() !== "configured") { setLocalAuthScreen(); return; }
     const uVal = document.getElementById("loginUsername").value.trim();
     const pVal = document.getElementById("loginPassword").value;
     const loginError = document.getElementById("loginError");
@@ -579,17 +840,15 @@ document.getElementById("loginForm")?.addEventListener("submit", async (e) => {
         return;
     }
 
-    const user = USERS.find(candidate => candidate.username === uVal && candidate.password === pVal);
+    let validCredentials = false;
+    try { validCredentials = await window.PosLocalAuth.verify(uVal, pVal); }
+    catch (error) { console.error("No se pudo verificar el acceso local:", error); }
 
-    if (user && uVal !== "") {
+    if (validCredentials && uVal !== "") {
         clearLoginFailureState();
         loginError?.classList.add("hidden");
-        currentUser = { ...user, displayName: user.username };
-        loginScreen?.classList.add("hidden"); app?.classList.remove("hidden");
-        if(document.getElementById("sellerName")) document.getElementById("sellerName").textContent = currentUser.username;
-        if(document.getElementById("roleBadge")) document.getElementById("roleBadge").textContent = currentUser.role === "gestor" ? "Administrador" : "Usuario";
-        unlockedModuleId = null; switchView("salesView"); actualizarCatalogo();
-        registrarAuditoria('SESION', 'LOGIN', `Inicio de sesión (${currentUser.role})`);
+        enterLocalOwner(uVal);
+        registrarAuditoria('SESION', 'LOGIN', 'Inicio de sesión del propietario');
     } else {
         let nextState = readLoginFailureState();
         if (!nextState.count || !nextState.firstFailureTs || (now - nextState.firstFailureTs) > 5 * 60 * 1000) {
@@ -621,6 +880,7 @@ document.getElementById("logoutBtn")?.addEventListener("click", async () => {
     detenerCamaraVentas();
     if (currentUser) await registrarAuditoria('SESION', 'LOGOUT', `Cierre de sesión`);
     app?.classList.add("hidden"); loginScreen?.classList.remove("hidden"); document.getElementById("loginForm")?.reset(); cart = []; resetearDescuentoVenta(); actualizarCarrito(); unlockedModuleId = null; currentUser = null;
+    setLocalAuthScreen();
 });
 
 function makeMigrationRequestText(businessName, counts) {
@@ -718,13 +978,10 @@ document.querySelectorAll("nav .nav-btn").forEach(btn => {
 document.getElementById("authForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     if (connectedMode) { window.PosConnected.authorize(); return; }
-    const gestorUser = USERS.find(u => u.role === "gestor");
-    const enteredPass = document.getElementById("gestorPassword").value;
-    if (gestorUser && enteredPass === gestorUser.password) {
-        unlockedModuleId = pendingAdminView; document.getElementById("authModal")?.classList.add("hidden"); document.getElementById("gestorPassword").value = ""; document.getElementById("authError")?.classList.add("hidden");
-        registrarAuditoria('SESION', 'DESBLOQUEO_GESTOR', `Desbloqueó acceso administrativo (vista: ${pendingAdminView || '-'})`);
-        if (pendingAdminView) switchView(pendingAdminView);
-    } else { document.getElementById("authError")?.classList.remove("hidden"); }
+    document.getElementById("authModal")?.classList.add("hidden");
+    document.getElementById("gestorPassword").value = "";
+    document.getElementById("authError")?.classList.add("hidden");
+    if (pendingAdminView && currentUser) switchView(pendingAdminView);
 });
 
 let salesFocusTimer = null;

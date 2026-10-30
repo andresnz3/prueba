@@ -9,7 +9,7 @@ function createAuthService(repo, config) {
       const matches = await repo.rows(db, 'SELECT u.*, b.name AS business_name, b.status AS business_status FROM users u JOIN businesses b ON b.id = u.business_id WHERE u.username = ? ORDER BY u.business_id, u.id FOR UPDATE', [input.username]);
       if (!matches.length) {
         await verifyOrDummy(undefined, input.password);
-        throw httpError(401, 'USER_NOT_FOUND');
+        throw httpError(401, 'INVALID_CREDENTIALS');
       }
       const verified = [];
       for (const candidate of matches) verified.push(await verifyOrDummy(candidate.password_hash, input.password));

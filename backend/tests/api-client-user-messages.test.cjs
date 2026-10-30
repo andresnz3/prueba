@@ -9,7 +9,7 @@ const { URL, URLSearchParams } = require('node:url');
 
 const source = fs.readFileSync(path.join(__dirname, '..', '..', 'api-client.js'), 'utf8');
 
-function createClient() {
+function createClient(fetchImpl) {
   const session = {
     csrfToken: 'A'.repeat(43),
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -17,9 +17,9 @@ function createClient() {
   };
   const sandbox = {
     window: {}, URL, URLSearchParams, AbortController, setTimeout, clearTimeout,
-    fetch: async url => url.endsWith('/auth/me')
+    fetch: fetchImpl || (async url => url.endsWith('/auth/me')
       ? { ok: true, status: 200, json: async () => session }
-      : { ok: false, status: 500, json: async () => ({ error: { code: 'INTERNAL_SQL_COLUMN_012', message: 'SELECT password FROM users' } }) }
+      : { ok: false, status: 500, json: async () => ({ error: { code: 'INTERNAL_SQL_COLUMN_012', message: 'SELECT password FROM users' } }) })
   };
   vm.runInNewContext(source, sandbox);
   return { client: new sandbox.window.PosApiClient('https://example.test/api'), messages: sandbox.window.PosMessages };
@@ -69,7 +69,7 @@ test('los errores conocidos de infraestructura y disponibilidad están expresado
   const { messages } = createClient();
   const sandbox = { window: {}, URL, URLSearchParams, AbortController, setTimeout, clearTimeout, fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }) };
   vm.runInNewContext(source, sandbox);
-  for (const code of ['NETWORK_ERROR', 'INVALID_RESPONSE', 'DATABASE_UNAVAILABLE', 'INTERNAL_ERROR', 'REPORTS_UNAVAILABLE', 'CASH_RESPONSE_INVALID', 'BUSINESS_SETTINGS_EXISTS', 'PROCUREMENT_MIGRATION_REQUIRED', 'MIGRATION_GATE_SCHEMA_REQUIRED', 'MIGRATION_OPERATIONAL_SCHEMA_REQUIRED', 'MIGRATION_ZERO_INVENTORY_SCHEMA_REQUIRED', 'MIGRATION_ORDER_SNAPSHOT_SCHEMA_REQUIRED']) {
+  for (const code of ['NETWORK_ERROR', 'INVALID_RESPONSE', 'DATABASE_UNAVAILABLE', 'DATABASE_BUSY', 'INTERNAL_ERROR', 'REPORTS_UNAVAILABLE', 'CASH_RESPONSE_INVALID', 'BUSINESS_SETTINGS_EXISTS', 'PROCUREMENT_MIGRATION_REQUIRED', 'MIGRATION_GATE_SCHEMA_REQUIRED', 'MIGRATION_OPERATIONAL_SCHEMA_REQUIRED', 'MIGRATION_ZERO_INVENTORY_SCHEMA_REQUIRED', 'MIGRATION_ORDER_SNAPSHOT_SCHEMA_REQUIRED', 'REAUTHORIZATION_RATE_LIMITED', 'REAUTHORIZATION_PROTECTION_UNAVAILABLE']) {
     const error = new sandbox.window.PosApiError(code);
     assert.equal(messages.isTechnical(error.message), false, code + ' debe producir una explicación segura');
   }
@@ -89,4 +89,52 @@ test('todos los mensajes de error conocidos del cliente están escritos para el 
     assert.equal(sandbox.window.PosMessages.isTechnical(error.message), false, code);
     assert.ok(error.message.trim().length > 0, code + ' requiere una explicación visible');
   }
+});
+
+test('cada error público del backend tiene una explicación específica en el cliente', () => {
+  const backendSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'middleware', 'errors.js'), 'utf8');
+  const serverStart = backendSource.indexOf('const publicMessages = Object.freeze({');
+  const serverEnd = backendSource.indexOf('});', serverStart);
+  assert.notEqual(serverStart, -1);
+  assert.notEqual(serverEnd, -1);
+  const serverCodes = [...backendSource.slice(serverStart, serverEnd).matchAll(/^\s+([A-Z][A-Z0-9_]+):/gm)].map(match => match[1]);
+  const clientStart = source.indexOf('const messages = {');
+  const clientEnd = source.indexOf('};', clientStart);
+  const clientCodes = new Set([...source.slice(clientStart, clientEnd).matchAll(/^\s+([A-Z][A-Z0-9_]+):/gm)].map(match => match[1]));
+  assert.deepEqual(serverCodes.filter(code => !clientCodes.has(code)), []);
+  const sandbox = { window: {}, URL, URLSearchParams, AbortController, setTimeout, clearTimeout, fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }) };
+  vm.runInNewContext(source, sandbox);
+  const generic = new sandbox.window.PosApiError('UNLISTED_AUDIT_CODE').message;
+  for (const code of serverCodes) {
+    const error = new sandbox.window.PosApiError(code);
+    assert.notEqual(error.message, generic, code + ' no debe caer en el aviso genérico');
+    assert.equal(sandbox.window.PosMessages.isTechnical(error.message), false, code);
+  }
+});
+
+test('DATABASE_BUSY muestra un mensaje claro y no reenvía una venta', async () => {
+  const requests = [];
+  const { client } = createClient(async (url, options = {}) => {
+    requests.push({ url, method: options.method || 'GET' });
+    if (url.endsWith('/auth/csrf')) return { ok: true, status: 200, json: async () => ({ csrfToken: 'B'.repeat(43) }) };
+    return { ok: false, status: 503, headers: { get: () => null }, json: async () => ({ error: { code: 'DATABASE_BUSY' } }) };
+  });
+
+  await assert.rejects(client.createSale({ operationKey: 'test-operation' }), error => {
+    assert.equal(error.code, 'DATABASE_BUSY');
+    assert.equal(error.status, 503);
+    assert.equal(error.message, 'El sistema está ocupado. Espera unos segundos y vuelve a intentarlo.');
+    return true;
+  });
+
+  assert.equal(requests.filter(request => request.method === 'POST').length, 1);
+  assert.equal(requests.filter(request => request.url.endsWith('/sales')).length, 1);
+});
+
+test('LOGIN_PROTECTION_UNAVAILABLE muestra una explicación sin detalles internos', async () => {
+  const sandbox = { window: {}, URL, URLSearchParams, AbortController, setTimeout, clearTimeout, fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }) };
+  vm.runInNewContext(source, sandbox);
+  const error = new sandbox.window.PosApiError('LOGIN_PROTECTION_UNAVAILABLE');
+  assert.equal(error.message, 'El acceso no está disponible temporalmente. Inténtalo de nuevo en unos minutos.');
+  assert.equal(sandbox.window.PosMessages.isTechnical(error.message), false);
 });

@@ -15,12 +15,19 @@ test('ordered migrations are tracked, adopted from a compatible existing schema,
   t.after(() => pool.end());
 
   const [ledger] = await pool.execute("SELECT version,status FROM schema_migrations ORDER BY version");
-  assert.deepEqual(ledger.map(row => [row.version, row.status]), Array.from({ length: 17 }, (_, index) => [String(index + 1).padStart(3, '0'), 'APPLIED']));
+  assert.deepEqual(ledger.map(row => [row.version, row.status]), Array.from({ length: 20 }, (_, index) => [String(index + 1).padStart(3, '0'), 'APPLIED']));
+  const [rateLimitTable] = await pool.execute("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='auth_login_rate_limits'");
+  assert.equal(Number(rateLimitTable[0].count), 1);
   const [orderColumns] = await pool.execute("SELECT column_name AS columnName,is_nullable AS isNullable,column_default AS columnDefault FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='sale_order_items' AND column_name IN ('estimated_unit_price','estimated_subtotal','price_snapshot_available') ORDER BY ordinal_position");
   assert.deepEqual(orderColumns.map(row => [row.columnName, row.isNullable, row.columnDefault === null ? null : String(row.columnDefault)]), [
     ['estimated_unit_price', 'YES', null],
     ['estimated_subtotal', 'YES', null],
     ['price_snapshot_available', 'NO', '1']
+  ]);
+  const [licenseIdentityColumns] = await pool.execute("SELECT table_name AS tableName,column_name AS columnName,data_type AS dataType,character_maximum_length AS maxLength,is_nullable AS isNullable,column_default AS columnDefault,character_set_name AS characterSet,collation_name AS collationName FROM information_schema.columns WHERE table_schema=DATABASE() AND ((table_name='local_licenses' AND column_name='local_business_id_hash') OR (table_name='local_license_installations' AND column_name='local_business_id_hash')) ORDER BY table_name");
+  assert.deepEqual(licenseIdentityColumns.map(row => [row.tableName, row.columnName, row.dataType, Number(row.maxLength), row.isNullable, row.columnDefault, row.characterSet, row.collationName]), [
+    ['local_license_installations', 'local_business_id_hash', 'char', 64, 'YES', null, 'ascii', 'ascii_bin'],
+    ['local_licenses', 'local_business_id_hash', 'char', 64, 'YES', null, 'ascii', 'ascii_bin']
   ]);
 
   const [existing] = await pool.execute("SELECT sp.amount,sp.payment_method,sp.status FROM supplier_payments sp JOIN users u ON u.business_id=sp.business_id AND u.id=sp.user_id WHERE u.username='migration005_fixture'");

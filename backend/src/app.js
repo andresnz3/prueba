@@ -4,8 +4,9 @@ const helmet = require('helmet');
 const cors = require('cors');
 const { healthRoutes } = require('./routes/health');
 const { httpError, errorHandler } = require('./middleware/errors');
-function createApp({ config, checkDatabase, authentication }) {
+function createApp({ config, checkDatabase, authentication, databaseDiagnostics }) {
   const app = express();
+  if (typeof databaseDiagnostics === 'function') app.locals.databaseDiagnostics = databaseDiagnostics;
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxyHops ?? 0);
   app.use(helmet());
@@ -14,7 +15,7 @@ function createApp({ config, checkDatabase, authentication }) {
       if (!origin) return callback(null, false);
       if (config.origins.includes(origin)) return callback(null, true);
       callback(httpError(403, 'ORIGIN_NOT_ALLOWED'));
-    }, methods: authentication ? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] : ['GET'], credentials: Boolean(authentication), allowedHeaders: ['Content-Type', 'X-CSRF-Token'], maxAge: 600
+    }, methods: authentication ? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] : ['GET'], credentials: Boolean(authentication), allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'X-POS-License-Request'], maxAge: 600
   }));
   let inventory, store;
   if (authentication) {
@@ -27,9 +28,10 @@ function createApp({ config, checkDatabase, authentication }) {
   app.use(express.json({ limit: config.jsonLimit, strict: true, inflate: false }));
   app.use('/api', healthRoutes(checkDatabase));
   if (authentication) {
+    app.use('/api', require('./routes/local-license').localLicenseRoutes(authentication, config.localLicense, config.origins));
     app.use('/api', require('./routes/financial').financialRoutes(authentication));
     app.use('/api', require('./routes/migration-history').migrationHistoryRoutes(authentication));
-    app.use('/api', require('./routes/system-admin').systemAdminRoutes(authentication,store));
+    app.use('/api', require('./routes/system-admin').systemAdminRoutes(authentication,store,config.localLicense));
     app.use('/api', require('./routes/inventory').inventoryRoutes(authentication,inventory));
     const customers = require('./services/customer-accounts').createCustomerService(authentication);
     const sales = require('./services/sales').createSalesService({ ...authentication, creditSnapshot: customers.creditSnapshot });

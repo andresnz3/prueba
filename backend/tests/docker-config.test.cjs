@@ -29,6 +29,13 @@ test('Compose publica solo Nginx en loopback y exige secretos privados', () => {
   assert.match(compose, /DB_PASSWORD: \$\{MYSQL_APP_PASSWORD:\?Set/);
   assert.match(compose, /CSRF_SECRET:\?Set/);
   assert.match(compose, /CORS_ORIGINS:\?Set/);
+  assert.match(compose, /LOCAL_LICENSE_CODE_PEPPER:\s*\$\{LOCAL_LICENSE_CODE_PEPPER:-\}/);
+  assert.match(compose, /LOCAL_LICENSE_SIGNING_KEY_ID:\s*\$\{LOCAL_LICENSE_SIGNING_KEY_ID:-\}/);
+  assert.match(compose, /LOCAL_LICENSE_SIGNING_PRIVATE_KEY:\s*\$\{LOCAL_LICENSE_SIGNING_PRIVATE_KEY:-\}/);
+  const backend = compose.split('  backend:\n')[1]?.split('\n  frontend:\n')[0] || '';
+  const migrate = compose.split('  migrate:\n')[1]?.split('\nnetworks:\n')[0] || '';
+  assert.match(backend, /LOCAL_LICENSE_SIGNING_PRIVATE_KEY/);
+  assert.doesNotMatch(migrate, /LOCAL_LICENSE_SIGNING_PRIVATE_KEY|LOCAL_LICENSE_CODE_PEPPER|LOCAL_LICENSE_SIGNING_KEY_ID/);
   assert.match(compose, /product_images:\/var\/lib\/pos\/product-images/);
   const frontend = compose.split('  frontend:\n')[1]?.split('\n  migrate:\n')[0] || '';
   assert.doesNotMatch(frontend, /depends_on:/);
@@ -54,8 +61,12 @@ test('Frontend Docker usa API del mismo origen y limita el contenido publicado',
   const frontendIgnore = read('docker/frontend.Dockerfile.dockerignore');
   assert.match(frontendIgnore, /^\*\*/m);
   assert.match(frontendIgnore, /!index\.html/);
+  assert.match(frontendIgnore, /!local-license-config\.js/);
+  assert.match(frontendIgnore, /!local-license\.js/);
   assert.doesNotMatch(frontendIgnore, /!\.env/);
-  assert.doesNotMatch(read('docker/frontend.Dockerfile'), /COPY \. /);
+  const frontendDockerfile = read('docker/frontend.Dockerfile');
+  assert.doesNotMatch(frontendDockerfile, /COPY \. /);
+  assert.match(frontendDockerfile, /local-license-config\.js local-license\.js/);
 });
 
 test('Scripts de respaldo/restauración solo permiten destinos temporales explícitos', () => {
@@ -70,16 +81,37 @@ test('Scripts de respaldo/restauración solo permiten destinos temporales explí
   assert.match(restore, /'network', 'create', '--internal'/);
   assert.match(restore, /'volume', 'rm'/);
   assert.match(restore, /database inventory differs/);
+  assert.match(backup, /--project/);
+  assert.match(backup, /--env-file/);
+  assert.match(backup, /--database/);
+  assert.match(restore, /--backend-image/);
+  assert.match(restore, /databaseName/);
+  assert.match(restore, /for \(const migration of MIGRATIONS\)/);
+  assert.match(restore, /migrationLedger/);
 });
 
 test('Comprobaciones Docker usan utilidades presentes en MySQL 8.4', () => {
   const backup = read('scripts/docker-backup.cjs');
   const restore = read('scripts/docker-restore-check.cjs');
-  assert.match(backup, /compose', 'ps'.*'backend', 'frontend'/);
+  assert.match(backup, /composeRun\(options, \['ps'.*'backend', 'frontend'/);
   assert.match(backup, /mysql --user=root .*--execute="SELECT 1"/);
   assert.match(restore, /--host=127\.0\.0\.1 .*--execute="SELECT 1"/);
   assert.match(restore, /information_schema\.TABLES/);
   assert.match(restore, /CHECK TABLE/);
+  assert.match(restore, /const \{ MIGRATIONS \}/);
+  assert.match(restore, /plannedMigrations/);
   assert.match(restore, /messageType === 'status' && message === 'OK'/);
   assert.doesNotMatch(backup + restore, /mysqlcheck|healthcheck\.sh|mysqladmin/);
+});
+
+test('El perfil de producción separa base, proyecto e imágenes sin publicar MySQL o backend', () => {
+  const compose = read('compose.production.yaml');
+  assert.match(compose, /POS_DATABASE_NAME/);
+  assert.match(compose, /POS_BACKEND_IMAGE:-pos-backend:production/);
+  assert.match(compose, /POS_FRONTEND_IMAGE:-pos-frontend:production/);
+  assert.match(compose, /127\.0\.0\.1:\$\{POS_HTTP_PORT:-8080\}:80/);
+  const mysql = compose.split('  mysql:\n')[1]?.split('\n  backend:\n')[0] || '';
+  const backend = compose.split('  backend:\n')[1]?.split('\n  frontend:\n')[0] || '';
+  assert.doesNotMatch(mysql + backend, /^\s+ports:/m);
+  assert.match(read('deploy/contabo/Caddyfile.example'), /reverse_proxy 127\.0\.0\.1:8080/);
 });

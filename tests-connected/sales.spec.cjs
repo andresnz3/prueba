@@ -26,6 +26,18 @@ async function add(page,product) {await page.locator('#barcodeInput').fill(produ
 async function checkout(page) {await page.locator('#processSaleBtn').click();await expect(page.locator('#connectedCheckoutModal')).toBeVisible();}
 async function confirm(page,value='100') {await page.locator('#connectedCashReceived').fill(value);await page.locator('#confirmConnectedSaleBtn').click();}
 async function closeAlert(page) {await expect(page.locator('#customAlertModal')).toBeVisible();await page.locator('#customAlertModal .close-modal-btn').click();}
+async function openCashFromUi(page, amount='100') {
+  const modal=page.locator('#customAlertModal');
+  let cash=await call(page,'currentCash',true);
+  if(!cash){
+    await page.locator('#cajaEfectivoInicialInput').fill(amount);await page.locator('#abrirCajaBtn').click();
+    await expect(modal).toBeVisible({timeout:15000});
+    cash=await call(page,'currentCash',true);
+    if(await modal.isVisible()){if(cash)await expect(page.locator('#customAlertMessage')).toContainText('Caja abierta.');await closeAlert(page);}
+  }
+  expect(cash).toBeTruthy();
+  return cash;
+}
 test('login: usuario y contraseña vacios tienen errores junto al campo y foco',async({page})=>{
   await page.goto('/?mode=connected');await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();await page.locator('#loginForm button[type=submit]').click();
   await expect(page.locator('#loginUsernameFieldError')).toHaveText('Ingresa tu nombre de usuario');await expect(page.locator('#loginPasswordFieldError')).toHaveText('Ingresa tu contraseña');await expect(page.locator('#loginUsername')).toBeFocused();
@@ -150,7 +162,7 @@ test('flujo centralizado exige caja abierta antes de enviar y cobrar en Caja',as
   await expect(page.locator('#processSaleBtn')).toHaveText('Enviar a Caja');
   await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toHaveText('Debes abrir caja antes de facturar o cobrar');await closeAlert(page);expect(await page.evaluate(()=>localDB)).toBeNull();
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browseradmin');await page.locator('#navCajaBtn').click();
-  await expect(page.locator('#connectedSalesFlow')).toHaveValue('CENTRALIZED');expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);expect((await call(page,'cashOverview')).pendingOrders).toHaveLength(0);await page.locator('#cajaEfectivoInicialInput').fill('100');await page.locator('#abrirCajaBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('Caja abierta.');await closeAlert(page);
+  await expect(page.locator('#connectedSalesFlow')).toHaveValue('CENTRALIZED');expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);expect((await call(page,'cashOverview')).pendingOrders).toHaveLength(0);await openCashFromUi(page);
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browserseller');await add(page,product);await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('Orden enviada a Caja');await expect(page.locator('#customAlertMessage')).toContainText('La próxima factura sigue siendo #'+nextInvoice+'.');await expect(page.locator('#currentSaleNumber')).toHaveText(nextInvoice);await closeAlert(page);
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browseradmin');await page.locator('#navCajaBtn').click();
   const firstPending=(await call(page,'cashOverview')).pendingOrders.find(value=>value.items.some(item=>item.productId===product.id));expect(firstPending).toBeTruthy();expect(firstPending).not.toHaveProperty('invoiceNumber');const firstPendingRow=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=cancel-order][data-id="'+firstPending.id+'"]')});await expect(firstPendingRow.locator('td').nth(1)).toHaveText(/^Orden pendiente/);await expect(firstPendingRow.locator('td').nth(1)).not.toContainText('Orden #');await expect(firstPendingRow.locator('button[data-action=cancel-order]')).toHaveAttribute('data-id',firstPending.id);expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);

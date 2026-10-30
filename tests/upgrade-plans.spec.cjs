@@ -9,7 +9,7 @@ test('la vista local muestra los tres planes con las mismas funciones en escrito
   }));
   await page.goto('/?mode=local');
   await page.locator('#loginUsername').fill('andres');
-  await page.locator('#loginPassword').fill('4321');
+  await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!');
   await page.locator('#loginForm button[type="submit"]').click();
   await expect(page.locator('#app')).toBeVisible();
   await page.locator('#navUpgradeBtn').click();

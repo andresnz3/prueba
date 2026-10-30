@@ -15,7 +15,7 @@
   const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'reports', configView: 'settings' };
   let identity = null, ownerBusinessId = null, supportContext = null, activeView = null, grant = null, pendingView = null;
   let generation = 0;
-  let systemAdminReady = false, systemAdminBusinesses = [], systemAdminUsers = [], systemAdminUserCapacity = null, systemAdminBilling = null, systemAdminSelectedBusinessId = '', systemAdminMigrationTargetId = '', systemAdminTab = 'businesses';
+  let systemAdminReady = false, systemAdminBusinesses = [], systemAdminUsers = [], systemAdminUserCapacity = null, systemAdminBilling = null, systemAdminLicenses = [], systemAdminActiveLocalBusinesses = null, systemAdminSelectedBusinessId = '', systemAdminMigrationTargetId = '', systemAdminTab = 'businesses';
   let systemAdminDeleteBusiness = null, systemAdminDeleteTrigger = null, systemAdminDeletePreview = null, systemAdminDeletePreviewToken = 0, systemAdminPaymentBusiness = null, systemAdminPaymentTrigger = null;
   const assertGeneration = value => { if (generation !== value) throw new window.PosApiError('STALE_REQUEST'); };
   let expiryTimer, grantTimer, busy = false, passwordUserId = null, userPage = 0;
@@ -41,7 +41,7 @@
   function canAccessSystemAdmin() { return isSystemAdmin() && systemAdminReady; }
   function canView(view) { return Boolean(identity && (view === 'salesView' || view === 'configView' || (view === 'systemAdminView' && canAccessSystemAdmin()) || identity.role === 'ADMIN' || (grant?.view === view && grant.until > Date.now()))); }
   function expire(text = 'La sesión venció o fue revocada. Inicia sesión nuevamente.') {
-    generation++; identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminDeletePreview = null; systemAdminDeletePreviewToken++; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminUserCapacity = null; systemAdminBilling = null; systemAdminSelectedBusinessId = ''; systemAdminMigrationTargetId = ''; window.PosMigrationPreview.reset(); window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
+    generation++; identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminDeletePreview = null; systemAdminDeletePreviewToken++; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminUserCapacity = null; systemAdminBilling = null; systemAdminLicenses = []; systemAdminSelectedBusinessId = ''; systemAdminMigrationTargetId = ''; clearIssuedLocalLicense(); window.PosMigrationPreview.reset(); window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
     clearTimeout(expiryTimer); clearTimeout(grantTimer); clearPasswords();
     document.querySelectorAll('.modal, .view-panel').forEach(node => node.classList.add('hidden'));
     el('app').classList.add('hidden'); el('app').inert = false; el('loginScreen').classList.remove('hidden');
@@ -429,6 +429,100 @@
     renderSystemAdminBilling();
     return systemAdminBilling;
   }
+  function localLicenseDate(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('es-NI', { dateStyle: 'medium', timeStyle: 'short' }).format(date) : '—';
+  }
+  function localLicenseStatusLabel(status) {
+    return ({ PENDING: 'Pendiente', ACTIVE: 'Activa', REVOKED: 'Revocada' })[status] || 'Sin estado';
+  }
+  function renderSystemAdminLicenses() {
+    el('systemAdminActiveLocalBusinessesCount').textContent = Number.isSafeInteger(systemAdminActiveLocalBusinesses) ? String(systemAdminActiveLocalBusinesses) : '—';
+    const body = el('systemAdminLicensesBody');
+    body.replaceChildren();
+    const select = el('systemAdminLicenseActionId');
+    const previous = select.value;
+    select.replaceChildren(new Option('Selecciona una licencia', ''), ...systemAdminLicenses.map(license => new Option(license.customerName + ' · ' + localLicenseStatusLabel(license.status) + ' · #' + license.id, license.id)));
+    if (systemAdminLicenses.some(license => license.id === previous)) select.value = previous;
+    if (!systemAdminLicenses.length) {
+      const row = document.createElement('tr'), cell = document.createElement('td');
+      cell.colSpan = 6; cell.textContent = 'No hay licencias para mostrar.'; row.append(cell); body.append(row);
+    }
+    for (const license of systemAdminLicenses) {
+      const row = document.createElement('tr');
+      for (const text of [license.customerName, license.customerReference || '—', localLicenseStatusLabel(license.status), localLicenseDate(license.createdAt), localLicenseDate(license.activatedAt), String(license.transferCount)]) {
+        const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
+      }
+      body.append(row);
+    }
+    updateSystemAdminLicenseActions();
+  }
+  function updateSystemAdminLicenseActions() {
+    const selected = systemAdminLicenses.find(license => license.id === el('systemAdminLicenseActionId').value);
+    const reasonValid = el('systemAdminLicenseActionReason').value.trim().length >= 10;
+    el('systemAdminLicenseTransferBtn').disabled = !selected || selected.status !== 'ACTIVE';
+    el('systemAdminLicenseRevokeBtn').disabled = !selected || selected.status === 'REVOKED' || !reasonValid;
+  }
+  async function refreshSystemAdminLicenses() {
+    if (!isSystemAdmin()) throw new window.PosApiError('SYSTEM_ADMIN_REQUIRED', 403);
+    const result = await api.localLicenses(el('systemAdminLicenseFilter').value);
+    systemAdminLicenses = result.licenses;
+    systemAdminActiveLocalBusinesses = result.activeLocalBusinessCount;
+    renderSystemAdminLicenses();
+    return systemAdminLicenses;
+  }
+  function licenseMessage(text, success = false) {
+    const target = el('systemAdminLicenseMessage');
+    target.textContent = window.PosMessages.text(text, 'No se pudo completar la gestión de licencias. Inténtalo nuevamente.');
+    target.classList.toggle('error', !success);
+    target.classList.toggle('success', success);
+    target.classList.remove('hidden');
+  }
+  function clearIssuedLocalLicense() {
+    el('systemAdminLicenseIssuedCode').textContent = '';
+    el('systemAdminLicenseIssued').classList.add('hidden');
+  }
+  async function performLocalLicenseAction(action) {
+    if (!canAccessSystemAdmin() || busy) return;
+    const license = systemAdminLicenses.find(item => item.id === el('systemAdminLicenseActionId').value);
+    const reason = el('systemAdminLicenseActionReason').value.trim();
+    updateSystemAdminLicenseActions();
+    if (!license) {
+      licenseMessage('Selecciona una licencia antes de continuar.');
+      el('systemAdminLicenseActionId').focus();
+      return;
+    }
+    if (action === 'revoke' && (reason.length < 10 || reason.length > 500)) {
+      licenseMessage('Para revocar una licencia, ingresa un motivo de al menos 10 caracteres.');
+      el('systemAdminLicenseActionReason').focus();
+      return;
+    }
+    if (action === 'transfer' && license.status !== 'ACTIVE') return;
+    if (action === 'revoke' && license.status === 'REVOKED') return;
+    const label = action === 'transfer' ? 'autorizar la transferencia de' : 'revocar';
+    if (!window.confirm('¿Confirmas ' + label + ' la licencia de ' + license.customerName + ' (ID ' + license.id + ')?')) return;
+    busy = true;
+    const controls = ['systemAdminLicenseActionId', 'systemAdminLicenseActionReason', 'systemAdminLicenseTransferBtn', 'systemAdminLicenseRevokeBtn'];
+    controls.forEach(id => { el(id).disabled = true; });
+    el('systemAdminLicensesPanel').setAttribute('aria-busy', 'true');
+    try {
+      await verify();
+      if (!isSystemAdmin()) throw new window.PosApiError('SYSTEM_ADMIN_REQUIRED', 403);
+      if (action === 'transfer') await api.transferLocalLicense(license.id);
+      else await api.revokeLocalLicense(license.id, reason);
+      el('systemAdminLicenseActionReason').value = '';
+      await refreshSystemAdminLicenses();
+      licenseMessage(action === 'transfer' ? 'Transferencia autorizada. La instalación anterior se actualizará cuando vuelva a conectarse.' : 'Licencia revocada. El cambio se aplicará cuando la instalación vuelva a conectarse.', true);
+    } catch (failure) {
+      licenseMessage(window.PosMessages.fromError(failure, 'No se pudo actualizar la licencia. Inténtalo nuevamente.'));
+    } finally {
+      busy = false;
+      el('systemAdminLicensesPanel').removeAttribute('aria-busy');
+      controls.forEach(id => { el(id).disabled = false; });
+      updateSystemAdminLicenseActions();
+    }
+  }
   function clearSystemAdminPaymentError() {
     const errorText = el('systemAdminPaymentError');
     errorText.textContent = ''; errorText.classList.add('hidden');
@@ -484,9 +578,9 @@
     return systemAdminUsers;
   }
   async function selectSystemAdminTab(tab, refresh = true) {
-    if (!canAccessSystemAdmin() || !['businesses', 'users', 'billing', 'migration'].includes(tab)) return;
+    if (!canAccessSystemAdmin() || !['businesses', 'users', 'billing', 'licenses', 'migration'].includes(tab)) return;
     systemAdminTab = tab;
-    const tabs = { businesses: 'systemAdminBusinesses', users: 'systemAdminUsers', billing: 'systemAdminBilling', migration: 'systemAdminMigration' };
+    const tabs = { businesses: 'systemAdminBusinesses', users: 'systemAdminUsers', billing: 'systemAdminBilling', licenses: 'systemAdminLicenses', migration: 'systemAdminMigration' };
     for (const [key, prefix] of Object.entries(tabs)) {
       const selected = key === tab;
       el(prefix + 'Tab').setAttribute('aria-selected', String(selected));
@@ -494,7 +588,7 @@
       el(prefix + 'Panel').classList.toggle('hidden', !selected); el(prefix + 'Panel').setAttribute('aria-hidden', String(!selected));
     }
     clearSystemAdminMessage();
-    if (refresh && ['businesses', 'users', 'billing'].includes(tab)) {
+    if (refresh && ['businesses', 'users', 'billing', 'licenses'].includes(tab)) {
       try {
         await verify();
         if (tab === 'businesses') await refreshSystemAdminBusinesses();
@@ -504,7 +598,8 @@
           // confiar en una lista de destinos obsoleta.
           await refreshSystemAdminBusinesses();
           await refreshSystemAdminUsers();
-        } else await refreshSystemAdminBilling();
+        } else if (tab === 'billing') await refreshSystemAdminBilling();
+        else await refreshSystemAdminLicenses();
       }
       catch (failure) { error(failure, 'systemAdminMessage'); }
     }
@@ -654,8 +749,8 @@
     }
   }
   el('navUsersBtn').addEventListener('click', () => navigate('usersView'));
-  const systemAdminTabs = ['businesses', 'users', 'billing', 'migration'];
-  const systemAdminTabIds = { businesses: 'Businesses', users: 'Users', billing: 'Billing', migration: 'Migration' };
+  const systemAdminTabs = ['businesses', 'users', 'billing', 'licenses', 'migration'];
+  const systemAdminTabIds = { businesses: 'Businesses', users: 'Users', billing: 'Billing', licenses: 'Licenses', migration: 'Migration' };
   for (const tab of systemAdminTabs) {
     const button = el('systemAdmin' + systemAdminTabIds[tab] + 'Tab');
     button.addEventListener('keydown', event => {
@@ -670,7 +765,65 @@
   el('systemAdminBusinessesTab').addEventListener('click', () => selectSystemAdminTab('businesses'));
   el('systemAdminUsersTab').addEventListener('click', () => selectSystemAdminTab('users'));
   el('systemAdminBillingTab').addEventListener('click', () => selectSystemAdminTab('billing'));
+  el('systemAdminLicensesTab').addEventListener('click', () => selectSystemAdminTab('licenses'));
   el('systemAdminMigrationTab').addEventListener('click', () => selectSystemAdminTab('migration'));
+  el('systemAdminLicenseFilter').addEventListener('change', async () => {
+    if (!canAccessSystemAdmin() || systemAdminTab !== 'licenses') return;
+    try { await verify(); await refreshSystemAdminLicenses(); }
+    catch (failure) { licenseMessage(window.PosMessages.fromError(failure, 'No se pudo actualizar la lista de licencias.')); }
+  });
+  el('systemAdminLicenseActionId').addEventListener('change', updateSystemAdminLicenseActions);
+  el('systemAdminLicenseActionReason').addEventListener('input', updateSystemAdminLicenseActions);
+  el('systemAdminLicenseTransferBtn').addEventListener('click', () => performLocalLicenseAction('transfer'));
+  el('systemAdminLicenseRevokeBtn').addEventListener('click', () => performLocalLicenseAction('revoke'));
+  el('systemAdminLicenseCopyBtn').addEventListener('click', async () => {
+    const code = el('systemAdminLicenseIssuedCode').textContent;
+    if (!code || !canAccessSystemAdmin()) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('CLIPBOARD_UNAVAILABLE');
+      await navigator.clipboard.writeText(code);
+      el('systemAdminLicenseIssuedNotice').textContent = 'Código copiado. Guárdalo ahora; no volverá a mostrarse.';
+    } catch {
+      el('systemAdminLicenseIssuedNotice').textContent = 'No se pudo copiar automáticamente. Selecciona el código y guárdalo ahora.';
+    }
+  });
+  el('systemAdminLicenseForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!canAccessSystemAdmin() || busy) return;
+    const customer = el('systemAdminLicenseCustomer'), reference = el('systemAdminLicenseReference');
+    const name = customer.value.trim(), purchaseReference = reference.value.trim();
+    if (!el('systemAdminLicenseForm').reportValidity()) return;
+    if (name.length < 2 || name.length > 160 || purchaseReference.length > 120) {
+      licenseMessage('Revisa el nombre del cliente y la referencia de compra.');
+      (name.length < 2 || name.length > 160 ? customer : reference).focus();
+      return;
+    }
+    busy = true;
+    const button = el('systemAdminLicenseGenerateBtn');
+    button.disabled = true;
+    el('systemAdminLicensesPanel').setAttribute('aria-busy', 'true');
+    el('systemAdminLicenseMessage').classList.add('hidden');
+    clearIssuedLocalLicense();
+    try {
+      await verify();
+      if (!isSystemAdmin()) throw new window.PosApiError('SYSTEM_ADMIN_REQUIRED', 403);
+      const result = await api.generateLocalLicense(name, purchaseReference);
+      el('systemAdminLicenseIssuedCode').textContent = result.code;
+      el('systemAdminLicenseIssuedNotice').textContent = 'Guárdalo ahora; no volverá a mostrarse.';
+      el('systemAdminLicenseIssued').classList.remove('hidden');
+      el('systemAdminLicenseForm').reset();
+      licenseMessage('Licencia generada. El código se muestra una sola vez.', true);
+      try { await refreshSystemAdminLicenses(); }
+      catch { licenseMessage('El código se generó y permanece visible. No se pudo actualizar la lista; vuelve a cargarla.', false); }
+      el('systemAdminLicenseCopyBtn').focus();
+    } catch (failure) {
+      licenseMessage(window.PosMessages.fromError(failure, 'No se pudo generar la licencia. Inténtalo nuevamente.'));
+    } finally {
+      busy = false;
+      el('systemAdminLicensesPanel').removeAttribute('aria-busy');
+      button.disabled = false;
+    }
+  });
   el('systemAdminDeleteCancelBtn').addEventListener('click', () => closeSystemAdminDeleteModal());
   el('systemAdminPaymentCancelBtn').addEventListener('click', () => closeSystemAdminPaymentModal());
   el('systemAdminPaymentAmount').addEventListener('input', clearSystemAdminPaymentError);
@@ -772,6 +925,7 @@
       await verify(); await refreshSystemAdminBusinesses();
       if (systemAdminTab === 'users') await refreshSystemAdminUsers();
       if (systemAdminTab === 'billing') await refreshSystemAdminBilling();
+      if (systemAdminTab === 'licenses') await refreshSystemAdminLicenses();
       systemAdminNotice('Información actualizada.');
     } catch (failure) { error(failure, 'systemAdminMessage'); }
   });

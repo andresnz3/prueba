@@ -6,11 +6,12 @@ const { createApp } = require('./src/app');
 const { createShutdown } = require('./src/services/shutdown');
 async function start() {
   const config = readConfig();
+  config.localLicense = require('./src/config/local-licenses').readLocalLicenseConfig();
   const authConfig = require('./src/config/auth').readAuthConfig();
   const pool = createDatabasePool(config.database);
   const repo = require('./src/repositories/auth').createAuthRepository(pool, authConfig);
   const authentication = { repo, config: authConfig, auth: require('./src/services/auth').createAuthService(repo, authConfig), users: require('./src/services/users').createUsersService(repo) };
-  const app = createApp({ config, checkDatabase: createHealthCheck(pool, config.healthTimeout), authentication });
+  const app = createApp({ config, checkDatabase: createHealthCheck(pool, config.healthTimeout), authentication, databaseDiagnostics: pool.diagnostics });
   try {
     const pending = await app.locals.businessImageStore.recoverBusinessFiles(async businessId =>
       (await repo.rows(pool, 'SELECT 1 AS present FROM businesses WHERE id = ?', [businessId])).length > 0);

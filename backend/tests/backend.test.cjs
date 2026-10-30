@@ -62,7 +62,7 @@ for (const key of ['HOST', 'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSW
     assert.throws(() => readConfig(env), new RegExp(key));
   });
 }
-for (const [key, value] of [['DB_PORT', '3307abc'], ['PORT', '0'], ['DB_CONNECTION_LIMIT', '0'], ['DB_CONNECT_TIMEOUT_MS', '-1'], ['HEALTH_TIMEOUT_MS', 'Infinity'], ['JSON_LIMIT_BYTES', '99999999'], ['NODE_ENV', 'invalid'], ['CORS_ORIGINS', '*'], ['CORS_ORIGINS', 'https://example.com/path']]) {
+for (const [key, value] of [['DB_PORT', '3307abc'], ['PORT', '0'], ['DB_CONNECTION_LIMIT', '0'], ['DB_CONNECT_TIMEOUT_MS', '-1'], ['DB_POOL_QUEUE_LIMIT', '201'], ['DB_POOL_ACQUIRE_TIMEOUT_MS', '99'], ['HEALTH_TIMEOUT_MS', 'Infinity'], ['JSON_LIMIT_BYTES', '99999999'], ['NODE_ENV', 'invalid'], ['CORS_ORIGINS', '*'], ['CORS_ORIGINS', 'https://example.com/path']]) {
   test('config rechaza ' + key + '=' + value, () => assert.throws(() => readConfig({ ...valid, [key]: value })));
 }
 for (const value of ['-1', '3', 'true']) {
@@ -78,6 +78,8 @@ test('config confia solo en los saltos de proxy declarados', () => {
 test('config valida sin valores de credenciales por defecto', () => {
   assert.equal(readConfig(valid).database.port, 3307);
   assert.equal(readConfig(valid).database.database, 'pos_multitenant');
+  assert.equal(readConfig(valid).database.connectionQueueLimit, 20);
+  assert.equal(readConfig(valid).database.acquireTimeout, 3000);
 });
 test('consulta preparada y liberacion de conexion', async () => {
   let released = 0;

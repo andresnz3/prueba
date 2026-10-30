@@ -1,0 +1,151 @@
+name: ${LOAD_PROJECT:?Set a unique temporary LOAD_PROJECT}
+
+x-app-environment: &app-environment
+  NODE_ENV: development
+  HOST: 0.0.0.0
+  PORT: 3000
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_NAME: ${DB_NAME:?Set a random pos_auth_test database name}
+  DB_USER: pos_app
+  DB_PASSWORD: ${MYSQL_APP_PASSWORD:?Generate a private temporary password}
+  CORS_ORIGINS: http://127.0.0.1:${FRONTEND_TEST_PORT:?Choose an unused loopback port}
+  CSRF_SECRET: ${CSRF_SECRET:?Generate a private temporary secret}
+  COOKIE_SAME_SITE: lax
+  TRUST_PROXY_HOPS: 1
+  IMAGE_STORAGE_DIR: /var/lib/pos/product-images
+  DB_CONNECTION_LIMIT: ${LOAD_DB_CONNECTION_LIMIT:-10}
+  DB_POOL_QUEUE_LIMIT: ${LOAD_DB_POOL_QUEUE_LIMIT:-20}
+  DB_POOL_ACQUIRE_TIMEOUT_MS: ${LOAD_DB_ACQUIRE_TIMEOUT_MS:-3000}
+  DB_CONNECT_TIMEOUT_MS: 5000
+  AUTH_RATE_MAX: ${LOAD_AUTH_RATE_MAX:-10}
+  HEALTH_TIMEOUT_MS: 5000
+  SHUTDOWN_TIMEOUT_MS: 15000
+  JSON_LIMIT_BYTES: 1048576
+
+services:
+  mysql:
+    image: mysql:8.4.13
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci", "--default-time-zone=+00:00"]
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:?Set a random pos_auth_test database name}
+      MYSQL_USER: pos_app
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?Generate a private temporary password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Generate a private temporary password}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks: [database]
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysql --user=root --database=\"$$MYSQL_DATABASE\" --execute=\"SELECT 1\" >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: "no"
+
+  backend:
+    image: ${LOAD_PROJECT}-backend
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+    environment: *app-environment
+    volumes:
+      - product_images:/var/lib/pos/product-images
+      - ./seed.cjs:/run/seed.cjs:ro
+      - ./check-integrity.cjs:/run/check-integrity.cjs:ro
+      - ./fixtures:/run/load:rw
+    networks: [edge, database]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      start_period: 25s
+    restart: "no"
+
+  frontend:
+    image: ${LOAD_PROJECT}-frontend
+    build:
+      context: ../..
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "127.0.0.1:${FRONTEND_TEST_PORT:?Choose an unused loopback port}:80"
+    networks: [edge]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      start_period: 10s
+    restart: "no"
+
+  migrate:
+    image: ${LOAD_PROJECT}-backend
+    profiles: [tools]
+    entrypoint: ["node", "backend/scripts/migrate-all.cjs"]
+    command: ["--plan", "--target", "${DB_NAME}", "--confirm-target", "${DB_NAME}", "--install-base-schema"]
+    environment: *app-environment
+    networks: [database]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  test-runner:
+    image: ${LOAD_PROJECT}-backend
+    profiles: [tests]
+    entrypoint: ["node", "backend/scripts/test-integration.cjs"]
+    environment:
+      <<: *app-environment
+      DB_USER: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Generate a private temporary password}
+    volumes:
+      - ../../backend/scripts/test-integration.cjs:/app/backend/scripts/test-integration.cjs:ro
+      - ../../backend/tests:/app/backend/tests:ro
+      - ./diagnose-mysql.cjs:/run/diagnose-mysql.cjs:ro
+      - ./cleanup-test-database.cjs:/run/cleanup-test-database.cjs:ro
+    networks: [database]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  load:
+    image: grafana/k6:1.8.2
+    profiles: [load]
+    command: ["run", "--summary-export=/results/summary.json", "/scripts/k6-pos.js"]
+    environment:
+      BASE_URL: http://frontend
+      FIXTURES_PATH: /fixtures/fixtures.json
+      LOAD_VUS: ${LOAD_VUS:-5}
+      LOAD_DURATION: ${LOAD_DURATION:-2m}
+      LOAD_MODE: ${LOAD_MODE:-human}
+      LOAD_RUN_TAG: ${LOAD_RUN_TAG:-local}
+    volumes:
+      - ./k6-pos.js:/scripts/k6-pos.js:ro
+      - ./fixtures:/fixtures:ro
+      - ./results:/results
+    networks: [edge]
+    depends_on:
+      frontend:
+        condition: service_healthy
+    restart: "no"
+
+networks:
+  edge:
+    driver: bridge
+  database:
+    driver: bridge
+    internal: true
+
+volumes:
+  mysql_data:
+    name: ${LOAD_PROJECT}-mysql_data
+  product_images:
+    name: ${LOAD_PROJECT}-product_images

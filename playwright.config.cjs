@@ -8,6 +8,7 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('POS
 const origin = 'http://127.0.0.1:' + port;
 const launchOptions = process.env.POS_TEST_BROWSER_EXECUTABLE ? { executablePath: process.env.POS_TEST_BROWSER_EXECUTABLE } : undefined;
 const managedServer = process.env.POS_LOCAL_TEST_MANAGED_SERVER === '1';
+const storageState = process.env.POS_LOCAL_TEST_STORAGE_STATE;
 module.exports = defineConfig({
   testDir: path.join(__dirname, 'tests'),
   testMatch: '**/*.spec.cjs',
@@ -24,7 +25,7 @@ module.exports = defineConfig({
   timeout: 30000,
   fullyParallel: false,
   workers: 1,
-  use: { baseURL: origin, browserName: 'chromium', ...(launchOptions ? { launchOptions } : {}) },
+  use: { baseURL: origin, browserName: 'chromium', ...(launchOptions ? { launchOptions } : {}), ...(storageState ? { storageState } : {}) },
   ...(!managedServer ? { webServer: {
     command: 'node node_modules/http-server/bin/http-server dist -p ' + port + ' -a 127.0.0.1 --silent',
     url: origin,

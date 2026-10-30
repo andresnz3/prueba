@@ -46,7 +46,8 @@ test('las pantallas conectadas no muestran detalles técnicos en escritorio ni e
     await expect(page.locator('#systemAdminView')).toBeVisible();
     for (const [button, panel] of [
       ['systemAdminBusinessesTab', 'systemAdminBusinessesPanel'], ['systemAdminUsersTab', 'systemAdminUsersPanel'],
-      ['systemAdminBillingTab', 'systemAdminBillingPanel'], ['systemAdminMigrationTab', 'systemAdminMigrationPanel']
+      ['systemAdminBillingTab', 'systemAdminBillingPanel'], ['systemAdminLicensesTab', 'systemAdminLicensesPanel'],
+      ['systemAdminMigrationTab', 'systemAdminMigrationPanel']
     ]) {
       await page.locator('#' + button).click();
       await expect(page.locator('#' + panel)).toBeVisible();

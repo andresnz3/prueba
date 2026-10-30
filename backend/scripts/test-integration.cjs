@@ -1,20 +1,22 @@
 'use strict';
 const { resolve, basename } = require('node:path');
+const { readdirSync } = require('node:fs');
 const { spawn } = require('node:child_process');
 const mysql = require('mysql2/promise');
 const { randomBytes } = require('node:crypto');
-const { runBrowserTests } = require('./test-connected.cjs');
 const { readConfig } = require('../src/config/environment');
 const { MIGRATIONS, planNewInstall, installBaseSchema, migrate } = require('../src/services/schema-migrations');
 
 const integrationFiles = [
   'tests/integration/schema-migrations.test.cjs',
+  'tests/integration/pool-saturation.test.cjs',
   'tests/integration/migration-016-compatibility.test.cjs',
   'tests/integration/migration-017-compatibility.test.cjs',
   'tests/integration/business-plans.test.cjs',
   'tests/integration/business-settings.test.cjs',
   'tests/integration/financial.test.cjs',
   'tests/integration/auth.test.cjs',
+  'tests/integration/local-licenses.test.cjs',
   'tests/integration/inventory.test.cjs',
   'tests/integration/system-admin-inventory-migration.test.cjs',
   'tests/integration/system-admin-sales-migration.test.cjs',
@@ -55,7 +57,10 @@ async function prepareDatabase(connection, config, { empty = false, throughVersi
   try {
     await connection.query('CREATE DATABASE `' + name + '` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci');
     created = true;
-    isolated = await mysql.createConnection({ ...config.database, database: name, connectionLimit: undefined });
+    const mysqlConfig = { ...config.database };
+    delete mysqlConfig.connectionQueueLimit;
+    delete mysqlConfig.acquireTimeout;
+    isolated = await mysql.createConnection({ ...mysqlConfig, database: name, connectionLimit: undefined });
     const initialPlan = await planNewInstall(isolated, name);
     if (initialPlan.baseTables < 1 || initialPlan.migrations.length !== MIGRATIONS.length) throw new Error('El plan inicial de migraciones está incompleto');
     await installBaseSchema(isolated, name);
@@ -93,6 +98,7 @@ async function runFile(connection, config, file, { throughVersion = null } = {})
 
 function selectedIntegrationFiles(args) {
   const filters = [
+    ['--pool-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/pool-saturation.test.cjs']],
     ['--migration-archive-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/system-admin-migration-archive.test.cjs', 'tests/integration/system-admin-migration-onboarding.test.cjs']],
     ['--migration-projection-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/system-admin-migration-archive.test.cjs', 'tests/integration/system-admin-migration-projection.test.cjs', 'tests/integration/system-admin-migration-onboarding.test.cjs']],
     ['--migration-continuation-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/system-admin-migration-real-continuation.test.cjs']],
@@ -100,6 +106,8 @@ function selectedIntegrationFiles(args) {
     ['--migration-017-only', ['tests/integration/migration-017-compatibility.test.cjs']],
     ['--business-plans-only', ['tests/integration/business-plans.test.cjs']],
     ['--auth-only', ['tests/integration/auth.test.cjs']],
+    ['--local-licenses-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/local-licenses.test.cjs']],
+    ['--login-limit-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/auth.test.cjs']],
     ['--migration-onboarding-only', ['tests/integration/system-admin-migration-onboarding.test.cjs']],
     ['--migration-history-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/system-admin-migration-archive.test.cjs', 'tests/integration/system-admin-migration-onboarding.test.cjs', 'tests/integration/migration-history.test.cjs']],
     ['--financial-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/financial.test.cjs']],
@@ -107,6 +115,7 @@ function selectedIntegrationFiles(args) {
     ['--settings-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/business-settings.test.cjs']],
     ['--cash-support-only', ['tests/integration/cash-support-history.test.cjs']],
     ['--reports-only', ['tests/integration/reports.test.cjs']],
+    ['--sales-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/sales.test.cjs']],
     ['--business-deletion-only', ['tests/integration/business-deletion.test.cjs']]
   ];
   let selected = integrationFiles;
@@ -117,17 +126,37 @@ function selectedIntegrationFiles(args) {
 
 async function main() {
   const config = readConfig();
-  const connection = await mysql.createConnection({ ...config.database, database: undefined, connectionLimit: undefined });
+  const mysqlConfig = { ...config.database };
+  delete mysqlConfig.connectionQueueLimit;
+  delete mysqlConfig.acquireTimeout;
+  const connection = await mysql.createConnection({ ...mysqlConfig, database: undefined, connectionLimit: undefined });
   let exitCode = 0;
   try {
     if (process.argv[2] === '--browser') {
-      const name = await prepareDatabase(connection, config, { empty: true });
-      console.log('Integración de navegador: base temporal ' + name);
-      try {
-        exitCode = await runBrowserTests({ config, database: name, playwrightArgs: process.argv.slice(3) });
-      } finally {
-        await connection.query('DROP DATABASE `' + name + '`');
-        console.log('Base temporal eliminada: ' + name);
+      const { runBrowserTests } = require('./test-connected.cjs');
+      const args = process.argv.slice(3);
+      const testDirectory = resolve(__dirname, '../../tests-connected');
+      const availableSpecs = readdirSync(testDirectory, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.spec.cjs'))
+        .map(entry => 'tests-connected/' + entry.name)
+        .sort();
+      const available = new Set(availableSpecs);
+      const requestedSpecs = args
+        .filter(argument => argument.replaceAll('\\', '/').startsWith('tests-connected/') && argument.endsWith('.spec.cjs'))
+        .map(argument => argument.replaceAll('\\', '/'));
+      if (requestedSpecs.some(file => !available.has(file))) throw new Error('Suite de navegador no reconocida');
+      const specs = requestedSpecs.length ? requestedSpecs : availableSpecs;
+      const playwrightOptions = args.filter(argument => !requestedSpecs.includes(argument.replaceAll('\\', '/')));
+      for (const spec of specs) {
+        const name = await prepareDatabase(connection, config, { empty: true });
+        console.log('Integración de navegador: base temporal ' + name + ' (' + spec + ')');
+        try {
+          const code = await runBrowserTests({ config, database: name, playwrightArgs: [spec, ...playwrightOptions] });
+          if (code !== 0) exitCode = 1;
+        } finally {
+          await connection.query('DROP DATABASE `' + name + '`');
+          console.log('Base temporal eliminada: ' + name);
+        }
       }
       return exitCode;
     }

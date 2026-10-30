@@ -130,6 +130,28 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
       await other.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'0'});
     }
   });
+  await t.test('ventas simultaneas en negocios distintos no se interbloquean ni mezclan movimientos',async()=>{
+    const bProduct=await createProduct({},other);
+    assert.equal((await admin.request('/cash/current')).data.cash.status,'OPEN');
+    assert.equal((await other.request('/cash/current')).data.cash.status,'OPEN');
+    const before=await Promise.all([business,businessB].map(async tenant=>({sales:Number((await rows(pool,'SELECT COUNT(*) AS n FROM sales WHERE business_id = ?',[tenant]))[0].n),cash:Number((await rows(pool,"SELECT COUNT(*) AS n FROM cash_movements WHERE business_id = ? AND type = 'SALE'",[tenant]))[0].n),inventory:Number((await rows(pool,"SELECT COUNT(*) AS n FROM inventory_movements WHERE business_id = ? AND type = 'SALE'",[tenant]))[0].n)})));
+    const stockA=Number(await stock(product.id)),stockB=Number((await rows(pool,'SELECT stock FROM products WHERE business_id = ? AND id = ?',[businessB,bProduct.id]))[0].stock);
+    const [inputsA,inputsB]=await Promise.all([
+      Promise.all(Array.from({length:5},()=>body(one,{items:[{productId:product.id,quantity:'1'}],discountPercent:'0'}))),
+      Promise.all(Array.from({length:5},()=>body(other,{items:[{productId:bProduct.id,quantity:'1'}],discountPercent:'0'})))
+    ]);
+    const results=await Promise.all([...inputsA.map(input=>one.request('/sales','POST',input)),...inputsB.map(input=>other.request('/sales','POST',input))]);
+    assert.ok(results.every(response=>response.status===201),JSON.stringify(results.map(response=>({status:response.status,code:response.data?.error?.code}))));
+    for(const [index,tenant] of [business,businessB].entries()) {
+      const expected=before[index];
+      assert.equal(Number((await rows(pool,'SELECT COUNT(*) AS n FROM sales WHERE business_id = ?',[tenant]))[0].n),expected.sales+5);
+      assert.equal(Number((await rows(pool,"SELECT COUNT(*) AS n FROM cash_movements WHERE business_id = ? AND type = 'SALE'",[tenant]))[0].n),expected.cash+5);
+      assert.equal(Number((await rows(pool,"SELECT COUNT(*) AS n FROM inventory_movements WHERE business_id = ? AND type = 'SALE'",[tenant]))[0].n),expected.inventory+5);
+    }
+    assert.equal(Number(await stock(product.id)),stockA-5);
+    assert.equal(Number((await rows(pool,'SELECT stock FROM products WHERE business_id = ? AND id = ?',[businessB,bProduct.id]))[0].stock),stockB-5);
+    for(const [tenant,inputs] of [[business,inputsA],[businessB,inputsB]]) assert.equal(Number((await rows(pool,'SELECT COUNT(*) AS n FROM pos_operations WHERE business_id = ? AND operation_key IN ('+inputs.map(()=>'?').join(',')+')',[tenant,...inputs.map(input=>input.operationKey)]))[0].n),5);
+  });
   await t.test('operaciones son aisladas por negocio y usuario',async()=>{
     const input=await body();await one.request('/sales','POST',input);
     assert.equal((await other.request('/operations/'+input.operationKey)).status,404);assert.equal((await two.request('/operations/'+input.operationKey)).status,404);

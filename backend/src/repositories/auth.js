@@ -3,9 +3,14 @@ const { httpError } = require('../middleware/errors');
 const publicUser = row => ({ id: String(row.user_id ?? row.id), businessId: String(row.business_id), username: row.username, fullName: row.full_name, role: row.role, active: Boolean(row.active), ...(typeof row.business_name === 'string' ? { businessName: row.business_name } : {}), ...(typeof row.business_status === 'string' ? { businessStatus: row.business_status } : {}), ...(row.plan !== undefined ? { plan: row.plan } : {}) });
 async function rows(db, sql, values) { return (await db.execute(sql, values))[0]; }
 async function transaction(pool, work) {
+  const started = Date.now();
   const db = await pool.getConnection();
   try { await db.beginTransaction(); const value = await work(db); await db.commit(); return value; }
-  catch (error) { await db.rollback(); throw error; } finally { db.release(); }
+  catch (error) { try { await db.rollback(); } catch { /* Preserve the original operation error. */ } throw error; }
+  finally {
+    db.release();
+    pool.recordTransaction?.(Date.now() - started);
+  }
 }
 async function lockBusiness(db, businessId) {
   const [business] = await rows(db, 'SELECT id, status FROM businesses WHERE id = ? FOR UPDATE', [businessId]);
@@ -62,6 +67,25 @@ function createAuthRepository(pool, config) {
     await rows(db, 'DELETE FROM session_authorizations WHERE business_id = ? AND (granted_by_user_id = ? OR session_id IN (SELECT id FROM sessions WHERE business_id = ? AND user_id = ?))', [businessId, userId, businessId, userId]);
     await rows(db, 'UPDATE sessions SET revoked_at = UTC_TIMESTAMP(3) WHERE business_id = ? AND user_id = ? AND revoked_at IS NULL', [businessId, userId]);
   }
-  return { pool, rows, transaction: work => transaction(pool, work), lockBusiness, businessMigrationState, session, tenant, audit, revokeUser };
+  async function consumeSharedRateLimit(bucketHash, windowSeconds) {
+    return transaction(pool, async db => {
+      await rows(db,
+        'INSERT INTO auth_login_rate_limits (bucket_hash, attempts, window_started_at, updated_at) VALUES (?, 1, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE attempts = IF(window_started_at <= TIMESTAMPADD(SECOND, -?, UTC_TIMESTAMP(3)), 1, LEAST(attempts + 1, 1001)), window_started_at = IF(window_started_at <= TIMESTAMPADD(SECOND, -?, UTC_TIMESTAMP(3)), UTC_TIMESTAMP(3), window_started_at), updated_at = UTC_TIMESTAMP(3)',
+        [bucketHash, windowSeconds, windowSeconds]);
+      const [bucket] = await rows(db,
+        'SELECT attempts, GREATEST(1, CEIL(GREATEST(0, TIMESTAMPDIFF(MICROSECOND, UTC_TIMESTAMP(3), TIMESTAMPADD(SECOND, ?, window_started_at))) / 1000000)) AS retry_after FROM auth_login_rate_limits WHERE bucket_hash = ?',
+        [windowSeconds, bucketHash]);
+      return { attempts: Number(bucket.attempts), retryAfter: Number(bucket.retry_after) };
+    });
+  }
+  async function cleanupSharedRateLimits() {
+    return rows(pool, 'DELETE FROM auth_login_rate_limits WHERE updated_at < TIMESTAMPADD(HOUR, -24, UTC_TIMESTAMP(3)) ORDER BY updated_at ASC LIMIT 1000', []);
+  }
+  return { pool, rows, transaction: work => transaction(pool, work), lockBusiness, businessMigrationState, session, tenant, audit, revokeUser,
+    consumeSharedRateLimit,
+    cleanupSharedRateLimits,
+    // Compatibilidad para login; los contadores se separan con espacios HMAC distintos.
+    consumeLoginRateLimit: consumeSharedRateLimit,
+    cleanupLoginRateLimits: cleanupSharedRateLimits };
 }
 module.exports = { createAuthRepository, publicUser, rows, transaction, lockBusiness };

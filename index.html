@@ -4,6 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>POS Distribuidora - PRO</title>
+    <meta name="theme-color" content="#2563eb">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="POS Distribuidora">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/assets/pwa/pos-icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/assets/pwa/pos-icon-192.png">
     <link rel="stylesheet" href="styles.css">
     <script src="vendor/html5-qrcode/html5-qrcode.min.js"></script>
     <script src="vendor/dexie/dexie.min.js"></script>
@@ -19,8 +26,39 @@
             <p class="login-subtitle">Inicia sesión para continuar</p>
             <div class="form-group"><label for="authMode">Modalidad</label><select id="authMode"><option value="local">Modo local</option><option value="connected">Modo conectado</option></select></div>
             <p id="modeDescription" class="login-subtitle">Datos y acceso locales en este navegador.</p>
+            <p id="localDataLoadError" class="message error hidden" role="alert" aria-live="assertive"></p>
+            <section id="localLicenseGate" class="local-license-gate hidden" aria-labelledby="localLicenseTitle">
+                <h2 id="localLicenseTitle">Activar el POS local</h2>
+                <p id="localLicenseIntro">Ingresa el código de compra para activar esta instalación. La licencia es permanente y tus datos comerciales permanecen en este navegador.</p>
+                <form id="localLicenseForm" novalidate>
+                    <p id="localLicenseInternetHelp" class="local-license-internet-help">La primera activaci&oacute;n requiere internet. Despu&eacute;s, podr&aacute;s usar el POS sin conexi&oacute;n.</p>
+                    <div class="form-group"><label for="localLicenseCode">Código de licencia</label><input id="localLicenseCode" name="licenseCode" type="text" maxlength="80" autocomplete="off" autocapitalize="characters" spellcheck="false" required aria-describedby="localLicenseCodeHelp"><small id="localLicenseCodeHelp">Escribe el código tal como lo recibiste.</small></div>
+                    <p id="localLicenseMessage" class="message error hidden" role="alert" aria-live="polite"></p>
+                    <button id="localLicenseSubmit" class="btn btn-primary btn-full" type="submit">Activar licencia</button>
+                </form>
+                <div id="localLicenseLegacyActions" class="local-license-actions hidden">
+                    <p>Esta instalación ya contiene información anterior. Puedes seguir consultándola mientras completas la activación.</p>
+                    <button id="localLicenseContinueLegacyBtn" class="btn btn-secondary btn-full" type="button">Continuar con mi instalación anterior</button>
+                </div>
+                <div id="localLicenseRecoveryActions" class="local-license-actions hidden">
+                    <p id="localLicenseRecoveryText">Tu información comercial sigue guardada en este navegador.</p>
+                    <button id="localLicenseExportBtn" class="btn btn-secondary btn-full" type="button">Preparar una copia de mis datos</button>
+                    <button id="localLicenseExportDownloadBtn" class="btn btn-primary btn-full hidden" type="button">Descargar copia de mis datos</button>
+                </div>
+            </section>
+            <p id="localLicenseLegacyPrompt" class="local-license-legacy hidden" role="status" aria-live="polite">Esta instalación anterior conserva sus datos. Activa una licencia para asociarla de forma permanente.</p>
+            <button id="localLicenseLegacyActivateBtn" class="btn btn-secondary btn-full hidden" type="button">Activar licencia</button>
+            <form id="localOwnerSetupForm" class="local-owner-setup hidden" autocomplete="on" novalidate>
+                <h2>Configura la cuenta del propietario</h2>
+                <p id="localOwnerSetupNote" class="local-owner-setup-note">Define el acceso para este equipo. Tus productos, ventas y demás datos existentes se conservarán.</p>
+                <div class="form-group"><label for="localOwnerUsername">Nombre de usuario</label><input type="text" id="localOwnerUsername" name="username" autocomplete="username" maxlength="100" required></div>
+                <div class="form-group"><label for="localOwnerPassword">Contraseña nueva</label><div class="password-input-wrap"><input type="password" id="localOwnerPassword" name="new-password" autocomplete="new-password" minlength="12" maxlength="256" required><button type="button" id="toggleLocalOwnerPasswordBtn" class="password-toggle-btn" aria-label="Mostrar contraseña" aria-controls="localOwnerPassword" aria-pressed="false" title="Mostrar contraseña"><svg class="ic password-toggle-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg class="ic password-toggle-eye-off hidden" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.9 5.1A10.6 10.6 0 0 1 12 5c5.5 0 9.5 7 9.5 7a15.4 15.4 0 0 1-3.3 4.2"/><path d="M6.6 6.6A15.4 15.4 0 0 0 2.5 12s3.5 7 9.5 7a10.7 10.7 0 0 0 3.2-.5"/></svg></button></div><small class="local-owner-hint">Usa al menos 12 caracteres.</small></div>
+                <div class="form-group"><label for="localOwnerPasswordConfirm">Confirma la contraseña</label><div class="password-input-wrap"><input type="password" id="localOwnerPasswordConfirm" name="new-password-confirm" autocomplete="new-password" minlength="12" maxlength="256" required><button type="button" id="toggleLocalOwnerPasswordConfirmBtn" class="password-toggle-btn" aria-label="Mostrar contraseña" aria-controls="localOwnerPasswordConfirm" aria-pressed="false" title="Mostrar contraseña"><svg class="ic password-toggle-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg class="ic password-toggle-eye-off hidden" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.9 5.1A10.6 10.6 0 0 1 12 5c5.5 0 9.5 7 9.5 7a15.4 15.4 0 0 1-3.3 4.2"/><path d="M6.6 6.6A15.4 15.4 0 0 0 2.5 12s3.5 7 9.5 7a10.7 10.7 0 0 0 3.2-.5"/></svg></button></div></div>
+                <div id="localOwnerSetupMessage" class="message error hidden form-message-slot" role="alert" aria-live="polite"></div>
+                <button id="localOwnerSetupSubmit" type="submit" class="btn btn-primary btn-full">Crear cuenta del propietario</button>
+            </form>
             <form id="loginForm" onsubmit="event.preventDefault();">
-                <div class="form-group"><label for="loginUsername">Usuario</label><input type="text" id="loginUsername" placeholder="Ingresa tu usuario..." required></div>
+                <div class="form-group"><label for="loginUsername">Nombre de usuario</label><input type="text" id="loginUsername" placeholder="Ingresa tu usuario..." autocomplete="username" required></div>
                 <div class="form-group"><label for="loginPassword">Contraseña</label><div class="password-input-wrap"><input type="password" id="loginPassword" placeholder="******" required><button type="button" id="toggleLoginPasswordBtn" class="password-toggle-btn" aria-label="Mostrar contraseña" aria-controls="loginPassword" aria-pressed="false" title="Mostrar contraseña"><svg class="ic password-toggle-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg class="ic password-toggle-eye-off hidden" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.9 5.1A10.6 10.6 0 0 1 12 5c5.5 0 9.5 7 9.5 7a15.4 15.4 0 0 1-3.3 4.2"/><path d="M6.6 6.6A15.4 15.4 0 0 0 2.5 12s3.5 7 9.5 7a10.7 10.7 0 0 0 3.2-.5"/></svg></button></div></div>
                 <div id="loginError" class="message error hidden form-message-slot">Credenciales incorrectas</div>
                 <button type="submit" class="btn btn-primary btn-full">Iniciar Sesión</button>
@@ -151,6 +189,7 @@
                     <button id="systemAdminBusinessesTab" class="btn btn-primary" type="button" role="tab" aria-selected="true" aria-controls="systemAdminBusinessesPanel">Negocios</button>
                     <button id="systemAdminUsersTab" class="btn btn-secondary" type="button" role="tab" aria-selected="false" aria-controls="systemAdminUsersPanel">Usuarios</button>
                     <button id="systemAdminBillingTab" class="btn btn-secondary" type="button" role="tab" aria-selected="false" aria-controls="systemAdminBillingPanel">Planes y pagos</button>
+                    <button id="systemAdminLicensesTab" class="btn btn-secondary" type="button" role="tab" aria-selected="false" aria-controls="systemAdminLicensesPanel">Licencias locales</button>
                     <button id="systemAdminMigrationTab" class="btn btn-secondary" type="button" role="tab" aria-selected="false" aria-controls="systemAdminMigrationPanel">Migración local</button>
                 </div>
                 <section id="systemAdminBusinessesPanel" class="system-admin-panel" role="tabpanel" aria-labelledby="systemAdminBusinessesTab">
@@ -198,6 +237,32 @@
                     <p id="systemAdminBillingReminder" class="system-admin-reminder hidden" role="status" aria-live="polite"></p>
                     <p id="systemAdminBillingEmpty" class="system-admin-help hidden">Asigna un plan mensual y una fecha de vencimiento para activar los recordatorios.</p>
                     <div class="table-container system-admin-table-wrap system-admin-billing-table-wrap"><table><thead><tr><th>Negocio</th><th>Plan actual</th><th>Estado de pago</th><th>Próximo vencimiento</th><th>Último pago</th><th>Acciones</th></tr></thead><tbody id="systemAdminBillingBody"></tbody></table></div>
+                </section>
+                <section id="systemAdminLicensesPanel" class="system-admin-panel hidden" role="tabpanel" aria-labelledby="systemAdminLicensesTab" aria-hidden="true">
+                    <h2>Licencias locales</h2>
+                    <div class="system-admin-license-summary">
+                        <article aria-labelledby="systemAdminActiveLocalBusinessesLabel">
+                            <span id="systemAdminActiveLocalBusinessesLabel">Negocios locales activos</span>
+                            <strong id="systemAdminActiveLocalBusinessesCount" role="status" aria-live="polite">—</strong>
+                            <p>Cada negocio local se cuenta una sola vez cuando su licencia está vigente y activada. Esto no indica si está conectado en este momento.</p>
+                        </article>
+                    </div>
+                    <p class="system-admin-help">Cada licencia es de pago único y permite activar una instalación. El código se muestra una sola vez.</p>
+                    <form id="systemAdminLicenseForm" class="system-admin-form" novalidate>
+                        <div class="form-group"><label for="systemAdminLicenseCustomer">Cliente</label><input id="systemAdminLicenseCustomer" maxlength="160" autocomplete="name" required></div>
+                        <div class="form-group"><label for="systemAdminLicenseReference">Referencia de compra (opcional)</label><input id="systemAdminLicenseReference" maxlength="120" autocomplete="off"></div>
+                        <button id="systemAdminLicenseGenerateBtn" class="btn btn-primary" type="submit">Generar licencia</button>
+                    </form>
+                    <div id="systemAdminLicenseIssued" class="local-license-issued hidden" role="status" aria-live="polite"><strong>Código generado</strong><p id="systemAdminLicenseIssuedNotice">Guárdalo ahora; no volverá a mostrarse.</p><code id="systemAdminLicenseIssuedCode"></code><button id="systemAdminLicenseCopyBtn" class="btn btn-secondary" type="button">Copiar código</button></div>
+                    <p id="systemAdminLicenseMessage" class="message hidden form-message-slot" role="status" aria-live="polite"></p>
+                    <div class="form-group system-admin-business-select"><label for="systemAdminLicenseFilter">Estado</label><select id="systemAdminLicenseFilter"><option value="">Todas</option><option value="PENDING">Pendientes</option><option value="ACTIVE">Activas</option><option value="REVOKED">Revocadas</option></select></div>
+                    <div class="table-container system-admin-table-wrap"><table><thead><tr><th>Cliente</th><th>Referencia</th><th>Estado</th><th>Emitida</th><th>Activada</th><th>Transferencias</th></tr></thead><tbody id="systemAdminLicensesBody"></tbody></table></div>
+                    <form id="systemAdminLicenseActionForm" class="system-admin-form local-license-action-form" novalidate>
+                        <div class="form-group"><label for="systemAdminLicenseActionId">Licencia</label><select id="systemAdminLicenseActionId" required><option value="">Selecciona una licencia</option></select></div>
+                        <div class="form-group"><label for="systemAdminLicenseActionReason">Motivo de revocación (obligatorio)</label><input id="systemAdminLicenseActionReason" maxlength="500" aria-describedby="systemAdminLicenseActionReasonHelp"><small id="systemAdminLicenseActionReasonHelp">Solo se solicita para revocar una licencia. Autorizar una transferencia no requiere explicación.</small></div>
+                        <button id="systemAdminLicenseTransferBtn" class="btn btn-secondary" type="button" disabled>Autorizar transferencia</button>
+                        <button id="systemAdminLicenseRevokeBtn" class="btn btn-secondary" type="button" disabled>Revocar licencia</button>
+                    </form>
                 </section>
                 <section id="systemAdminMigrationPanel" class="system-admin-panel hidden" role="tabpanel" aria-labelledby="systemAdminMigrationTab" aria-hidden="true">
                     <section class="migration-destination-card migration-destination-primary" aria-labelledby="migrationDestinationTitle">
@@ -1494,6 +1559,9 @@
 <div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cancelar</button><button id="localOrderConfirmBtn" type="submit" class="btn btn-primary">Cobrar orden</button></div></form></div></div>
     <script src="data-tables.js"></script>
     <script src="period-filters.js"></script>
+    <script src="local-auth.js"></script>
+    <script src="local-license-config.js"></script>
+    <script src="local-license.js"></script>
     <script src="app.js"></script>
     <script src="connected-inventory.js"></script>
     <script src="connected-sales.js"></script>
@@ -1509,5 +1577,6 @@
     <script src="connected-migration-history.js"></script>
     <script src="connected-auth.js"></script>
     <script src="icons.js"></script>
+    <script src="pwa.js"></script>
 </body>
 </html>

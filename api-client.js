@@ -2,6 +2,34 @@
 
 (() => {
   const messages = {
+    HISTORICAL_PURCHASE_READ_ONLY: 'Esta compra forma parte del historial y solo se puede consultar.',
+    PURCHASE_CASH_BALANCE_INSUFFICIENT: 'La caja no tiene efectivo suficiente para registrar la diferencia. La compra no se modificó.',
+    PURCHASE_CASH_PAYMENT_UNSAFE: 'No se puede corregir esta compra con seguridad usando su forma de pago actual. No se modificó.',
+    PURCHASE_CASH_REFUND_REQUIRED: 'El nuevo total es menor que el monto pagado. Registra y concilia la devolución del proveedor antes de corregir la compra. No se modificó.',
+    PURCHASE_CASH_SESSION_CLOSED: 'La caja donde se pagó esta compra ya está cerrada. La compra no se modificó.',
+    PURCHASE_CURRENT_COST_CHANGED: 'El costo o precio del producto cambió después de esta compra. Actualiza la información y vuelve a revisarla.',
+    PURCHASE_EDIT_CREDIT_ONLY: 'Esta corrección solo está disponible para compras a crédito sin movimientos posteriores.',
+    PURCHASE_EDIT_NOT_COMPLETED: 'Solo se pueden corregir compras completadas.',
+    PURCHASE_EDIT_STOCK_INSUFFICIENT: 'La corrección dejaría existencias negativas. La compra no se modificó.',
+    PURCHASE_HAS_CASH_MOVEMENT: 'Esta compra tiene movimientos de caja asociados y no se puede editar directamente.',
+    PURCHASE_HAS_PAYMENT_HISTORY: 'Esta compra tiene pagos registrados y no se puede editar directamente. Su historial se conservó.',
+    PURCHASE_HAS_SUBSEQUENT_MOVEMENTS: 'Hay movimientos posteriores de estos productos. La compra no se puede corregir directamente.',
+    PURCHASE_INVENTORY_HISTORY_MISMATCH: 'El historial de existencias no coincide con los artículos de esta factura. No se modificó la compra; solicita una revisión.',
+    PURCHASE_LINE_HISTORY_UNSUPPORTED: 'Esta factura tiene descuentos o impuestos que requieren una revisión antes de corregirla. No se modificó.',
+    PURCHASE_PRODUCT_SET_LOCKED: 'La corrección debe conservar los mismos productos de la factura. No se guardaron cambios.',
+    PURCHASE_PRODUCT_UNAVAILABLE: 'Uno de los productos de esta compra ya no está disponible para corregirla.',
+    PURCHASE_REVISION_CONFLICT: 'La compra cambió mientras la revisabas. Actualiza la lista y comprueba los datos.',
+    PURCHASE_REVISION_INVALID: 'Vuelve a abrir la compra antes de guardar la corrección.',
+    PURCHASE_STOCK_MISMATCH: 'Las existencias actuales no coinciden con el historial de esta compra. No se modificó; solicita una revisión.',
+    LOCAL_LICENSE_INVALID_CUSTOMER: 'Completa el nombre del cliente y revisa la referencia de compra.',
+    LOCAL_LICENSE_INVALID_REQUEST: 'No se pudo procesar la solicitud de licencia. Revisa la información e inténtalo nuevamente.',
+    LOCAL_LICENSE_NOT_CONFIGURED: 'La gestión de licencias no está disponible en este momento. No se modificaron tus datos; contacta al administrador.',
+    LOCAL_LICENSE_NOT_FOUND: 'No se encontró la licencia solicitada. Actualiza la lista e inténtalo nuevamente.',
+    LOCAL_LICENSE_ORIGIN_REQUIRED: 'No se pudo validar esta solicitud. Actualiza la pantalla e inténtalo nuevamente.',
+    LOCAL_LICENSE_RATE_LIMITED: 'Se realizaron varios intentos. Espera unos minutos antes de volver a intentarlo.',
+    LOCAL_LICENSE_REASON_REQUIRED: 'Para revocar una licencia, ingresa un motivo de al menos 10 caracteres.',
+    LOCAL_LICENSE_TRANSFER_UNAVAILABLE: 'Solo se puede transferir una licencia activa.',
+    LOCAL_LICENSE_UNAVAILABLE: 'No se pudo validar esta licencia. Revisa la información o contacta al administrador autorizado.',
     PAYMENT_ALREADY_VOID: 'Este pago ya está anulado. Actualiza el estado de cuenta.',
     PAYMENT_NOT_REVERSIBLE: 'Solo se pueden revertir pagos operativos de facturas de crédito vigentes. Los registros históricos son de consulta.',
     EXTERNAL_REFUND_REQUIRED: 'Confirma que la devolución se realizó por el mismo medio fuera del POS.',
@@ -133,20 +161,20 @@
     USER_INACTIVE: 'Este usuario está inactivo. Contacta al administrador del negocio.',
     BUSINESS_INACTIVE: 'El negocio está suspendido o inactivo. Contacta al administrador.',
     INVALID_INPUT: 'Revisa los campos ingresados.',
-    PAYLOAD_TOO_LARGE: 'La solicitud es demasiado grande. Usa el selector para cargar la fotografia por separado.',
-    INVALID_JSON: 'El servidor rechaz\u00f3 la solicitud porque el JSON no es v\u00e1lido.',
-    UNSUPPORTED_BODY: 'El servidor no admite el formato enviado.',
-    NOT_FOUND: 'El servidor no reconoce la ruta solicitada.',
-    ORIGIN_NOT_ALLOWED: 'El servidor rechaz\u00f3 la solicitud desde este origen.',
-    IMAGE_REQUIRES_UPLOAD: 'La fotografia debe cargarse como archivo; no como Base64 dentro del producto.',
+    PAYLOAD_TOO_LARGE: 'El archivo supera el tamaño permitido. Elige una copia más pequeña e inténtalo de nuevo.',
+    INVALID_JSON: 'El archivo no tiene un formato válido. Revisa que sea una copia correcta e inténtalo de nuevo.',
+    UNSUPPORTED_BODY: 'No se pudo procesar la información enviada. Revisa los datos e inténtalo nuevamente.',
+    NOT_FOUND: 'No encontramos la información solicitada. Actualiza la pantalla e inténtalo nuevamente.',
+    ORIGIN_NOT_ALLOWED: 'No se pudo validar esta solicitud. Actualiza la página e inténtalo nuevamente.',
+    IMAGE_REQUIRES_UPLOAD: 'Selecciona la fotografía desde tu dispositivo y vuelve a guardarla.',
     IMAGE_TOO_LARGE: 'La fotografia supera el limite de 8 MiB. Elige una imagen mas pequena.',
     IMAGE_FORMAT_INVALID: 'Formato de fotografia no admitido. Usa JPEG, PNG o WebP estatico.',
     IMAGE_INVALID: 'La fotografia esta vacia, danada o no es una imagen valida.',
     IMAGE_DIMENSIONS_LIMIT: 'La fotografia supera el limite de 40 megapixeles.',
     IMAGE_REFERENCE_INVALID: 'La fotografia no pertenece a este negocio o ya no esta disponible. Vuelve a seleccionarla.',
-    IMAGE_STORAGE_UNAVAILABLE: 'El almacenamiento de fotografias del servidor no esta disponible.',
+    IMAGE_STORAGE_UNAVAILABLE: 'No se pudieron guardar las fotografías en este momento. Inténtalo más tarde o contacta al administrador.',
     IMAGE_QUOTA_EXCEEDED: 'El negocio alcanzo su limite de almacenamiento de fotografias.',
-    IMAGE_BUSY: 'El servidor esta procesando otras fotografias. Intenta nuevamente en unos segundos.',
+    IMAGE_BUSY: 'No se pudieron procesar todas las fotografías ahora. Espera unos segundos e inténtalo de nuevo.',
     BUSINESS_SETTINGS_MIGRATION_REQUIRED: 'La configuración del negocio todavía no está disponible. Contacta al administrador del sistema.',
     MIGRATION_ARCHIVE_SCHEMA_REQUIRED: 'La importación todavía no está disponible. Contacta al administrador del sistema; no se modificó el negocio.',
     MIGRATION_PACKAGE_CHANGED: 'El paquete local cambió después de iniciar la migración. Recupera el mismo archivo guardado para reanudarla.',
@@ -170,6 +198,9 @@
     BUSINESS_SETTINGS_EXISTS: 'Ya hay información comercial guardada en el negocio. La copia de este dispositivo no se importó.',
     LEGACY_SETTINGS_BUSINESS_MISMATCH: 'El nombre de la configuracion local no coincide con el negocio conectado. No se importo.',
     TOO_MANY_ATTEMPTS: 'Demasiados intentos. Espera antes de intentar nuevamente.',
+    LOGIN_PROTECTION_UNAVAILABLE: 'El acceso no está disponible temporalmente. Inténtalo de nuevo en unos minutos.',
+    REAUTHORIZATION_RATE_LIMITED: 'Se realizaron varios intentos para abrir este módulo. Espera unos minutos e inténtalo de nuevo.',
+    REAUTHORIZATION_PROTECTION_UNAVAILABLE: 'No se puede verificar el permiso en este momento. Inténtalo de nuevo en unos minutos.',
     BARCODE_EXISTS: 'Ese c\u00f3digo de barras ya existe en este negocio.',
     PRODUCT_CONFLICT: 'El producto cambi\u00f3 en otra sesi\u00f3n. Actualiza el inventario y abre la edici\u00f3n nuevamente.',
     PRODUCT_NOT_FOUND: 'Producto no encontrado en este negocio.',
@@ -177,6 +208,7 @@
     STOCK_LIMIT: 'Las existencias superan el l\u00edmite permitido.',
     PRODUCT_ARCHIVED: 'El producto est\u00e1 archivado; su historial se conserva.',
     DATABASE_UNAVAILABLE: 'El sistema está temporalmente fuera de servicio. Inténtalo de nuevo en unos minutos.',
+    DATABASE_BUSY: 'El sistema est\u00e1 ocupado. Espera unos segundos y vuelve a intentarlo.',
     RETRY_OPERATION: 'La operaci\u00f3n no se complet\u00f3 por concurrencia. Consulta el inventario antes de reintentar.',
     INTERNAL_ERROR: 'Ocurrió un problema al completar la solicitud. Actualiza la pantalla y vuelve a intentarlo; si continúa, contacta al administrador.',
     REPORTS_UNAVAILABLE: 'Los reportes no están disponibles en este momento. Inténtalo más tarde o contacta al administrador.'
@@ -616,6 +648,51 @@
       const value = await this.#request('/admin/businesses/' + encodeURIComponent(id) + '/payments');
       if (!Array.isArray(value?.payments) || !value.payments.every(payment => /^[1-9]\d{0,19}$/.test(payment.id || '') && /^\d+\.\d{2}$/.test(payment.amount || '') && /^\d{4}-\d{2}-\d{2}$/.test(payment.paymentDate || ''))) throw new ApiError('INVALID_RESPONSE');
       return value.payments;
+    }
+    async localLicenses(status = '') {
+      this.#requireSystemAdmin();
+      if (!['', 'PENDING', 'ACTIVE', 'REVOKED'].includes(status)) throw new ApiError('INVALID_INPUT');
+      const value = await this.#request('/system-admin/local-licenses' + (status ? '?status=' + encodeURIComponent(status) : ''));
+      if (!Array.isArray(value?.licenses) || value.licenses.length > 200) throw new ApiError('INVALID_RESPONSE');
+      const activeLocalBusinessCount = value.activeLocalBusinessCount === undefined ? null : value.activeLocalBusinessCount;
+      if (activeLocalBusinessCount !== null && (!Number.isSafeInteger(activeLocalBusinessCount) || activeLocalBusinessCount < 0)) throw new ApiError('INVALID_RESPONSE');
+      const licenses = value.licenses.map(item => {
+        if (!item || !/^[1-9]\d{0,19}$/.test(item.id || '') || typeof item.customerName !== 'string' ||
+            !(item.customerReference === null || typeof item.customerReference === 'string') ||
+            !['PENDING', 'ACTIVE', 'REVOKED'].includes(item.status) || !Number.isFinite(Date.parse(item.createdAt)) ||
+            !(item.activatedAt === null || Number.isFinite(Date.parse(item.activatedAt))) ||
+            !(item.revokedAt === null || Number.isFinite(Date.parse(item.revokedAt))) ||
+            !Number.isSafeInteger(item.transferCount) || item.transferCount < 0) throw new ApiError('INVALID_RESPONSE');
+        return item;
+      });
+      return { licenses, activeLocalBusinessCount };
+    }
+    async generateLocalLicense(customerName, customerReference = '') {
+      this.#requireSystemAdmin();
+      if (typeof customerName !== 'string' || customerName.trim().length < 2 || customerName.trim().length > 160 ||
+          typeof customerReference !== 'string' || customerReference.trim().length > 120) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/system-admin/local-licenses', 'POST', {
+        customerName: customerName.trim(), customerReference: customerReference.trim() || null
+      });
+      const license = value?.license;
+      if (!license || !/^[1-9]\d{0,19}$/.test(license.id || '') || license.customerName !== customerName.trim() ||
+          license.customerReference !== (customerReference.trim() || null) || license.status !== 'PENDING' ||
+          !/^POSL-(?:[A-F0-9]{4}-){11}[A-F0-9]{4}$/.test(value.code || '')) throw new ApiError('INVALID_RESPONSE');
+      return { license, code: value.code };
+    }
+    async revokeLocalLicense(id, reason) {
+      this.#requireSystemAdmin();
+      if (typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id) || typeof reason !== 'string' || reason.trim().length < 10 || reason.trim().length > 500) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/system-admin/local-licenses/' + encodeURIComponent(id) + '/revoke', 'POST', { reason: reason.trim() });
+      if (String(value?.id) !== id || value.status !== 'REVOKED') throw new ApiError('INVALID_RESPONSE');
+      return value;
+    }
+    async transferLocalLicense(id) {
+      this.#requireSystemAdmin();
+      if (typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id)) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/system-admin/local-licenses/' + encodeURIComponent(id) + '/transfer', 'POST', {});
+      if (String(value?.id) !== id || value.status !== 'PENDING' || !Number.isSafeInteger(value.transferCount) || value.transferCount < 1) throw new ApiError('INVALID_RESPONSE');
+      return value;
     }
     async recordAdminSubscriptionPayment(id, data) {
       this.#requireSystemAdmin();

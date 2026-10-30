@@ -11,10 +11,49 @@ const { pipeline } = require('node:stream/promises');
 
 const ROOT = path.resolve(__dirname, '..');
 
+function safeDatabaseName(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_]{1,64}$/.test(value)) throw new Error('Database name is invalid');
+  return value;
+}
+
+function safeImageName(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$/.test(value)) throw new Error('Backend image name is invalid');
+  return value;
+}
+
 function argumentsOf(args) {
-  if (args.length !== 2 || args[0] !== '--out') throw new Error('Use: node scripts/docker-backup.cjs --out <absolute-backup-directory>');
-  if (!path.isAbsolute(args[1])) throw new Error('Backup directory must be an absolute path outside the repository');
-  return path.resolve(args[1]);
+  const options = { destination: null, project: null, envFiles: [], files: [], database: process.env.POS_DATABASE_NAME || 'pos_docker_local', backendImage: process.env.POS_BACKEND_IMAGE || 'pos-local-backend:latest' };
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    const value = args[index + 1];
+    if (arg === '--out' && !options.destination) { options.destination = value; index++; }
+    else if (arg === '--project') { options.project = value; index++; }
+    else if (arg === '--env-file') { options.envFiles.push(value); index++; }
+    else if (arg === '--file') { options.files.push(value); index++; }
+    else if (arg === '--database') { options.database = value; index++; }
+    else if (arg === '--backend-image') { options.backendImage = value; index++; }
+    else throw new Error('Unknown or duplicate backup option');
+    if (value === undefined || value.startsWith('--')) throw new Error(arg + ' requires a value');
+  }
+  if (!options.destination || !path.isAbsolute(options.destination)) throw new Error('Use: node scripts/docker-backup.cjs --out <absolute-backup-directory>');
+  if (options.project && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(options.project)) throw new Error('Compose project name is invalid');
+  if (options.envFiles.some(file => !path.isAbsolute(file))) throw new Error('Compose env-file paths must be absolute');
+  if (options.files.some(file => !file || file.startsWith('-'))) throw new Error('Compose file path is invalid');
+  options.database = safeDatabaseName(options.database);
+  options.backendImage = safeImageName(options.backendImage);
+  return { ...options, destination: path.resolve(options.destination) };
+}
+
+function composeArgs(options, args) {
+  const prefix = ['compose'];
+  if (options.project) prefix.push('--project-name', options.project);
+  for (const envFile of options.envFiles) prefix.push('--env-file', envFile);
+  for (const file of options.files) prefix.push('--file', file);
+  return prefix.concat(args);
+}
+
+function composeRun(options, args, runOptions) {
+  return run(composeArgs(options, args), runOptions);
 }
 
 function redact(value) {
@@ -75,7 +114,9 @@ async function verifyGzip(filename) {
 }
 
 async function main() {
-  const destination = argumentsOf(process.argv.slice(2));
+  const options = argumentsOf(process.argv.slice(2));
+  const { database, backendImage } = options;
+  const destination = options.destination;
   await fsp.mkdir(destination, { recursive: true, mode: 0o700 });
   const destinationReal = await fsp.realpath(destination);
   const relative = path.relative(ROOT, destinationReal);
@@ -83,11 +124,17 @@ async function main() {
     throw new Error('Backups must be stored outside the repository');
   }
 
-  const runningApplications = await run(['compose', 'ps', '--status', 'running', '-q', 'backend', 'frontend']);
+  const runningApplications = await composeRun(options, ['ps', '--status', 'running', '-q', 'backend', 'frontend']);
   if (runningApplications.trim()) throw new Error('Stop backend and frontend for a consistent database and image backup, then retry');
+  const resolvedCompose = JSON.parse(await composeRun(options, ['config', '--format', 'json']));
+  if (resolvedCompose.services?.mysql?.environment?.MYSQL_DATABASE !== database
+    || resolvedCompose.services?.backend?.environment?.DB_NAME !== database
+    || resolvedCompose.services?.backend?.image !== backendImage) {
+    throw new Error('Resolved Compose database or backend image does not match the requested backup target');
+  }
   const mysqlReady = 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --user=root --database="$MYSQL_DATABASE" --execute="SELECT 1" >/dev/null';
-  await run(['compose', 'exec', '-T', 'mysql', 'sh', '-ec', mysqlReady]);
-  await run(['image', 'inspect', 'pos-local-backend:latest']);
+  await composeRun(options, ['exec', '-T', 'mysql', 'sh', '-ec', mysqlReady]);
+  await run(['image', 'inspect', backendImage]);
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupDir = path.join(destinationReal, 'pos-backup-' + stamp + '-' + crypto.randomBytes(4).toString('hex'));
@@ -95,35 +142,36 @@ async function main() {
   const sqlFile = path.join(backupDir, 'database.sql.gz');
   const imageFile = path.join(backupDir, 'product-images.tar.gz');
 
-  const databaseManifestCommand = ['compose', 'run', '--rm', '--no-deps', '-T', '--entrypoint', 'node', 'backend', 'backend/scripts/docker-database-manifest.cjs'];
-  const databaseBefore = JSON.parse((await run(databaseManifestCommand)).trim());
-  if (databaseBefore.database !== 'pos_docker_local' || !Number.isSafeInteger(databaseBefore.tableCount) || !/^\d+$/.test(databaseBefore.totalRows) || !/^[a-f0-9]{64}$/.test(databaseBefore.objectSha256)) {
+  const databaseManifestCommand = ['run', '--rm', '--no-deps', '-T', '--entrypoint', 'node', 'backend', 'backend/scripts/docker-database-manifest.cjs'];
+  const databaseBefore = JSON.parse((await composeRun(options, databaseManifestCommand)).trim());
+  if (databaseBefore.database !== database || !Number.isSafeInteger(databaseBefore.tableCount) || !/^\d+$/.test(databaseBefore.totalRows) || !/^[a-f0-9]{64}$/.test(databaseBefore.objectSha256)) {
     throw new Error('Database inventory returned an invalid format');
   }
   const dumpCommand = 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysqldump --user=root --single-transaction --quick --routines --triggers --events --hex-blob --no-tablespaces --default-character-set=utf8mb4 "$MYSQL_DATABASE"';
-  await run(['compose', 'exec', '-T', 'mysql', 'sh', '-ec', dumpCommand], { outputFile: sqlFile, gzipOutput: true });
+  await composeRun(options, ['exec', '-T', 'mysql', 'sh', '-ec', dumpCommand], { outputFile: sqlFile, gzipOutput: true });
   await verifyGzip(sqlFile);
-  const databaseAfter = JSON.parse((await run(databaseManifestCommand)).trim());
+  const databaseAfter = JSON.parse((await composeRun(options, databaseManifestCommand)).trim());
   if (JSON.stringify(databaseBefore) !== JSON.stringify(databaseAfter)) throw new Error('Database inventory changed while the backup was being created; no verified backup manifest was written');
 
-  const imageOutput = await run(['compose', 'run', '--rm', '--no-deps', '-T', '--entrypoint', 'node', 'backend', 'backend/scripts/docker-image-manifest.cjs']);
+  const imageOutput = await composeRun(options, ['run', '--rm', '--no-deps', '-T', '--entrypoint', 'node', 'backend', 'backend/scripts/docker-image-manifest.cjs']);
   const imageManifest = JSON.parse(imageOutput.trim());
   if (!Number.isSafeInteger(imageManifest.fileCount) || !Number.isSafeInteger(imageManifest.totalBytes) || !/^[a-f0-9]{64}$/.test(imageManifest.sha256)) {
     throw new Error('Image inventory returned an invalid format');
   }
   const databaseManifest = databaseAfter;
   const tarCommand = 'tar --numeric-owner -czf - -C "$IMAGE_STORAGE_DIR" .';
-  await run(['compose', 'run', '--rm', '--no-deps', '-T', '--entrypoint', 'sh', 'backend', '-ec', tarCommand], { outputFile: imageFile });
+  await composeRun(options, ['run', '--rm', '--no-deps', '-T', '--entrypoint', 'sh', 'backend', '-ec', tarCommand], { outputFile: imageFile });
   const checkTarCommand = 'tar -tzf - >/dev/null';
-  await run(['compose', 'run', '--rm', '--no-deps', '-T', '--entrypoint', 'sh', 'backend', '-ec', checkTarCommand], { inputFile: imageFile });
-  const finalImageOutput = await run(['compose', 'run', '--rm', '--no-deps', '-T', '--entrypoint', 'node', 'backend', 'backend/scripts/docker-image-manifest.cjs']);
+  await composeRun(options, ['run', '--rm', '--no-deps', '-T', '--entrypoint', 'sh', 'backend', '-ec', checkTarCommand], { inputFile: imageFile });
+  const finalImageOutput = await composeRun(options, ['run', '--rm', '--no-deps', '-T', '--entrypoint', 'node', 'backend', 'backend/scripts/docker-image-manifest.cjs']);
   if (JSON.stringify(JSON.parse(finalImageOutput.trim())) !== JSON.stringify(imageManifest)) throw new Error('Product images changed while the backup was being created; no valid backup manifest was written');
 
   const [sqlStat, imageStat] = await Promise.all([fsp.stat(sqlFile), fsp.stat(imageFile)]);
   const manifest = {
     format: 'pos-docker-backup-v2',
     createdAt: new Date().toISOString(),
-    database: 'pos_docker_local',
+    database,
+    backendImage,
     databaseState: databaseManifest,
     databaseDump: { file: 'database.sql.gz', bytes: sqlStat.size, sha256: await sha256(sqlFile) },
     productImages: { file: 'product-images.tar.gz', bytes: imageStat.size, archiveSha256: await sha256(imageFile), ...imageManifest }

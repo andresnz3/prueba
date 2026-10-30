@@ -41,14 +41,24 @@ Agrega descuentos, notas y la marca `is_historical` a compras y detalles, y crea
 
 Amplia supplier_payments.status con PENDING al final del ENUM y conserva POSTED como valor predeterminado. No agrega filas, no reescribe el estado de pagos actuales y no modifica database/schema.sql. Requiere 002 y 003 para idempotencia y metadatos de confirmacion de Caja. Los pagos CARD/TRANSFER reservan saldo en estado PENDING; Caja permite confirmarlos y guarda actor/fecha en el movimiento y auditoria, sin sumar ni restar efectivo fisico.
 
-## Ejecutor ordenado 001-017
+## Ejecutor ordenado 001-020
 
 Para una instalacion nueva en MySQL o Contabo, crea una base vacia y configura DB_NAME para ese destino. Revisa el plan de solo lectura y aplica la instalacion completa:
 
 npm.cmd run migrate:all --prefix backend -- --plan --target pos_nueva --confirm-target pos_nueva --install-base-schema
 npm.cmd run migrate:all --prefix backend -- --apply --target pos_nueva --confirm-target pos_nueva --install-base-schema
 
-El plan comprueba MySQL 8.0.16+ y que la base este vacia, sin ejecutar DDL. La aplicacion importa solo las instrucciones CREATE TABLE de schema.sql, omite su CREATE DATABASE/USE fijo a pos_multitenant y ejecuta 001-017 en orden. Para una base existente, omite --install-base-schema y usa --plan/--apply. El destino debe coincidir exactamente con DB_NAME. Se validan dependencias, firmas de esquema y checksums, y el estado queda en schema_migrations. Las migraciones previas sin ledger se adoptan solo si todas las firmas coinciden. Ante esquema parcial, drift o interrupcion, el ejecutor se detiene para revision; el DDL no es transaccional. Requiere respaldo reciente y privilegios CREATE/ALTER. En Contabo se ejecuta desde el backend con un usuario limitado a la base destino. pos_multitenant requiere --allow-principal y autorizacion expresa; esta auditoria no modifico esa base.
+El plan comprueba MySQL 8.0.16+ y que la base este vacia, sin ejecutar DDL. La aplicacion importa solo las instrucciones CREATE TABLE de schema.sql, omite su CREATE DATABASE/USE fijo a pos_multitenant y ejecuta las migraciones incrementales en orden. Para una base existente, omite --install-base-schema y usa --plan/--apply. El destino debe coincidir exactamente con DB_NAME. Se validan dependencias, firmas de esquema y checksums, y el estado queda en schema_migrations. Las migraciones previas sin ledger se adoptan solo si todas las firmas coinciden. Ante esquema parcial, drift o interrupcion, el ejecutor se detiene para revision; el DDL no es transaccional. Requiere respaldo reciente y privilegios CREATE/ALTER. En Contabo se ejecuta desde el backend con un usuario limitado a la base destino. pos_multitenant requiere --allow-principal y autorizacion expresa; esta auditoria no modifico esa base.
+
+## Migración 019: licencias permanentes locales
+
+La migración 019 crea únicamente tablas globales para licencias locales, instalaciones autorizadas, eventos administrativos, desafíos de un solo uso y límites compartidos de activación. No modifica las tablas operativas del POS ni contiene datos de ventas. No se ha aplicado a las bases principales como parte de este cambio; debe ejecutarse posteriormente con el plan oficial, respaldo y autorización para cada destino. El servicio permanece deshabilitado si faltan `LOCAL_LICENSE_CODE_PEPPER`, `LOCAL_LICENSE_SIGNING_KEY_ID` o `LOCAL_LICENSE_SIGNING_PRIVATE_KEY`. El pepper y la clave privada son secretos del backend central y no deben incluirse en el frontend, imágenes públicas, archivos `.env.example` con valores ni el repositorio. La clave pública identificada por el mismo ID se agrega a `local-license-config.js` al preparar una publicación. No generar una clave privada de producción durante desarrollo.
+
+Las instalaciones nuevas requieren activación antes de configurar al propietario. Las instalaciones anteriores con acceso configurado o registros comerciales se reconocen como heredadas y pueden seguir utilizándose mientras completan la activación; esa transición protege el acceso a los datos existentes y no equivale a una comprobación de pago. La licencia no expira por tiempo. Revocación y transferencia se conocen al reconectar; no son inmediatas sin conexión. El navegador no proporciona una identidad física fiable del equipo, y un atacante con acceso al perfil o al código cliente puede manipular la aplicación; una licencia web evita activaciones casuales, no constituye DRM irrompible.
+
+### Migración 018: limitador compartido de inicio de sesión
+
+Crea `auth_login_rate_limits`, que conserva contadores por dirección de origen mediante un HMAC, sin guardar nombres de usuario ni direcciones IP en claro. Requiere 017. El backend limita los inicios de sesión antes de verificar la contraseña y comparte los contadores a través de MySQL entre sus instancias. Las filas con más de 24 horas se eliminan por lotes. No modifica cuentas, sesiones, permisos ni datos comerciales. La tabla es requisito del nuevo backend; desplegar el código antes de aplicar 018 hará que el login falle cerrado con un mensaje temporal. No se aplica automáticamente al iniciar el servidor ni se aplicó en esta tarea a ninguna base principal.
 
 ### Migracion 017: plan conectado Estandar
 
@@ -87,6 +97,10 @@ Crea `migration_import_batches` y `migration_source_records`, cada una aislada p
 El servicio requiere confirmacion explicita, destino INACTIVE creado para importacion, origen identificable y que las filas incluidas no declaren otro negocio. Si hay identidad ambigua, filas legadas sin negocio o alcance inconsistente, rechaza el guardado. Repetir el mismo paquete reanuda el lote por huella sin duplicar filas ni auditorias de finalizacion; un paquete distinto para el mismo origen se rechaza. Aplicar la 012 solo despues de respaldo y autorizacion para la base destino, con `npm.cmd run migrate:all --prefix backend -- --plan --target <base> --confirm-target <base>` y luego `--apply` sobre esa misma base. Las pruebas la aplican exclusivamente a bases temporales `pos_auth_test_*`.
 
 Los archivos 001-004 y 006-010 ya existian en el arbol de trabajo; 005 era la migracion pendiente. El ejecutor verifica sus huellas completas antes de adoptar una aplicacion previa sin ledger. Estas notas describen el codigo local; no implican que se haya aplicado a la base principal.
+
+## Migracion 020: identidad estable de negocios locales
+
+Agrega una identidad local hasheada a las licencias y a sus instalaciones, sin depender del nombre del cliente y sin guardar el identificador local en claro en MySQL. No modifica ni rellena filas existentes. Las licencias antiguas siguen aceptando autorizaciones firmadas y pueden funcionar sin conexion; cuando una version actualizada vuelva a comunicarse, un estado firmado puede asociar su identidad persistida. El contador solo incluye negocios con identidad confirmada y licencia activa, sin revocar, y una instalacion activa coincidente. Las licencias antiguas que aun no se hayan conectado quedan fuera del conteo exacto hasta completar esa asociacion. La migracion requiere 019 y no se aplica automaticamente ni se ha aplicado a bases principales.
 
 ### Migracion 013: bloqueo hasta conciliar una importacion
 

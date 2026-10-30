@@ -1,9 +1,32 @@
 'use strict';
+/* global localDB */
 
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const os = require('node:os');
 const { spawn } = require('node:child_process');
+
+async function createOwnerFixture(storageState, origin) {
+  const { chromium } = require('@playwright/test');
+  const executablePath = process.env.POS_TEST_BROWSER_EXECUTABLE;
+  const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(origin);
+    await page.waitForFunction(() => Boolean(window.PosLocalAuth && typeof localDB !== 'undefined'));
+    await page.evaluate(async password => {
+      await window.PosLocalAuth.load(localDB);
+      const prepared = await window.PosLocalAuth.prepare('andres', password);
+      await window.PosLocalAuth.save(prepared);
+    }, 'Prueba-Local-Propietario-2026!');
+    await page.reload();
+    await page.locator('#loginForm').waitFor({ state: 'visible' });
+    await context.storageState({ path: storageState, indexedDB: true });
+    await context.close();
+  } finally { await browser.close(); }
+}
 
 const port = Number(process.env.POS_LOCAL_TEST_PORT) || 5501;
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('POS_LOCAL_TEST_PORT must be an unprivileged TCP port');
@@ -12,7 +35,8 @@ const mimeTypes = new Map([
   ['.css', 'text/css; charset=utf-8'], ['.html', 'text/html; charset=utf-8'],
   ['.ico', 'image/x-icon'], ['.jpeg', 'image/jpeg'], ['.jpg', 'image/jpeg'],
   ['.js', 'text/javascript; charset=utf-8'], ['.json', 'application/json; charset=utf-8'],
-  ['.png', 'image/png'], ['.svg', 'image/svg+xml; charset=utf-8'], ['.webp', 'image/webp'], ['.woff2', 'font/woff2']
+  ['.png', 'image/png'], ['.svg', 'image/svg+xml; charset=utf-8'], ['.webp', 'image/webp'], ['.woff2', 'font/woff2'],
+  ['.webmanifest', 'application/manifest+json; charset=utf-8']
 ]);
 
 function createPublicServer() {
@@ -46,6 +70,8 @@ function createPublicServer() {
 
 async function main() {
   if (!fs.existsSync(path.join(publicRoot, 'index.html'))) throw new Error('Build público no disponible; ejecuta scripts/build-static.cjs primero.');
+  const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'pos-local-auth-fixture-'));
+  const storageState = path.join(fixtureDirectory, 'auth-state.json');
   const server = createPublicServer();
   let child;
   let code;
@@ -54,11 +80,12 @@ async function main() {
       server.once('error', reject);
       server.listen(port, '127.0.0.1', resolve);
     });
+    await createOwnerFixture(storageState, 'http://127.0.0.1:' + port);
     child = spawn(process.execPath, [require.resolve('@playwright/test/cli'), 'test', ...process.argv.slice(2)], {
       cwd: path.resolve(__dirname, '..'),
       stdio: 'inherit',
       windowsHide: true,
-      env: { ...process.env, POS_LOCAL_TEST_MANAGED_SERVER: '1', POS_LOCAL_TEST_ORIGIN: 'http://127.0.0.1:' + port }
+      env: { ...process.env, POS_LOCAL_TEST_MANAGED_SERVER: '1', POS_LOCAL_TEST_ORIGIN: 'http://127.0.0.1:' + port, POS_LOCAL_TEST_STORAGE_STATE: storageState }
     });
     code = await new Promise((resolve, reject) => {
       child.once('error', reject);
@@ -71,6 +98,10 @@ async function main() {
       server.close(resolve);
       server.closeAllConnections();
     });
+    const resolvedFixture = path.resolve(fixtureDirectory);
+    if (path.dirname(path.resolve(storageState)) === resolvedFixture && path.basename(storageState) === 'auth-state.json' && resolvedFixture.startsWith(path.resolve(os.tmpdir()) + path.sep)) {
+      fs.rmSync(resolvedFixture, { recursive: true, force: true });
+    }
   }
   process.exitCode = code;
 }

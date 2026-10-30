@@ -14,11 +14,11 @@ function packageFixture({ legacy = false } = {}) {
   };
 }
 
-async function openMigration(page, { eligible = true, delayed = false, existingEligible = true, missingProtection = false, legacy = false } = {}) {
+async function openMigration(page, { eligible = true, delayed = false, existingEligible = true, missingProtection = false, legacy = false, connected = false } = {}) {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript({ path: require.resolve('../tests/dexie-search-shim.js') });
-  await page.goto('/');
+  await page.goto(connected ? '/?mode=connected' : '/');
   await page.evaluate(({ eligible, delayed, existingEligible, missingProtection, legacy }) => {
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
@@ -207,7 +207,7 @@ test('una respuesta de validación tardía no reaparece después de cerrar el fl
 
 test('the source summary reads only the uploaded JSON, not the browser POS database', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 900 });
-  await openMigration(page);
+  await openMigration(page, { connected: true });
   await page.evaluate(() => {
     const nativeIndexedDB = window.indexedDB;
     window.__indexedDBReads = 0;

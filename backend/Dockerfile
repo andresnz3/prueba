@@ -11,7 +11,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libstdc++6 tar \
-    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && mkdir -p /var/lib/pos/product-images \
     && chown -R node:node /var/lib/pos
 COPY --from=dependencies --chown=node:node /app/backend/node_modules ./backend/node_modules

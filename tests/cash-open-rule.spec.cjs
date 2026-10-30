@@ -4,7 +4,7 @@ const message = 'Debes abrir caja antes de facturar o cobrar';
 async function fixture(page) {
   await page.goto('/');
   await page.locator('#loginUsername').fill('andres');
-  await page.locator('#loginPassword').fill('4321');
+  await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!');
   await page.locator('#loginForm button[type=submit]').click();
   await expect(page.locator('#app')).toBeVisible();
   await page.evaluate(async () => {

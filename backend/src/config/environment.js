@@ -28,7 +28,9 @@ function readConfig(env = process.env) {
       host: required('DB_HOST'), port: integer('DB_PORT', undefined, 1, 65535),
       database: required('DB_NAME'), user: required('DB_USER'), password: required('DB_PASSWORD'),
       connectionLimit: integer('DB_CONNECTION_LIMIT', 5, 1, 50),
-      connectTimeout: integer('DB_CONNECT_TIMEOUT_MS', 3000, 100, 30000)
+      connectTimeout: integer('DB_CONNECT_TIMEOUT_MS', 3000, 100, 30000),
+      connectionQueueLimit: integer('DB_POOL_QUEUE_LIMIT', 20, 0, 200),
+      acquireTimeout: integer('DB_POOL_ACQUIRE_TIMEOUT_MS', 3000, 100, 15000)
     }
   };
 }

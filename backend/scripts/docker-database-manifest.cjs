@@ -40,11 +40,15 @@ async function main() {
     );
     const objects = { routines, triggers, events };
     const totalRows = tables.reduce((total, table) => total + BigInt(table.rowCount), 0n).toString();
+    const migrationLedger = tables.some(table => table.name === 'schema_migrations')
+      ? await pool.execute('SELECT version, file_name AS fileName, checksum, status FROM schema_migrations ORDER BY version').then(([rows]) => rows)
+      : null;
     process.stdout.write(JSON.stringify({
       database: config.database.database,
       tableCount: tables.length,
       totalRows,
       tables,
+      migrationLedger,
       objectCounts: { routines: routines.length, triggers: triggers.length, events: events.length },
       objectSha256: hash(objects)
     }) + '\n');

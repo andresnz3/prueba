@@ -19,7 +19,7 @@ async function iniciarSesion(page) {
   await page.addInitScript({ path: require.resolve('./dexie-search-shim.js') });
   await page.goto("/");
   await page.locator("#loginUsername").fill("andres");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#salesView")).toBeVisible();
 }
@@ -412,41 +412,25 @@ test("Historial muestra la auditoría de movimientos de Caja y abonos de crédit
   await expect(paymentAudit).toContainText(today);
 });
 
-test("Historial identifica al vendedor y exige autorización para acceder con su rol", async ({ page }) => {
+test("Historial conserva la identidad del propietario y permite consultar sus registros", async ({ page }) => {
   await iniciarSesion(page);
-  await crearProductoDesdeUI(page, "HISTORY-SELLER-001", "Producto de vendedor");
+  await crearProductoDesdeUI(page, "HISTORY-OWNER-001", "Producto del propietario");
   await openCash(page);
-
-  await page.locator("#logoutBtn").click();
-  await expect(page.locator("#loginScreen")).toBeVisible();
-  await page.locator("#loginUsername").fill("vendedor1");
-  await page.locator("#loginPassword").fill("1234");
-  await page.locator("#loginForm button[type='submit']").click();
-  await expect(page.locator("#salesView")).toBeVisible();
-
-  await agregarVenta(page, "HISTORY-SELLER-001", "card");
+  await agregarVenta(page, "HISTORY-OWNER-001", "card");
   await expect(page.locator("#ticketModal")).toBeVisible();
   await page.locator("#newSaleBtn").click();
-
   await page.locator("#navHistoryBtn").click();
-  await expect(page.locator("#authModal")).toBeVisible();
-  await page.locator("#gestorPassword").fill("4321");
-  await page.locator("#authForm button[type='submit']").click();
   await expect(page.locator("#historyView")).toBeVisible();
+  await expect(page.locator("#authModal")).toBeHidden();
 
   const saleRow = page.locator("#historyTableBody tr").first();
-  await expect(saleRow).toContainText("vendedor1");
+  await expect(saleRow).toContainText("andres");
   await expect(saleRow).toContainText("C$15.00");
-  const sellerSaleAudit = page.locator("#auditTableBody tr").filter({
+  const ownerSaleAudit = page.locator("#auditTableBody tr").filter({
     hasText: "NUEVA_VENTA"
   });
-  await expect(sellerSaleAudit).toHaveCount(1);
-  await expect(sellerSaleAudit).toContainText("vendedor1");
-  const historyAuthAudit = page.locator("#auditTableBody tr").filter({
-    hasText: "DESBLOQUEO_GESTOR"
-  });
-  await expect(historyAuthAudit).toHaveCount(1);
-  await expect(historyAuthAudit).toContainText("vendedor1");
+  await expect(ownerSaleAudit).toHaveCount(1);
+  await expect(ownerSaleAudit).toContainText("andres");
 });
 
 test("Historial conserva todos los registros generados desde la interfaz sin duplicados", async ({ page }) => {

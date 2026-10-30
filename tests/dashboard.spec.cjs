@@ -31,7 +31,7 @@ test.afterEach(async ({ page }) => {
   expect(browserErrors.get(page)).toEqual([]);
 });
 
-async function iniciarSesion(page, username = "andres", password = "4321") {
+async function iniciarSesion(page, username = "andres", password = "Prueba-Local-Propietario-2026!") {
   await page.goto("/");
   await page.locator("#loginUsername").fill(username);
   await page.locator("#loginPassword").fill(password);
@@ -402,33 +402,10 @@ test("Dashboard agrega muchos movimientos sin duplicarlos y refleja stock cero",
   await expect(page.locator("#dashVendedoresBody tr")).toHaveCount(1);
 });
 
-test("vendedor requiere autorización para Dashboard y la pierde al salir", async ({ page }) => {
-  await iniciarSesion(page, "vendedor1", "1234");
+test("el propietario puede consultar el Dashboard", async ({ page }) => {
+  await iniciarSesion(page, "andres", "Prueba-Local-Propietario-2026!");
   await page.locator("#navDashboardBtn").click();
-  await expect(page.locator("#authModal")).toBeVisible();
-  await expect(page.locator("#dashboardView")).toBeHidden();
-
-  const gestorPassword = page.locator("#gestorPassword");
-  await expect(gestorPassword).toBeFocused();
-  await gestorPassword.fill("incorrecta");
-  await expect(gestorPassword).toHaveValue("incorrecta");
-  await page.locator("#authForm button[type='submit']").click();
-  await expect(page.locator("#authError")).toBeVisible();
-  await expect(page.locator("#dashboardView")).toBeHidden();
-  expect(await page.evaluate(() => localStorage.getItem("posLoginFailState"))).toBeNull();
-
-  await page.locator("#authModal .close-modal-btn").click();
-  await expect(page.locator("#authModal")).toBeHidden();
-  await expect(page.locator("#salesView")).toBeVisible();
-  await page.locator("#navDashboardBtn").click();
-  await page.locator("#gestorPassword").fill("4321");
-  await page.locator("#authForm button[type='submit']").click();
   await expect(page.locator("#dashboardView")).toBeVisible();
-  await expect(page.locator("#roleBadge")).toHaveText("Usuario");
-
-  await page.locator("#navSalesBtn").click();
-  await expect(page.locator("#salesView")).toBeVisible();
-  await page.locator("#navDashboardBtn").click();
-  await expect(page.locator("#authModal")).toBeVisible();
-  await expect(page.locator("#dashboardView")).toBeHidden();
+  await expect(page.locator("#authModal")).toBeHidden();
+  await expect(page.locator("#roleBadge")).toHaveText("Propietario");
 });

@@ -12,7 +12,10 @@ if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === process
 
 test('migration 017 adds Standard while preserving existing subscriptions and payments', async t => {
   const config = readConfig();
-  const pool = mysql.createPool({ ...config.database, database, connectionLimit: 3 });
+  const driverConfig = { ...config.database };
+  delete driverConfig.connectionQueueLimit;
+  delete driverConfig.acquireTimeout;
+  const pool = mysql.createPool({ ...driverConfig, database, connectionLimit: 3 });
   t.after(() => pool.end());
   const [business] = await pool.execute('INSERT INTO businesses (name) VALUES (?)', ['Plan compatibility ' + randomUUID()]);
   const businessId = String(business.insertId);

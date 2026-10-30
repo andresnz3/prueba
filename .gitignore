@@ -18,3 +18,10 @@ node_modules/
 
 .codex/
 test-results/
+/tests/load/private.env
+/tests/load/integration.env
+/tests/load/runtime.json
+/tests/load/fixtures/fixtures.json
+/tests/load/fixtures/reset.sql
+/tests/load/results/*.json
+/tests/load/results/*.csv

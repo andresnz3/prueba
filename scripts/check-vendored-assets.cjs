@@ -30,7 +30,10 @@ for (const reference of assetReferences) {
   assert.ok(!/^(?:https?:)?\/\//i.test(reference), `Recurso externo en el frontend: ${reference}`);
   if (/^(?:data:|#)/i.test(reference)) continue;
   const localPath = reference.split(/[?#]/, 1)[0];
-  assert.ok(existsSync(path.resolve(root, localPath)), `No existe el recurso local: ${reference}`);
+  const resolvedPath = path.resolve(root, localPath.replace(/^[/\\]+/, ''));
+  const relativeToRoot = path.relative(root, resolvedPath);
+  assert.ok(relativeToRoot && !relativeToRoot.startsWith('..') && !path.isAbsolute(relativeToRoot), `Ruta de recurso fuera del proyecto: ${reference}`);
+  assert.ok(existsSync(resolvedPath), `No existe el recurso local: ${reference}`);
 }
 
 for (const oldEndpoint of ['cdn.jsdelivr.net', 'cdnjs.cloudflare.com', 'fonts.googleapis.com']) {

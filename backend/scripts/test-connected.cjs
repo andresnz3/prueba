@@ -2,7 +2,7 @@
 const { createServer } = require('node:http');
 const { readFileSync } = require('node:fs');
 const { resolve } = require('node:path');
-const { randomBytes } = require('node:crypto');
+const { generateKeyPairSync, randomBytes } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { createDatabasePool } = require('../src/config/database');
 const { readAuthConfig } = require('../src/config/auth');
@@ -29,7 +29,7 @@ async function runBrowserTests({ config, database, playwrightArgs = [] }) {
     for (const [businessId, username, role] of [[business, 'browseradmin', 'ADMIN'], [business, 'andres', 'ADMIN'], [business, 'browserseller', 'VENDEDOR'], [businessB, 'otheradmin', 'ADMIN']]) await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessId, username, username, passwordHash, role]);
     let apiUrl;
     const root = resolve(__dirname, '../..');
-    const publicFiles = new Set(['index.html', 'app.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'connected-expenses.js', 'connected-purchases.js', 'connected-reports.js', 'dashboard-period.js', 'period-filters.js', 'connected-dashboard.js', 'local-cash-flow.js', 'local-migration-preview.js', 'local-migration-export.js', 'connected-migration-history.js']);
+    const publicFiles = new Set(['index.html', 'app.js', 'local-auth.js', 'local-license-config.js', 'local-license.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'connected-expenses.js', 'connected-purchases.js', 'connected-reports.js', 'dashboard-period.js', 'period-filters.js', 'connected-dashboard.js', 'local-cash-flow.js', 'local-migration-preview.js', 'local-migration-export.js', 'connected-migration-history.js']);
     const vendorManifest = JSON.parse(readFileSync(resolve(root, 'vendor/manifest.json'), 'utf8'));
     const publicVendorFiles = new Set(Object.keys(vendorManifest.sha256).map(file => file.replace(/^vendor\//, '')));
     web = createServer((req, res) => {
@@ -48,7 +48,8 @@ async function runBrowserTests({ config, database, playwrightArgs = [] }) {
     const origin = await listen(web);
     const authConfig = readAuthConfig({ CSRF_SECRET: randomBytes(32).toString('hex'), AUTH_RATE_MAX: '100' });
     const repo = createAuthRepository(pool, authConfig);
-    apiServer = createApp({ config: { ...config, origins: [origin] }, checkDatabase: async () => {}, authentication: { repo, config: authConfig, auth: createAuthService(repo, authConfig), users: createUsersService(repo) } });
+    const localLicense = { enabled: true, pepper: randomBytes(32), keyId: 'browser-test-ephemeral', privateKey: generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey };
+    apiServer = createApp({ config: { ...config, origins: [origin], localLicense }, checkDatabase: async () => {}, authentication: { repo, config: authConfig, auth: createAuthService(repo, authConfig), users: createUsersService(repo) } });
     apiServer = require('node:http').createServer(apiServer);
     apiUrl = await listen(apiServer) + '/api';
     const child = spawn(process.execPath, [resolve(root, 'node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests-connected/playwright.config.cjs', '--workers=1', '--reporter=line', ...playwrightArgs], { cwd: root, stdio: 'inherit', windowsHide: true, env: { ...process.env, POS_TEST_WEB_ORIGIN: origin, POS_TEST_API: apiUrl, POS_TEST_BUSINESS: business, POS_TEST_BUSINESS_B: businessB, POS_INTEGRATION_DATABASE: database } });

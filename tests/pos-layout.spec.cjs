@@ -5,7 +5,7 @@ for (const viewport of [{width:1920,height:1080},{width:1280,height:720},{width:
     await page.setViewportSize(viewport);
     await page.goto('/');
     await page.locator('#loginUsername').fill('andres');
-    await page.locator('#loginPassword').fill('4321');
+    await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!');
     await page.locator('#loginForm button[type=submit]').click();
     await expect(page.locator('#app')).toBeVisible();
     await page.locator('input[name=descApplies][value=si]').check();

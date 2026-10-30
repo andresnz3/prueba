@@ -43,8 +43,8 @@ test('ADMIN inicia sesion real, negocio resuelto y restauracion mediante cookies
 test('VENDEDOR solo accede directamente a Ventas', async ({ page }) => {
   await open(page); await login(page, 'browserseller'); await expect(page.locator('#salesView')).toBeVisible(); await expect(page.locator('#navUsersBtn')).toBeHidden(); await page.locator('#navInventoryBtn').click(); await expect(page.locator('#authModal')).toBeVisible(); await expect(page.locator('#inventoryView')).toBeHidden();
 });
-test('no acepta usuarios locales en modo conectado y explica que no existen', async ({ page }) => {
-  await open(page); await page.locator('#loginUsername').fill('localonly'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#loginError')).toContainText('No existe un usuario'); await expect(page.locator('#app')).toBeHidden(); await expect(page.locator('#loginPassword')).toHaveValue('');
+test('no acepta usuarios locales en modo conectado y no revela si una cuenta existe', async ({ page }) => {
+  await open(page); await page.locator('#loginUsername').fill('localonly'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#loginError')).toContainText('El usuario o la contraseña no coinciden.'); await expect(page.locator('#app')).toBeHidden(); await expect(page.locator('#loginPassword')).toHaveValue('');
 });
 test('autorizacion temporal, rechazo de contrasena incorrecta y revocacion al cambiar', async ({ page }) => {
   await open(page); await login(page, 'browserseller'); await page.locator('#navInventoryBtn').click(); await page.locator('#grantAdminUsername').fill('browseradmin'); await page.locator('#gestorPassword').fill('wrong'); await page.locator('#authForm button[type=submit]').click(); await expect(page.locator('#authError')).toContainText('no coinciden'); await expect(page.locator('#gestorPassword')).toHaveValue('');
@@ -100,14 +100,17 @@ test('modo conectado no inicializa Dexie y conserva la identidad de cada negocio
   const second = await page.evaluate(async () => ({ businessId: (await new window.PosApiClient(window.POS_API_BASE_URL).me()).user.businessId, dexieDisabled: localDB === null }));
   expect(second).toEqual({ businessId: businessB, dexieDisabled: true }); expect(first.businessId).not.toBe(second.businessId);
 });
-test('modo local no invoca API y cambio de modalidad recarga sin conservar identidad', async ({ page }) => {
+test('modo local nuevo exige licencia antes del propietario y cambiar a conectado no conserva identidad', async ({ page }) => {
   const requests = []; page.on('request', req => { if (req.url().startsWith(apiBase)) requests.push(req.url()); });
-  await page.goto('/'); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible(); expect(requests).toEqual([]);
-  expect(await page.locator('#purchInvoice').evaluate(input => input.required)).toBe(false);
-  expect(await page.locator('#connectedPurchaseNumberField').evaluate(node => node.classList.contains('hidden'))).toBe(true);
-  const localDateStyle = await page.locator('#reporteDesdeInput').evaluate(input => ({ scheme: getComputedStyle(input).colorScheme, background: getComputedStyle(input).backgroundColor, calendar: getComputedStyle(input, '::-webkit-calendar-picker-indicator').display }));
-  expect(localDateStyle).toEqual({ scheme: 'light', background: 'rgb(255, 255, 255)', calendar: 'block' });
-  await page.locator('#logoutBtn').click(); await page.locator('#authMode').selectOption('connected'); await expect(page).toHaveURL(/mode=connected/); await expect(page.locator('#loginScreen')).toBeVisible(); await expect(page.locator('#app')).toBeHidden(); expect(await page.locator('#loginPassword').inputValue()).toBe('');
+  await page.goto('/'); await expect(page.locator('#localLicenseGate')).toBeVisible();
+  await expect(page.locator('#localOwnerSetupForm')).toBeHidden(); await expect(page.locator('#loginForm')).toBeHidden();
+  expect(await page.evaluate(() => localDB !== null)).toBe(true);
+  expect(requests.filter(url => !url.includes('/api/local-license/'))).toEqual([]);
+  requests.length = 0;
+  await page.locator('#authMode').selectOption('connected'); await expect(page).toHaveURL(/mode=connected/);
+  await expect(page.locator('#loginForm')).toBeVisible(); await expect(page.locator('#app')).toBeHidden();
+  expect(await page.locator('#loginPassword').inputValue()).toBe('');
+  expect(requests.map(url => new URL(url).pathname)).toEqual(['/api/auth/me']);
 });
 
 test('respuesta tardia no reabre una sesion vencida', async ({ page }) => {

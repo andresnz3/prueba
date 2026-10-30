@@ -106,15 +106,20 @@ async function sessionFor(pool, repo, businessId, userId, authConfig) {
   return repo.session(tokenHash, authConfig.absoluteSeconds);
 }
 
-test('MySQL migra las tres facturas reales de Diana, mantiene saldo cero y es idempotente', async t => {
-  const fs = require('node:fs');
-  const path = require('node:path');
+const fs = require('node:fs');
+const path = require('node:path');
+const privateCreditFixturePath = path.resolve(__dirname, '../../../prueba-compras.json');
+const privateCreditFixtureEnabled = process.env.POS_TEST_ALLOW_PRIVATE_FIXTURES === '1' && fs.existsSync(privateCreditFixturePath);
+
+test('MySQL migra las facturas del paquete privado, mantiene saldo cero y es idempotente', {
+  skip: privateCreditFixtureEnabled ? false : 'Fixture privado ausente o no habilitado para pruebas aisladas.'
+}, async t => {
   const config = readConfig();
   const authConfig = readAuthConfig({ CSRF_SECRET: randomBytes(32).toString('hex'), AUTH_RATE_MAX: '100' });
   const pool = createDatabasePool({ ...config.database, database, connectionLimit: 12 });
   t.after(() => pool.end());
   const repo = createAuthRepository(pool, authConfig);
-  const packageValue = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../prueba-compras.json'), 'utf8'));
+  const packageValue = JSON.parse(fs.readFileSync(privateCreditFixturePath, 'utf8'));
   const target = await setupTarget(pool, repo, packageValue, 'real');
   const before = await snapshot(pool, target.targetBusinessId);
   const preview = await target.service.previewCreditMigration(systemAdmin, target.targetBusinessId, packageValue);

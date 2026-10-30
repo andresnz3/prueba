@@ -1,5 +1,23 @@
 'use strict';
 function httpError(status, code) { return Object.assign(new Error(code), { publicStatus: status, publicCode: code }); }
+let lastDiagnosticAt = 0;
+let suppressedDiagnostics = 0;
+function logInternalFailure(error, req, status, code) {
+  const now = Date.now();
+  if (now - lastDiagnosticAt < 1000) { suppressedDiagnostics += 1; return; }
+  const internalCode = typeof error.code === 'string' && /^[A-Z0-9_:-]{1,64}$/.test(error.code) ? error.code : undefined;
+  const route = typeof req.route?.path === 'string' ? String(req.baseUrl || '') + req.route.path : '<unmatched>';
+  const diagnostic = {
+    event: 'request_failure', status, publicCode: code,
+    errorType: typeof error.constructor?.name === 'string' && /^[A-Za-z0-9]+$/.test(error.constructor.name) ? error.constructor.name : 'Error',
+    ...(internalCode ? { internalCode } : {}), route: route.slice(0, 160),
+    ...(suppressedDiagnostics ? { suppressedSinceLastLog: suppressedDiagnostics } : {}),
+    ...(typeof req.app?.locals?.databaseDiagnostics === 'function' ? { pool: req.app.locals.databaseDiagnostics() } : {})
+  };
+  suppressedDiagnostics = 0;
+  lastDiagnosticAt = now;
+  console.warn(JSON.stringify(diagnostic));
+}
 const publicMessages = Object.freeze({
   BUSINESS_NOT_FOUND: 'No se encontr\u00f3 el negocio solicitado.',
   BUSINESS_DELETE_PROTECTED: 'No se puede eliminar el negocio principal del sistema.',
@@ -57,19 +75,37 @@ const publicMessages = Object.freeze({
   PURCHASE_CASH_BALANCE_INSUFFICIENT: 'La caja no tiene efectivo suficiente para registrar la diferencia. No se modificó la compra.',
   PURCHASE_CASH_REFUND_REQUIRED: 'El nuevo total es menor que el efectivo ya pagado. Registra y concilia primero la devolución del proveedor; la compra no se modificó.',
   CASH_INCONSISTENT: 'Los datos del pago y el movimiento de caja no coinciden. No se realizó ningún cambio.',
-  PURCHASE_CANCEL_REQUIRES_OPEN_CASH: 'Para anular este pago en efectivo, abre la caja donde se registró o resuelve primero el cierre.'
+  PURCHASE_CANCEL_REQUIRES_OPEN_CASH: 'Para anular este pago en efectivo, abre la caja donde se registró o resuelve primero el cierre.',
+  LOGIN_PROTECTION_UNAVAILABLE: 'El acceso no está disponible temporalmente. Inténtalo de nuevo en unos minutos.',
+  REAUTHORIZATION_RATE_LIMITED: 'Se realizaron varios intentos para abrir este módulo. Espera unos minutos e inténtalo de nuevo.',
+  REAUTHORIZATION_PROTECTION_UNAVAILABLE: 'No se puede verificar el permiso en este momento. Inténtalo de nuevo en unos minutos.',
+  LOCAL_LICENSE_NOT_CONFIGURED: 'La activación de licencias todavía no está disponible. Tus datos no se modificaron; contacta al administrador.',
+  LOCAL_LICENSE_UNAVAILABLE: 'No se pudo validar esta licencia. Revisa el código o contacta al administrador autorizado.',
+  LOCAL_LICENSE_RATE_LIMITED: 'Se realizaron varios intentos. Espera unos minutos antes de probar de nuevo.',
+  LOCAL_LICENSE_INVALID_REQUEST: 'No se pudo procesar la solicitud de licencia. Inténtalo nuevamente.',
+  LOCAL_LICENSE_INVALID_CUSTOMER: 'Ingresa el nombre del cliente y revisa la referencia de compra.',
+  LOCAL_LICENSE_REASON_REQUIRED: 'Para revocar una licencia, ingresa un motivo de al menos 10 caracteres.',
+  LOCAL_LICENSE_NOT_FOUND: 'No se encontró la licencia solicitada.',
+  LOCAL_LICENSE_TRANSFER_UNAVAILABLE: 'Solo se puede transferir una licencia activa.',
+  LOCAL_LICENSE_ORIGIN_REQUIRED: 'No se pudo validar el origen de la solicitud.'
 });
 function errorHandler(error, req, res, next) {
   if (res.headersSent) return next(error);
   let status = error.publicStatus || 500;
   let code = error.publicCode || 'INTERNAL_ERROR';
-  if (['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'PROTOCOL_CONNECTION_LOST', 'POOL_CLOSED'].includes(error.code)) { status = 503; code = 'DATABASE_UNAVAILABLE'; }
+  if (['POS_POOL_QUEUE_FULL', 'POS_POOL_ACQUIRE_TIMEOUT'].includes(error.code)) { status = 503; code = 'DATABASE_BUSY'; }
+  else if (['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'PROTOCOL_CONNECTION_LOST', 'POOL_CLOSED'].includes(error.code)) { status = 503; code = 'DATABASE_UNAVAILABLE'; }
   if (error.type === 'entity.too.large') { status = 413; code = req.originalUrl?.split('?')[0] === '/api/product-images' ? 'IMAGE_TOO_LARGE' : 'PAYLOAD_TOO_LARGE'; }
   if (error.type === 'entity.parse.failed') { status = 400; code = 'INVALID_JSON'; }
   if (error.status === 415) { status = 415; code = 'UNSUPPORTED_BODY'; }
   const details = error.publicDetails;
   const safeDetails = details && typeof details === 'object' && !Array.isArray(details) && Object.values(details).every(value => Number.isSafeInteger(value) && value >= 0)
     ? details : undefined;
+  if (status >= 500) {
+    logInternalFailure(error, req, status, code);
+    if (code === 'DATABASE_BUSY') res.set?.('Retry-After', '2');
+  }
+  if (status === 429 && Number.isSafeInteger(error.retryAfter) && error.retryAfter > 0) res.set?.('Retry-After', String(error.retryAfter));
   res.status(status).json({ error: { code, ...(publicMessages[code] ? { message: publicMessages[code] } : {}), ...(error.field ? { field: error.field } : {}), ...(safeDetails ? { details: safeDetails } : {}) } });
 }
 module.exports = { httpError, errorHandler };

@@ -52,7 +52,8 @@ test('export local conserva todas las tiendas, configuracion, imagenes e histori
   await page.route('https://**/*', route => route.abort());
   await page.goto('/?mode=local', { waitUntil: 'domcontentloaded' });
   const original = await page.evaluate(async () => {
-    localStorage.setItem('posSystemConfig', JSON.stringify({ localBusinessId: 'local-export-01', name: 'Tienda de prueba', legalName: 'Tienda S.A.', ruc: 'RUC-001', address: 'Managua', phone: '5550101', currency: 'C$', header: 'Encabezado', footer: 'Pie', tax: 15, minStock: 4, salesFlow: 'DIRECT', logo: 'data:image/png;base64,iVBORw0KGgo=' }));
+    await localDB.localAuth.put({ key: 'owner', version: 1, algorithm: 'PBKDF2-HMAC-SHA-256', username: 'owner-fixture', salt: 'fixture-salt', verifier: 'owner-verifier-must-not-be-exported', iterations: 600000 });
+    localStorage.setItem('posSystemConfig', JSON.stringify({ localBusinessId: 'local-export-01', name: 'Tienda de prueba', legalName: 'Tienda S.A.', ruc: 'RUC-001', address: 'Managua', phone: '5550101', currency: 'C$', header: 'Encabezado', footer: 'Pie', tax: 15, minStock: 4, salesFlow: 'DIRECT', logo: 'data:image/png;base64,iVBORw0KGgo=', licenseCode: 'private-license-code-fixture', licensePermit: 'private-license-permit-fixture', installationId: 'private-installation-id-fixture' }));
     const business_id = 'local-export-01';
     await localDB.products.put({ id: 'p1', business_id, name: 'Café', barcode: '001', cost: '4.25', retailPrice: '8.50', stock: '1.250', marginRetail: '100.0000', image: 'data:image/png;base64,iVBORw0KGgo=', usuario: 'Ana', password: 'local-secret' });
     await localDB.clients.put({ id: 'c1', business_id, name: 'Cliente Uno', creditLimit: '100.00' });
@@ -85,6 +86,11 @@ test('export local conserva todas las tiendas, configuracion, imagenes e histori
   const download = await downloadPromise;
   const exported = JSON.parse(await readFile(await download.path(), 'utf8'));
   expect(exported.version).toBe(2);
+  expect(JSON.stringify(exported)).not.toContain('owner-verifier-must-not-be-exported');
+  expect(JSON.stringify(exported)).not.toContain('localAuth');
+  expect(JSON.stringify(exported)).not.toContain('private-license-code-fixture');
+  expect(JSON.stringify(exported)).not.toContain('private-license-permit-fixture');
+  expect(JSON.stringify(exported)).not.toContain('private-installation-id-fixture');
   for (const collection of ['products', 'clients', 'suppliers', 'sales', 'purchases', 'cashSessions', 'inventoryMovements', 'abonos', 'expenses', 'auditLogs', 'saleOrders', 'syncQueue', 'categories']) {
     expect(Array.isArray(exported.data[collection]), collection + ' debe estar presente como colección JSON');
   }

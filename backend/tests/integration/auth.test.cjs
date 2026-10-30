@@ -11,15 +11,16 @@ const { createUsersService } = require('../../src/services/users');
 const { bootstrap } = require('../../src/services/bootstrap');
 const { hashPassword } = require('../../src/services/passwords');
 const { hashToken } = require('../../src/services/tokens');
+const { reauthorizationRateLimitKey } = require('../../src/middleware/auth-rate-limit');
 const { createApp } = require('../../src/app');
 const database = process.env.POS_INTEGRATION_DATABASE;
 if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === process.env.DB_NAME) throw new Error('Ejecutar mediante npm run test:integration; nunca en la base principal');
 const adminPassword = 'Synthetic-admin-password-123!';
 const sellerPassword = 'Synthetic-seller-password-123!';
-function client(base) {
+function client(base, defaultHeaders = {}) {
   const jar = new Map(); let csrf;
   async function request(route, method = 'GET', body, headers = {}) {
-    const options = { method, headers: { Cookie: [...jar].map(([k, v]) => k + '=' + v).join('; '), ...headers } };
+    const options = { method, headers: { ...defaultHeaders, Cookie: [...jar].map(([k, v]) => k + '=' + v).join('; '), ...headers } };
     if (method !== 'GET') {
       options.headers['Content-Type'] = 'application/json';
       if (csrf && !Object.hasOwn(headers, 'X-CSRF-Token')) options.headers['X-CSRF-Token'] = csrf;
@@ -38,16 +39,22 @@ function client(base) {
     assert.equal((await request('/auth/csrf')).status, 200);
     return request('/auth/login', 'POST', { username, password });
   }
-  return { request, login, jar, get csrf() { return csrf; } };
+  function copySessionFrom(source) {
+    for (const [name, value] of source.jar) jar.set(name, value);
+    csrf = source.csrf;
+  }
+  return { request, login, jar, copySessionFrom, get csrf() { return csrf; } };
 }
 test('Integracion MySQL de autenticacion y multiempresa', async t => {
   const config = readConfig();
-  const authConfig = readAuthConfig({ CSRF_SECRET: randomBytes(32).toString('hex'), AUTH_RATE_MAX: '100' });
+  const authConfig = readAuthConfig({ CSRF_SECRET: randomBytes(32).toString('hex'), AUTH_RATE_MAX: '100', AUTH_LOGIN_IP_MAX: '1000' });
   const pool = createDatabasePool({ ...config.database, database, connectionLimit: 10 });
+  const secondInstancePool = createDatabasePool({ ...config.database, database, connectionLimit: 5 });
   t.after(() => pool.end());
-  async function serve(authOptions = authConfig) {
-    const r = createAuthRepository(pool, authOptions);
-    const server = createApp({ config, checkDatabase: async () => {}, authentication: { repo: r, config: authOptions, auth: createAuthService(r, authOptions), users: createUsersService(r) } }).listen(0, '127.0.0.1');
+  t.after(() => secondInstancePool.end());
+  async function serve(authOptions = authConfig, appConfig = config, appPool = pool) {
+    const r = createAuthRepository(appPool, authOptions);
+    const server = createApp({ config: appConfig, checkDatabase: async () => {}, authentication: { repo: r, config: authOptions, auth: createAuthService(r, authOptions), users: createUsersService(r) } }).listen(0, '127.0.0.1');
     await new Promise(resolve => server.once('listening', resolve));
     t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
     return 'http://127.0.0.1:' + server.address().port;
@@ -80,13 +87,88 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
     const bad = await client(base).login(businessA, 'owner', 'wrong-password');
     const missing = await client(base).login(businessA, 'missing', 'wrong-password');
     assert.equal(bad.status, 401); assert.equal(bad.data.error.code, 'INVALID_CREDENTIALS');
-    assert.equal(missing.status, 401); assert.equal(missing.data.error.code, 'USER_NOT_FOUND');
+    assert.equal(missing.status, 401); assert.equal(missing.data.error.code, 'INVALID_CREDENTIALS');
     await rows(pool, 'UPDATE users SET username = ? WHERE business_id = ? AND id = ?', ['owner', businessB, userB]);
     const ambiguousBad = await client(base).login(businessA, 'owner', 'wrong-password');
     assert.equal(ambiguousBad.status, 401); assert.equal(ambiguousBad.data.error.code, 'INVALID_CREDENTIALS');
     const ambiguous = await client(base).login(businessA, 'owner', adminPassword);
     assert.equal(ambiguous.status, 409); assert.equal(ambiguous.data.error.code, 'USERNAME_AMBIGUOUS');
     await rows(pool, 'UPDATE users SET username = ? WHERE business_id = ? AND id = ?', ['owner_b', businessB, userB]);
+  });
+  await t.test('estado compartido entre instancias limita por origen sin bloquear cuentas por nombre', async () => {
+    const restricted = { ...authConfig, secret: randomBytes(32).toString('hex'), rateMax: 3, loginRateMax: 3, rateWindowSeconds: 60 };
+    const proxyConfig = { ...config, trustProxyHops: 1 };
+    const instanceA = await serve(restricted, proxyConfig);
+    const instanceB = await serve(restricted, proxyConfig, secondInstancePool);
+    const sameSource = { 'X-Forwarded-For': '203.0.113.51' };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await client(attempt % 2 ? instanceB : instanceA, sameSource).login(businessA, 'owner', 'wrong-password');
+      assert.equal(result.status, 401);
+      assert.equal(result.data.error.code, 'INVALID_CREDENTIALS');
+    }
+    const blockedAcrossInstances = await client(instanceB, sameSource).login(businessA, 'owner', adminPassword);
+    assert.equal(blockedAcrossInstances.status, 429);
+    assert.ok(Number(blockedAcrossInstances.headers.get('retry-after')) > 0);
+
+    const differentSourceA = await client(instanceB, { 'X-Forwarded-For': '198.51.100.52' }).login(businessA, 'owner', adminPassword);
+    const differentSourceB = await client(instanceA, { 'X-Forwarded-For': '198.51.100.53' }).login(businessB, 'owner_b', 'Other-business-password-123!');
+    assert.equal(differentSourceA.status, 200);
+    assert.equal(differentSourceB.status, 200);
+    assert.equal(differentSourceA.data.user.businessId, businessA);
+    assert.equal(differentSourceB.data.user.businessId, businessB);
+
+    const concurrentIp = '192.0.2.54';
+    const parallel = await Promise.all(Array.from({ length: 12 }, (_, index) =>
+      client(index % 2 ? instanceA : instanceB, { 'X-Forwarded-For': concurrentIp }).login(businessA, 'parallel-unknown', 'wrong-password')));
+    assert.equal(parallel.filter(result => result.status === 401).length, 3);
+    assert.equal(parallel.filter(result => result.status === 429).length, 9);
+
+    const { loginRateLimitKey } = require('../../src/middleware/auth-rate-limit');
+    const bucketKey = loginRateLimitKey(restricted.secret, '203.0.113.51');
+    await rows(pool, 'UPDATE auth_login_rate_limits SET window_started_at = TIMESTAMPADD(SECOND, -61, UTC_TIMESTAMP(3)) WHERE bucket_hash = ?', [bucketKey]);
+    const afterWindow = await client(instanceA, sameSource).login(businessA, 'owner', adminPassword);
+    assert.equal(afterWindow.status, 200);
+  });
+  await t.test('umbral de 50 intentos por IP se comparte entre negocios e instancias con Retry-After', async () => {
+    const restricted = { ...authConfig, secret: randomBytes(32).toString('hex'), rateMax: 10, loginRateMax: 50, rateWindowSeconds: 900 };
+    const proxyConfig = { ...config, trustProxyHops: 1 };
+    const instanceA = await serve(restricted, proxyConfig);
+    const instanceB = await serve(restricted, proxyConfig, secondInstancePool);
+    const sameSource = { 'X-Forwarded-For': '203.0.113.55' };
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const businessUsername = attempt % 2 ? 'owner_b' : 'owner';
+      const result = await client(attempt % 2 ? instanceB : instanceA, sameSource).login(
+        attempt % 2 ? businessB : businessA,
+        businessUsername,
+        'wrong-password'
+      );
+      assert.equal(result.status, 401);
+      assert.equal(result.data.error.code, 'INVALID_CREDENTIALS');
+    }
+    const blockedAcrossBusinesses = await client(instanceB, sameSource).login(businessB, 'owner_b', 'Other-business-password-123!');
+    assert.equal(blockedAcrossBusinesses.status, 429);
+    assert.equal(blockedAcrossBusinesses.data.error.code, 'TOO_MANY_ATTEMPTS');
+    const retryAfter = Number(blockedAcrossBusinesses.headers.get('retry-after'));
+    assert.ok(Number.isInteger(retryAfter) && retryAfter > 0 && retryAfter <= 900);
+
+    const independentIp = await client(instanceA, { 'X-Forwarded-For': '198.51.100.55' }).login(businessB, 'owner_b', 'Other-business-password-123!');
+    assert.equal(independentIp.status, 200);
+    assert.equal(independentIp.data.user.businessId, businessB);
+  });
+  await t.test('el login falla cerrado y responde sin detalles si MySQL no puede consultar el limitador', async () => {
+    await rows(pool, 'RENAME TABLE auth_login_rate_limits TO auth_login_rate_limits_test_hold', []);
+    try {
+      const restricted = await serve(
+        { ...authConfig, secret: randomBytes(32).toString('hex'), rateMax: 3, loginRateMax: 3 },
+        { ...config, trustProxyHops: 1 }
+      );
+      const result = await client(restricted, { 'X-Forwarded-For': '192.0.2.61' }).login(businessA, 'owner', adminPassword);
+      assert.equal(result.status, 503);
+      assert.equal(result.data.error.code, 'LOGIN_PROTECTION_UNAVAILABLE');
+      assert.doesNotMatch(JSON.stringify(result.data), /ER_NO_SUCH_TABLE|mysql|sql|database/i);
+    } finally {
+      await rows(pool, 'RENAME TABLE auth_login_rate_limits_test_hold TO auth_login_rate_limits', []);
+    }
   });
   await t.test('login CSRF obligatorio y solicitudes simples rechazadas', async () => {
     assert.equal((await client(base).request('/auth/login', 'POST', { businessId: businessA, username: 'owner', password: adminPassword })).status, 403);
@@ -318,14 +400,103 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
     assert.equal(blocked.status, 403); assert.equal(blocked.data.error.code, 'BUSINESS_INACTIVE');
     await rows(pool, 'UPDATE businesses SET status = ? WHERE id = ?', ['ACTIVE', businessB]);
   });
-  await t.test('limite intentos login y autorizacion temporal', async () => {
-    const restricted = await serve({ ...authConfig, rateMax: 3 });
-    const attacker = client(restricted);
+  await t.test('limite por IP de login y limite temporal de reautorizacion', async () => {
+    const restricted = await serve(
+      { ...authConfig, secret: randomBytes(32).toString('hex'), rateMax: 3, loginRateMax: 3, reauthSessionRateMax: 3, reauthUserRateMax: 10, reauthIpRateMax: 10 },
+      { ...config, trustProxyHops: 1 }
+    );
+    const attacker = client(restricted, { 'X-Forwarded-For': '203.0.113.60' });
     for (let i = 0; i < 3; i++) assert.equal((await attacker.login(businessA, 'nobody', 'wrong')).status, 401);
     assert.equal((await attacker.login(businessA, 'nobody', 'wrong')).status, 429);
-    const s = client(restricted); await s.login(businessA, 'seller', 'New-seller-password-123!');
+    const s = client(restricted, { 'X-Forwarded-For': '198.51.100.60' });
+    assert.equal((await s.login(businessA, 'seller', 'New-seller-password-123!')).status, 200);
     for (let i = 0; i < 3; i++) assert.equal((await s.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'owner', adminPassword: 'wrong' })).status, 401);
-    assert.equal((await s.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'owner', adminPassword })).status, 429);
+    const limited = await s.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'owner', adminPassword });
+    assert.equal(limited.status, 429);
+    assert.equal(limited.data.error.code, 'REAUTHORIZATION_RATE_LIMITED');
+    assert.ok(Number(limited.headers.get('retry-after')) > 0);
+  });
+  await t.test('reautorización concurrente comparte el límite entre dos instancias MySQL y limita la sesión', async () => {
+    const restricted = {
+      ...authConfig,
+      secret: randomBytes(32).toString('hex'),
+      reauthRateWindowSeconds: 900,
+      reauthSessionRateMax: 3,
+      reauthUserRateMax: 20,
+      reauthIpRateMax: 30
+    };
+    const proxyConfig = { ...config, trustProxyHops: 1 };
+    const instanceA = await serve(restricted, proxyConfig, pool);
+    const instanceB = await serve(restricted, proxyConfig, secondInstancePool);
+    const address = '192.0.2.71';
+    const firstSession = client(instanceA, { 'X-Forwarded-For': address });
+    assert.equal((await firstSession.login(businessA, 'seller', 'New-seller-password-123!')).status, 200);
+    const secondInstanceSession = client(instanceB, { 'X-Forwarded-For': address });
+    secondInstanceSession.copySessionFrom(firstSession);
+
+    const attempts = await Promise.all(Array.from({ length: 12 }, (_, index) => {
+      const session = index % 2 ? firstSession : secondInstanceSession;
+      const names = ['owner', 'missing-admin', 'seller'];
+      return session.request('/auth/authorizations', 'POST', {
+        module: 'inventory', adminUsername: names[index % names.length], adminPassword: 'wrong-password'
+      });
+    }));
+    assert.equal(attempts.filter(result => result.status === 401 && result.data.error.code === 'INVALID_CREDENTIALS').length, 3);
+    const limited = attempts.filter(result => result.status === 429);
+    assert.equal(limited.length, 9);
+    assert.ok(limited.every(result => result.data.error.code === 'REAUTHORIZATION_RATE_LIMITED'));
+    assert.ok(limited.every(result => Number(result.headers.get('retry-after')) > 0));
+
+    const sessionId = String((await rows(pool, 'SELECT id FROM sessions WHERE business_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1', [businessA, sellerId]))[0].id);
+    const hashes = ['ip', 'user', 'session'].map(scope => reauthorizationRateLimitKey(
+      restricted.secret,
+      scope,
+      scope === 'ip' ? address : scope === 'user' ? businessA + ':' + sellerId : businessA + ':' + sellerId + ':' + sessionId
+    ));
+    const stored = await rows(pool, 'SELECT bucket_hash, attempts FROM auth_login_rate_limits WHERE bucket_hash IN (?, ?, ?)', hashes);
+    assert.equal(stored.length, 3);
+    assert.ok(stored.every(row => /^[a-f0-9]{64}$/.test(row.bucket_hash)));
+    assert.equal(JSON.stringify(stored).includes(address), false);
+  });
+  await t.test('reautorización no bloquea por nombre del administrador ni mezcla negocios o sesiones', async () => {
+    const restricted = {
+      ...authConfig,
+      secret: randomBytes(32).toString('hex'),
+      reauthRateWindowSeconds: 900,
+      reauthSessionRateMax: 10,
+      reauthUserRateMax: 3,
+      reauthIpRateMax: 20
+    };
+    const proxyConfig = { ...config, trustProxyHops: 1 };
+    const instanceA = await serve(restricted, proxyConfig, pool);
+    const instanceB = await serve(restricted, proxyConfig, secondInstancePool);
+    const sharedIp = '198.51.100.72';
+    const ownerSeller = client(instanceA, { 'X-Forwarded-For': sharedIp });
+    assert.equal((await ownerSeller.login(businessA, 'seller', 'New-seller-password-123!')).status, 200);
+    const knownName = await ownerSeller.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'owner', adminPassword: 'wrong-password' });
+    const absentName = await ownerSeller.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'does-not-exist', adminPassword: 'wrong-password' });
+    assert.deepEqual([knownName.status, knownName.data.error.code], [401, 'INVALID_CREDENTIALS']);
+    assert.deepEqual([absentName.status, absentName.data.error.code], [401, 'INVALID_CREDENTIALS']);
+
+    const anotherSession = client(instanceB, { 'X-Forwarded-For': '203.0.113.73' });
+    assert.equal((await anotherSession.login(businessA, 'seller', 'New-seller-password-123!')).status, 200);
+    assert.equal((await anotherSession.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'owner', adminPassword: 'wrong-password' })).status, 401);
+    const userLimited = await anotherSession.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'unknown', adminPassword: 'wrong-password' });
+    assert.equal(userLimited.status, 429);
+    assert.equal(userLimited.data.error.code, 'REAUTHORIZATION_RATE_LIMITED');
+
+    const userBucket = reauthorizationRateLimitKey(restricted.secret, 'user', businessA + ':' + sellerId);
+    await rows(pool, 'UPDATE auth_login_rate_limits SET window_started_at = TIMESTAMPADD(SECOND, -901, UTC_TIMESTAMP(3)) WHERE bucket_hash = ?', [userBucket]);
+    const afterWindow = await anotherSession.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'owner', adminPassword });
+    assert.equal(afterWindow.status, 201);
+
+    const sellerBId = String((await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessB, 'seller_b', 'Seller B', await hashPassword(sellerPassword), 'VENDEDOR'])).insertId);
+    assert.ok(sellerBId);
+    const isolatedBusiness = client(instanceB, { 'X-Forwarded-For': sharedIp });
+    assert.equal((await isolatedBusiness.login(businessB, 'seller_b', sellerPassword)).status, 200);
+    const separateTenant = await isolatedBusiness.request('/auth/authorizations', 'POST', { module: 'inventory', adminUsername: 'owner_b', adminPassword: 'wrong-password' });
+    assert.equal(separateTenant.status, 401);
+    assert.equal(separateTenant.data.error.code, 'INVALID_CREDENTIALS');
   });
   await t.test('CORS autentica solo origen exacto y preflight CSRF; cookies produccion Secure', async () => {
     const allowed = await admin.request('/auth/me', 'GET', undefined, { Origin: config.origins[0] });

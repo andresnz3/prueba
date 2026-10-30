@@ -13,11 +13,17 @@ function readAuthConfig(env = process.env) {
   const sessionSeconds = seconds('SESSION_TTL_SECONDS', 1800, 60, 86400);
   const absoluteSeconds = seconds('SESSION_MAX_SECONDS', 28800, 60, 604800);
   if (absoluteSeconds < sessionSeconds) throw new Error('SESSION_MAX_SECONDS debe superar SESSION_TTL_SECONDS');
+  const rateMax = seconds('AUTH_RATE_MAX', 10, 3, 100);
   return { secret, production, sameSite, sessionSeconds, absoluteSeconds,
     grantSeconds: seconds('AUTHORIZATION_TTL_SECONDS', 300, 30, 900),
     supportCookieName: production ? '__Host-pos_support_session' : 'pos_support_session',
     rateWindowSeconds: seconds('AUTH_RATE_WINDOW_SECONDS', 900, 60, 3600),
-    rateMax: seconds('AUTH_RATE_MAX', 10, 3, 100),
+    rateMax,
+    loginRateMax: seconds('AUTH_LOGIN_IP_MAX', rateMax * 5, 10, 1000),
+    reauthRateWindowSeconds: seconds('AUTH_REAUTH_WINDOW_SECONDS', 900, 60, 3600),
+    reauthSessionRateMax: seconds('AUTH_REAUTH_SESSION_MAX', 10, 3, 100),
+    reauthUserRateMax: seconds('AUTH_REAUTH_USER_MAX', 50, 10, 1000),
+    reauthIpRateMax: seconds('AUTH_REAUTH_IP_MAX', 100, 10, 1000),
     cookieName: production ? '__Host-pos_session' : 'pos_session',
     preCookieName: production ? '__Host-pos_login_csrf' : 'pos_login_csrf' };
 }

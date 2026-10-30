@@ -1,10 +1,17 @@
 **
 !index.html
 !app.js
+!local-auth.js
+!local-license-config.js
+!local-license.js
 !data-tables.js
 !styles.css
 !icons.js
 !404.html
+!offline.html
+!manifest.webmanifest
+!pwa.js
+!service-worker.js
 !api-config.js
 !api-client.js
 !connected-auth.js
@@ -27,6 +34,9 @@
 !scripts/check-vendored-assets.cjs
 !vendor/
 !vendor/**
+!assets/
+!assets/pwa/
+!assets/pwa/**
 !docker/
 !docker/frontend/
 !docker/frontend/api-config.js

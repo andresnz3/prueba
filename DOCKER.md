@@ -21,7 +21,7 @@ docker version
 docker compose version
 ```
 
-No ejecute comandos de inicio si alguno falla. Para que `docker compose config` no imprima contraseñas, use `docker compose config --quiet` después de preparar `.env`.
+No ejecute comandos de inicio si alguno falla. `docker compose config` sin `--quiet` expande y muestra los valores privados de `.env`. Para validar la configuración sin imprimirla, use `docker compose config --quiet`. No copie salidas de `docker inspect` que incluyan `Config.Env`.
 
 ## Configuración privada en Windows
 
@@ -64,7 +64,7 @@ docker compose up -d mysql
 docker compose ps
 ```
 
-Espere hasta que MySQL indique `healthy`. Primero ejecute el plan de instalación, que verifica que el destino está vacío y lista 001–017 sin cambiar el esquema:
+Espere hasta que MySQL indique `healthy`. Primero ejecute el plan de instalación, que verifica que el destino está vacío y lista 001–020 sin cambiar el esquema:
 
 ```powershell
 docker compose --profile tools run --rm migrate --plan --target pos_docker_local --confirm-target pos_docker_local --install-base-schema
@@ -75,6 +75,8 @@ Revise que la salida diga base planificada y que todas las migraciones aparezcan
 ```powershell
 docker compose --profile tools run --rm migrate --apply --target pos_docker_local --confirm-target pos_docker_local --install-base-schema
 ```
+
+Las migraciones 019–020 habilitan las licencias permanentes del modo local y la identidad estable para el contador. Las instalaciones nuevas las reciben mediante el ejecutor ordenado. En una actualización, revise el plan y aplique únicamente las pendientes con respaldo verificado y autorización. El servicio permanece deshabilitado si faltan sus tres variables secretas; la clave privada y el pepper solo viven en el entorno privado del backend. Antes de ofrecer activaciones, configure una clave de producción en el gestor de secretos y publique exclusivamente su JWK público en `local-license-config.js`. No reutilice claves de prueba.
 
 El backend no aplica SQL en cada reinicio. Para un despliegue posterior, respalde la base, ejecute primero `--plan` sin `--install-base-schema`, revise las pendientes y aplique mediante el mismo servicio `migrate` con `--apply`. Nunca agregue `pos_multitenant` como destino.
 
@@ -133,7 +135,7 @@ docker compose stop backend frontend
 node scripts/docker-backup.cjs --out $backupRoot
 ```
 
-El resultado contiene un dump comprimido con estructura, datos, rutinas, triggers y eventos; un archivo de imágenes; hashes SHA-256; tamaños; conteos por tabla e inventario de objetos SQL. Para verificar una copia, el comprobador crea una red interna, volúmenes y un contenedor MySQL temporal con nombre `pos_auth_test_*`, restaura el dump, compara inventarios, ejecuta `CHECK TABLE` sobre cada tabla restaurada, comprueba el ledger 001–017 y restaura/compara imágenes. Luego elimina solo esos recursos temporales generados:
+El resultado contiene un dump comprimido con estructura, datos, rutinas, triggers y eventos; un archivo de imágenes; hashes SHA-256; tamaños; conteos por tabla e inventario de objetos SQL. Para verificar una copia, el comprobador crea una red interna, volúmenes y un contenedor MySQL temporal con nombre `pos_auth_test_*`, restaura el dump, compara inventarios, ejecuta `CHECK TABLE` sobre cada tabla restaurada, comprueba las migraciones disponibles en la imagen verificadora y restaura/compara imágenes. Luego elimina solo esos recursos temporales generados:
 
 Los dos scripts requieren Node.js 22 y Docker CLI en el equipo de operaciones; el backend comercial sigue ejecutándose únicamente dentro de Docker. No requieren instalar MySQL en el host.
 
@@ -146,6 +148,46 @@ docker compose start backend frontend
 La verificación no restaura sobre la base Docker de trabajo. Para recuperación real, detenga la aplicación y siga un procedimiento de incidente revisado; no improvise importando sobre una base con datos. Mantenga copias cifradas fuera del VPS, controle acceso y pruebe la restauración. No se automatiza la eliminación por antigüedad; acuerde una política antes.
 
 ## Preparación futura de Contabo (no ejecutada)
+
+### Perfil Compose de producción
+
+`compose.yaml` conserva los valores del entorno Docker local. Para producción se preparó `compose.production.yaml`, que cambia el nombre de la base a `POS_DATABASE_NAME`, etiqueta las imágenes separadamente y exige que las tres variables privadas del servicio de licencias estén configuradas. Usa siempre el proyecto `pos-production`; así los volúmenes quedan separados (`pos-production_mysql_data` y `pos-production_product_images`) y no se comparte por accidente el almacenamiento de desarrollo. MySQL sigue en la red interna sin puerto publicado y el frontend escucha solamente en `127.0.0.1` para que Caddy termine TLS en el host.
+
+La plantilla versionada sin secretos está en `deploy/contabo/production.env.example`. En el VPS, mantenga el archivo efectivo fuera del checkout y restrinja sus permisos:
+
+```bash
+sudo install -d -m 700 /etc/pos
+sudo install -m 600 deploy/contabo/production.env.example /etc/pos/production.env
+sudoedit /etc/pos/production.env
+sudo chmod 600 /etc/pos/production.env
+```
+
+Use contraseñas aleatorias hexadecimales independientes para MySQL y CSRF. Complete las tres variables del servicio de licencias únicamente con los secretos de producción guardados en el almacén autorizado. No copie claves de QA ni imprima el resultado de `docker compose config` sin `--quiet`.
+
+Valide y prepare las imágenes sin iniciar la aplicación:
+
+```bash
+docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml config --quiet
+docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml build backend frontend migrate
+```
+
+En una primera instalación, cree el volumen MySQL vacío, revise el plan oficial y aplique las migraciones solamente después del respaldo y la autorización operativa:
+
+```bash
+docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml up -d mysql
+docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml --profile tools run --rm migrate --plan --target pos_production --confirm-target pos_production --install-base-schema
+```
+
+Tras revisar el plan, la aplicación inicial autorizada usaría `--apply` en lugar de `--plan`; para una actualización, no se debe usar `--install-base-schema` a menos que el ejecutor indique que es una base nueva. Inicie backend/frontend después de completar el plan y verificar los servicios:
+
+```bash
+docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml --profile tools run --rm migrate --apply --target pos_production --confirm-target pos_production --install-base-schema
+docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml up -d backend frontend
+```
+
+El perfil exige que el operador reemplace `pos.ejemplo.com` en `deploy/contabo/Caddyfile.example` por el dominio controlado y configure DNS A/AAAA. Instale Caddy en el host y valide su configuración antes de recargarlo; Caddy termina HTTPS y reenvía a `127.0.0.1:8080`. No publique 3000 ni 3306. El firewall permite solo SSH desde IP administrativa y TCP 80/443; habilite reglas IPv6 equivalentes si el VPS las anuncia.
+
+Todavía no existe programación de respaldos automáticos ni destino externo configurado. Antes de activar un timer hay que decidir retención, almacenamiento fuera del VPS, cifrado y alertas por fallo/espacio; ejecutar indefinidamente el script actual en el disco único terminaría llenándolo. Los scripts oficiales de respaldo/restauración están disponibles y la restauración temporal debe formar parte del control periódico.
 
 ### VPS, red y sistema
 

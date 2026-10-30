@@ -25,7 +25,7 @@ function assertNoTechnicalLeak(text, screen) {
 async function login(page) {
   await page.goto('/?mode=local');
   await page.locator('#loginUsername').fill('andres');
-  await page.locator('#loginPassword').fill('4321');
+  await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!');
   await page.locator('#loginForm button[type="submit"]').click();
   await expect(page.locator('#app')).toBeVisible();
 }
@@ -54,4 +54,23 @@ test('las pantallas locales usan textos comprensibles y presentan fallos de alma
   await page.evaluate(() => window.PosValidation.field('prodName', 'DatabaseClosedError: IndexedDB unavailable'));
   await expect(page.locator('#prodNameFieldError')).toHaveText('Revisa este campo e inténtalo nuevamente.');
   assertNoTechnicalLeak(await page.locator('#prodNameFieldError').innerText(), 'validación de formulario');
+});
+
+test('un fallo al cargar la información local bloquea el acceso y explica cómo proceder', async ({ page }) => {
+  await page.goto('/?mode=local');
+  await expect(page.locator('#loginForm')).toBeVisible();
+  await expect(page.locator('#modeDescription')).toHaveText('Acceso del propietario configurado para este equipo.');
+  const loaded = await page.evaluate(async () => {
+    return window.eval(`(async () => {
+      localDB.products.toArray = async () => { throw new DOMException('ConstraintError: private IndexedDB detail', 'ConstraintError'); };
+      return initApp();
+    })()`);
+  });
+  expect(loaded).toBe(false);
+  await expect(page.locator('#localDataLoadError')).toBeVisible();
+  await expect(page.locator('#localDataLoadError')).toHaveText('No pudimos cargar toda la información guardada en este equipo. No registres operaciones todavía. Actualiza la página y, si el problema continúa, solicita ayuda. Tus datos no se borraron.');
+  await expect(page.locator('#loginForm')).toBeHidden();
+  await expect(page.locator('#localOwnerSetupForm')).toBeHidden();
+  await expect(page.locator('#app')).toBeHidden();
+  assertNoTechnicalLeak(await page.locator('body').innerText(), 'fallo de carga local');
 });

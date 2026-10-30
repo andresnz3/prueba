@@ -47,20 +47,20 @@ async function abrirConfiguracion(page) {
   await expect(page.locator("#configView")).toBeVisible();
 }
 
-test("solo permite iniciar sesión con usuarios registrados y valida todos los campos", async ({ page }) => {
+test("solo el propietario configurado puede iniciar sesión en el modo local", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#loginScreen")).toBeVisible();
-
-  await page.locator("#loginForm button[type='submit']").click();
-  expect(await page.locator("#loginUsername").evaluate(input => input.checkValidity())).toBe(false);
-  expect(await page.locator("#loginPassword").evaluate(input => input.checkValidity())).toBe(false);
-  await expect(page.locator("#app")).toBeHidden();
+  await expect(page.locator("#localOwnerSetupForm")).toBeHidden();
+  await expect(page.locator("#loginUsername")).toHaveAttribute("autocomplete", "username");
 
   const invalidCredentials = [
-    ["desconocido", "4321"],
+    ["desconocido", "Prueba-Local-Propietario-2026!"],
     ["andres", "incorrecta"],
-    ["   ", "4321"],
-    ["andres", " 4321 "]
+    ["andres", "4321"],
+    ["gestor", "4321"],
+    ["sergio", "4321"],
+    ["sergio", "1234"],
+    ["vendedor1", "1234"]
   ];
   for (const [username, password] of invalidCredentials) {
     await page.evaluate(() => localStorage.removeItem("posLoginFailState"));
@@ -69,138 +69,51 @@ test("solo permite iniciar sesión con usuarios registrados y valida todos los c
     await page.locator("#loginForm button[type='submit']").click();
     await expect(page.locator("#loginScreen")).toBeVisible();
     await expect(page.locator("#app")).toBeHidden();
-    await expect(page.locator("#loginError")).toBeVisible();
     await expect(page.locator("#loginError")).toHaveText("Credenciales incorrectas");
   }
 
-  const registeredUsers = [
-    ["andres", "4321", "Administrador"],
-    ["gestor", "4321", "Administrador"],
-    ["sergio", "4321", "Administrador"],
-    ["sergio", "1234", "Usuario"],
-    ["vendedor1", "1234", "Usuario"]
-  ];
-  for (const [username, password, role] of registeredUsers) {
-    await page.locator("#loginUsername").fill(` ${username} `);
-    await page.locator("#loginPassword").fill(password);
-    await page.locator("#loginForm button[type='submit']").click();
-    await expect(page.locator("#loginScreen")).toBeHidden();
-    await expect(page.locator("#app")).toBeVisible();
-    await expect(page.locator("#sellerName")).toHaveText(username);
-    await expect(page.locator("#roleBadge")).toHaveText(role);
-    await page.locator("#logoutBtn").click();
-    await expect(page.locator("#loginScreen")).toBeVisible();
-    await expect(page.locator("#app")).toBeHidden();
-    await expect(page.locator("#loginUsername")).toHaveValue("");
-    await expect(page.locator("#loginPassword")).toHaveValue("");
-  }
-
-  await page.reload();
-  await expect(page.locator("#loginScreen")).toBeVisible();
-  await expect(page.locator("#app")).toBeHidden();
-});
-
-test("administrador puede navegar directamente a todas las vistas", async ({ page }) => {
-  await iniciarSesion(page, "andres", "4321");
-  await expect(page.locator("#roleBadge")).toHaveText("Administrador");
-
-  for (const [buttonId, viewId] of restrictedViews) {
-    await page.locator(`#${buttonId}`).click();
-    await expect(page.locator(`#${viewId}`)).toBeVisible();
-    await expect(page.locator("#authModal")).toBeHidden();
-  }
-});
-
-test("usuario solo abre Venta sin autorización y debe reautorizar cada módulo restringido", async ({ page }) => {
-  await iniciarSesion(page, "vendedor1", "1234");
-  await expect(page.locator("#roleBadge")).toHaveText("Usuario");
-  await expect(page.locator("#salesView")).toBeVisible();
-
-  for (const [buttonId, viewId] of restrictedViews) {
-    await page.locator(`#${buttonId}`).click();
-    await expect(page.locator("#authModal")).toBeVisible();
-    await expect(page.locator(`#${viewId}`)).toBeHidden();
-    expect(await page.locator("#gestorPassword").evaluate(input => input.checkValidity())).toBe(false);
-    await page.locator("#authForm button[type='submit']").click();
-    await expect(page.locator("#authModal")).toBeVisible();
-    await expect(page.locator(`#${viewId}`)).toBeHidden();
-
-    if (buttonId === "navConfigBtn") {
-      await page.locator("#gestorPassword").fill("no-es-clave");
-      await page.locator("#authForm button[type='submit']").click();
-      await expect(page.locator("#authError")).toBeVisible();
-      await expect(page.locator("#configView")).toBeHidden();
-    }
-
-    await page.locator("#authModal .close-modal-btn").click();
-    await expect(page.locator("#authModal")).toBeHidden();
-    await expect(page.locator("#salesView")).toBeVisible();
-    await page.locator(`#${buttonId}`).click();
-    await expect(page.locator("#authModal")).toBeVisible();
-    await page.locator("#gestorPassword").fill("4321");
-    await page.locator("#authForm button[type='submit']").click();
-    await expect(page.locator("#authModal")).toBeHidden();
-    await expect(page.locator(`#${viewId}`)).toBeVisible();
-    await expect(page.locator("#roleBadge")).toHaveText("Usuario");
-
-    await page.locator("#navSalesBtn").click();
-    await expect(page.locator("#salesView")).toBeVisible();
-    await page.locator(`#${buttonId}`).click();
-    await expect(page.locator("#authModal")).toBeVisible();
-    await expect(page.locator(`#${viewId}`)).toBeHidden();
-    await page.locator("#authModal .close-modal-btn").click();
-  }
-});
-
-test("las acciones de sesión y configuración se atribuyen al usuario activo", async ({ page }) => {
-  await iniciarSesion(page, "gestor", "4321");
-  await expect(page.locator("#sellerName")).toHaveText("gestor");
+  await page.locator("#loginUsername").fill(" andres ");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
+  await page.locator("#loginForm button[type='submit']").click();
+  await expect(page.locator("#loginScreen")).toBeHidden();
+  await expect(page.locator("#app")).toBeVisible();
+  await expect(page.locator("#sellerName")).toHaveText("andres");
+  await expect(page.locator("#roleBadge")).toHaveText("Propietario");
   await page.locator("#logoutBtn").click();
   await expect(page.locator("#loginScreen")).toBeVisible();
+  await expect(page.locator("#loginUsername")).toHaveValue("");
+  await expect(page.locator("#loginPassword")).toHaveValue("");
+});
 
-  await iniciarSesion(page, "vendedor1", "1234");
-  await expect(page.locator("#sellerName")).toHaveText("vendedor1");
+test("el propietario puede abrir todos los módulos locales sin cuentas de vendedor", async ({ page }) => {
+  await iniciarSesion(page, "andres", "Prueba-Local-Propietario-2026!");
+  await expect(page.locator("#roleBadge")).toHaveText("Propietario");
+  for (const [buttonId, viewId] of restrictedViews) {
+    await page.locator(`#${buttonId}`).click();
+    await expect(page.locator(`#${viewId}`)).toBeVisible();
+    await expect(page.locator("#authModal")).toBeHidden();
+  }
+});
+
+test("las acciones locales se atribuyen a la cuenta del propietario", async ({ page }) => {
+  await iniciarSesion(page, "andres", "Prueba-Local-Propietario-2026!");
+  await expect(page.locator("#sellerName")).toHaveText("andres");
   await page.locator("#navConfigBtn").click();
-  await expect(page.locator("#authModal")).toBeVisible();
-  await page.locator("#gestorPassword").fill("4321");
-  await page.locator("#authForm button[type='submit']").click();
-  await expect(page.locator("#configView")).toBeVisible();
-  await expect(page.locator("#roleBadge")).toHaveText("Usuario");
-
-  await page.locator("#confName").fill("Negocio atribuido al vendedor");
+  await page.locator("#confName").fill("Negocio atribuido al propietario");
   await page.locator("#saveConfigBtn").click();
   await cerrarAviso(page);
   await page.locator("#navHistoryBtn").click();
-  await expect(page.locator("#authModal")).toBeVisible();
-  await page.locator("#gestorPassword").fill("4321");
-  await page.locator("#authForm button[type='submit']").click();
-  await expect(page.locator("#historyView")).toBeVisible();
-
   const auditRows = page.locator("#auditTableBody tr");
-  const gestorLogin = auditRows.filter({ hasText: "Inicio de sesión (gestor)" });
-  await expect(gestorLogin).toHaveCount(1);
-  await expect(gestorLogin).toContainText("gestor");
-  const logout = auditRows.filter({ hasText: "Cierre de sesión" });
-  await expect(logout).toHaveCount(1);
-  await expect(logout).toContainText("gestor");
-  const sellerLogin = auditRows.filter({ hasText: "Inicio de sesión (vendedor)" });
-  await expect(sellerLogin).toHaveCount(1);
-  await expect(sellerLogin).toContainText("vendedor1");
-  const unlocked = auditRows.filter({ hasText: "DESBLOQUEO_GESTOR" });
-  await expect(unlocked).toHaveCount(2);
-  for (const rowText of await unlocked.allTextContents()) {
-    expect(rowText).toContain("vendedor1");
-  }
+  const login = auditRows.filter({ hasText: "Inicio de sesión del propietario" });
+  await expect(login).toHaveCount(1);
+  await expect(login).toContainText("andres");
   const configUpdate = auditRows.filter({ hasText: "ACTUALIZACION" });
   await expect(configUpdate).toHaveCount(1);
   await expect(configUpdate).toContainText("CONFIGURACION");
-  await expect(configUpdate).toContainText("vendedor1");
-  const today = await page.evaluate(() => new Date().toLocaleDateString());
-  await expect(configUpdate).toContainText(today);
+  await expect(configUpdate).toContainText("andres");
 });
-
 test("Configuración guarda todos los campos, logo y efectos visibles tras recarga", async ({ page }) => {
-  await iniciarSesion(page, "andres", "4321");
+  await iniciarSesion(page, "andres", "Prueba-Local-Propietario-2026!");
   await abrirConfiguracion(page);
 
   await page.locator("#confName").fill("Tienda de Prueba");
@@ -258,7 +171,7 @@ test("Configuración guarda todos los campos, logo y efectos visibles tras recar
 
   await page.reload();
   await expect(page.locator("#loginScreen")).toBeVisible();
-  await iniciarSesion(page, "andres", "4321");
+  await iniciarSesion(page, "andres", "Prueba-Local-Propietario-2026!");
   await expect(page.locator("#brandNameDisplay")).toHaveText("Tienda de Prueba");
   await abrirConfiguracion(page);
   await expect(page.locator("#confName")).toHaveValue("Tienda de Prueba");
@@ -278,7 +191,7 @@ test("Configuración guarda todos los campos, logo y efectos visibles tras recar
 });
 
 test("Configuración descarta cambios no guardados y normaliza campos vacíos", async ({ page }) => {
-  await iniciarSesion(page, "andres", "4321");
+  await iniciarSesion(page, "andres", "Prueba-Local-Propietario-2026!");
   await abrirConfiguracion(page);
 
   await page.locator("#confName").fill("Cambio pendiente");
@@ -301,7 +214,7 @@ test("Configuración descarta cambios no guardados y normaliza campos vacíos", 
   await expect(page.locator("#brandNameDisplay")).toHaveText("POS DISTRIBUIDORA");
 
   await page.reload();
-  await iniciarSesion(page, "andres", "4321");
+  await iniciarSesion(page, "andres", "Prueba-Local-Propietario-2026!");
   await abrirConfiguracion(page);
   await expect(page.locator("#confName")).toHaveValue("POS DISTRIBUIDORA");
   await expect(page.locator("#confCurrency")).toHaveValue("C$");
@@ -314,7 +227,7 @@ test("Configuración descarta cambios no guardados y normaliza campos vacíos", 
 });
 
 test("Configuración guarda un mínimo de stock fraccionario válido", async ({ page }) => {
-  await iniciarSesion(page, "andres", "4321");
+  await iniciarSesion(page, "andres", "Prueba-Local-Propietario-2026!");
   await abrirConfiguracion(page);
 
   await page.locator("#confName").fill("Nombre anterior");

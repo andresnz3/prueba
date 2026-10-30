@@ -1,4 +1,4 @@
-﻿/* global localDB, products, actualizarCatalogo, cajaActual */
+/* global localDB, products, actualizarCatalogo, cajaActual */
 const { test, expect } = require('@playwright/test');
 const { openCash } = require('./cash-fixture.cjs');
 const message = 'Debes abrir caja antes de facturar o cobrar';
@@ -6,7 +6,7 @@ const pageErrors = new WeakMap();
 test.beforeEach(({page}) => { const errors=[];pageErrors.set(page,errors);page.on('pageerror',e=>errors.push(e.message)); });
 test.afterEach(({page}) => { expect(pageErrors.get(page)).toEqual([]); });
 async function login(page) {
-  await page.goto('/'); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
+  await page.goto('/'); await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!'); await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
 }
 async function fixture(page, central=false) {
   await login(page);

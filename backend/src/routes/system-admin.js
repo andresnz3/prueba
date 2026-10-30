@@ -3,14 +3,16 @@ const { Router } = require('express');
 const express = require('express');
 const v = require('../middleware/validation');
 const { authMiddleware } = require('../middleware/authentication');
-const { createSystemAdminService } = require('../services/system-admin');
+const { createSystemAdminService, isSystemAdmin } = require('../services/system-admin');
+const { createLocalLicenseService } = require('../services/local-licenses');
 const { httpError } = require('../middleware/errors');
 const { cookies, createSupportToken, verifySupportToken } = require('../services/tokens');
 
-function systemAdminRoutes({ repo, config }, imageStore) {
+function systemAdminRoutes({ repo, config }, imageStore, localLicenseConfig = {}) {
   const router = Router();
   const middleware = authMiddleware(repo, config);
   const service = createSystemAdminService(repo, { imageStore });
+  const licenses = createLocalLicenseService(repo, localLicenseConfig, isSystemAdmin);
   router.use('/admin', middleware.authenticateOwner, (req, res, next) => {
     const allowed = service.isSystemAdmin(req.auth);
     if (!allowed && !config.production) {
@@ -28,6 +30,26 @@ function systemAdminRoutes({ repo, config }, imageStore) {
   });
   router.use('/system-admin', middleware.authenticateOwner, (req, res, next) =>
     service.isSystemAdmin(req.auth) ? next() : next(httpError(403, 'SYSTEM_ADMIN_REQUIRED')));
+  router.get('/system-admin/local-licenses', async (req, res) => {
+    const status = req.query.status || '';
+    if (Object.keys(req.query).some(key => key !== 'status')) v.invalid();
+    res.json(await licenses.admin.list(req.auth, status));
+  });
+  router.post('/system-admin/local-licenses', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['customerName', 'customerReference'], ['customerName']);
+    const customerName = v.text(data.customerName, 160);
+    const customerReference = data.customerReference === undefined || data.customerReference === null ? null : v.text(data.customerReference, 120);
+    res.status(201).json(await licenses.admin.generate(req.auth, { customerName, customerReference }));
+  });
+  router.post('/system-admin/local-licenses/:licenseId/revoke', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['reason'], ['reason']);
+    res.json(await licenses.admin.revoke(req.auth, v.id(req.params.licenseId), v.text(data.reason, 500)));
+  });
+  router.post('/system-admin/local-licenses/:licenseId/transfer', middleware.csrf, async (req, res) => {
+    const data = v.body(req.body, ['reason']);
+    const reason = data.reason === undefined || data.reason === null ? null : v.text(data.reason, 500);
+    res.json(await licenses.admin.transfer(req.auth, v.id(req.params.licenseId), reason));
+  });
   const migrationPackageBody = express.raw({ type: 'application/vnd.pos.local-migration+json', limit: '32mb', inflate: false });
   function archiveRequest(req) {
     if (!Buffer.isBuffer(req.body)) throw httpError(415, 'UNSUPPORTED_BODY');

@@ -35,7 +35,7 @@ test("el ojito alterna la contraseña con teclado y conserva el login local en m
   await toggle.press("Enter");
   await expect(password).toHaveAttribute("type", "password");
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
-  await password.fill("4321");
+  await password.fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginUsername").fill("andres");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#app")).toBeVisible();
@@ -44,7 +44,7 @@ test("login correcto permite entrar al sistema", async ({ page }) => {
   await page.goto("/");
 
   await page.locator("#loginUsername").fill("andres");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
 
   await expect(page.locator("#loginScreen")).toBeHidden();
@@ -58,7 +58,7 @@ test("después del login se muestra el módulo de ventas", async ({ page }) => {
   await page.goto("/");
 
   await page.locator("#loginUsername").fill("andres");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
 
   await expect(page.locator("#app")).toBeVisible();
@@ -69,7 +69,7 @@ test("el módulo de ventas tiene escáner y carrito", async ({ page }) => {
   await page.goto("/");
 
   await page.locator("#loginUsername").fill("andres");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
 
   await expect(page.locator("#salesView")).toBeVisible();
@@ -116,7 +116,7 @@ async function crearProducto(page, id, barcode, name) {
 async function iniciarSesion(page) {
   await page.goto("/");
   await page.locator("#loginUsername").fill("andres");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#salesView")).toBeVisible();
 }
@@ -421,7 +421,7 @@ test("el bloqueo de login aplica sus niveles, persiste y se reinicia al iniciar 
 
   await page.reload();
   await page.locator("#loginUsername").fill("andres");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#loginScreen")).toBeVisible();
   await expect(page.locator("#app")).toBeHidden();
@@ -455,7 +455,7 @@ test("el bloqueo de login aplica sus niveles, persiste y se reinicia al iniciar 
 
   await expireCurrentLock();
   await page.locator("#loginUsername").fill("andres");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#salesView")).toBeVisible();
   expect(await page.evaluate(key => localStorage.getItem(key), loginFailureKey)).toBeNull();
@@ -1716,8 +1716,8 @@ test("ajuste positivo registra una entrada y aumenta el stock", async ({ page })
   await page.goto("/");
   await crearProducto(page, "test-inventory-entry-001", "UI-ENTRY-001", "Producto para entrada");
   await page.reload();
-  await page.locator("#loginUsername").fill("gestor");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginUsername").fill("andres");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#salesView")).toBeVisible();
   await abrirInventario(page);
@@ -1740,8 +1740,8 @@ test("merma válida descuenta unidades del stock", async ({ page }) => {
   await page.goto("/");
   await crearProducto(page, "test-inventory-waste-001", "UI-WASTE-001", "Producto para merma");
   await page.reload();
-  await page.locator("#loginUsername").fill("gestor");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginUsername").fill("andres");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#salesView")).toBeVisible();
   await abrirInventario(page);
@@ -1763,8 +1763,8 @@ test("no permite registrar una merma mayor al stock disponible", async ({ page }
   await page.goto("/");
   await crearProducto(page, "test-inventory-excess-waste-001", "UI-WASTE-LIMIT-001", "Producto con stock limitado");
   await page.reload();
-  await page.locator("#loginUsername").fill("gestor");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginUsername").fill("andres");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#salesView")).toBeVisible();
   await abrirInventario(page);
@@ -1787,8 +1787,8 @@ test("activar e inactivar producto actualiza estado y contador", async ({ page }
   await page.goto("/");
   await crearProducto(page, "test-inventory-status-001", "UI-STATUS-001", "Producto para cambiar estado");
   await page.reload();
-  await page.locator("#loginUsername").fill("gestor");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginUsername").fill("andres");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#salesView")).toBeVisible();
   await abrirInventario(page);
@@ -1812,8 +1812,8 @@ test("cancelar eliminación conserva producto y confirmar lo elimina lógicament
   await page.goto("/");
   await crearProducto(page, "test-inventory-delete-001", "UI-DELETE-001", "Producto para eliminar");
   await page.reload();
-  await page.locator("#loginUsername").fill("gestor");
-  await page.locator("#loginPassword").fill("4321");
+  await page.locator("#loginUsername").fill("andres");
+  await page.locator("#loginPassword").fill("Prueba-Local-Propietario-2026!");
   await page.locator("#loginForm button[type='submit']").click();
   await expect(page.locator("#salesView")).toBeVisible();
   await abrirInventario(page);

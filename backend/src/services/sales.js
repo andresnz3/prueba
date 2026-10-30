@@ -29,13 +29,19 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
   }
   async function once(db, current, kind, data, action) {
     const hash = digest(data);
-    const [existing] = await repo.rows(db, 'SELECT * FROM pos_operations WHERE business_id = ? AND operation_key = ? FOR UPDATE', [current.business_id, data.operationKey]);
-    if (existing) {
-      if (String(existing.user_id) !== String(current.user_id) || existing.kind !== kind || existing.request_hash !== hash) throw httpError(409, 'OPERATION_CONFLICT');
+    try {
+      // Claim the unique key before touching business rows. A locking read for a
+      // missing key takes a next-key gap lock under InnoDB's default isolation,
+      // which can deadlock with cash-session scans from adjacent businesses.
+      await repo.rows(db, 'INSERT INTO pos_operations (business_id, operation_key, user_id, kind, request_hash, result) VALUES (?, ?, ?, ?, ?, ?)', [current.business_id, data.operationKey, current.user_id, kind, hash, JSON.stringify({})]);
+    } catch (error) {
+      if (error.code !== 'ER_DUP_ENTRY') throw error;
+      const [existing] = await repo.rows(db, 'SELECT * FROM pos_operations WHERE business_id = ? AND operation_key = ? FOR UPDATE', [current.business_id, data.operationKey]);
+      if (!existing || String(existing.user_id) !== String(current.user_id) || existing.kind !== kind || existing.request_hash !== hash) throw httpError(409, 'OPERATION_CONFLICT');
       return typeof existing.result === 'string' ? JSON.parse(existing.result) : existing.result;
     }
     const result = await action();
-    await repo.rows(db, 'INSERT INTO pos_operations (business_id, operation_key, user_id, kind, request_hash, result) VALUES (?, ?, ?, ?, ?, ?)', [current.business_id, data.operationKey, current.user_id, kind, hash, JSON.stringify(result)]);
+    await repo.rows(db, 'UPDATE pos_operations SET result = ? WHERE business_id = ? AND operation_key = ?', [JSON.stringify(result), current.business_id, data.operationKey]);
     return result;
   }
   async function cashRow(db, current, id) {
@@ -420,10 +426,15 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
   });
   const get = (session, id) => work(session, 'history', (db, current) => getSale(db, current, id));
   const resolveOperation = (session, key) => work(session, 'sales', async (db, current) => {
-    const [row] = await repo.rows(db, 'SELECT user_id, result FROM pos_operations WHERE business_id = ? AND operation_key = ? FOR UPDATE', [current.business_id, key]);
-    if (row) { if (String(row.user_id) !== String(current.user_id)) throw httpError(404, 'OPERATION_NOT_FOUND'); return recoverResult(db, current, row); }
     const result = { kind: 'ABANDONED', businessId: String(current.business_id) };
-    await repo.rows(db, 'INSERT INTO pos_operations (business_id, operation_key, user_id, kind, request_hash, result) VALUES (?, ?, ?, ?, ?, ?)', [current.business_id, key, current.user_id, 'ABANDONED', digest({ key }), JSON.stringify(result)]);
+    try {
+      await repo.rows(db, 'INSERT INTO pos_operations (business_id, operation_key, user_id, kind, request_hash, result) VALUES (?, ?, ?, ?, ?, ?)', [current.business_id, key, current.user_id, 'ABANDONED', digest({ key }), JSON.stringify(result)]);
+    } catch (error) {
+      if (error.code !== 'ER_DUP_ENTRY') throw error;
+      const [row] = await repo.rows(db, 'SELECT user_id, result FROM pos_operations WHERE business_id = ? AND operation_key = ? FOR UPDATE', [current.business_id, key]);
+      if (!row || String(row.user_id) !== String(current.user_id)) throw httpError(404, 'OPERATION_NOT_FOUND');
+      return recoverResult(db, current, row);
+    }
     await repo.audit(db, current, 'RESOLVE_OPERATION', 'businesses', current.business_id, { operationKey: key, kind: 'ABANDONED' });
     return result;
   });

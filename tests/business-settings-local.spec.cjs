@@ -14,7 +14,7 @@ test('la configuración local permanece en este navegador y se refleja en el com
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('/?mode=local', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#loginScreen')).toBeVisible();
-  await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321');
+  await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!');
   await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
   await page.locator('#navConfigBtn').click(); await expect(page.locator('#configView')).toBeVisible();
   await page.locator('#confName').fill('Tienda local aislada');
@@ -70,7 +70,7 @@ test('la configuración local permanece en este navegador y se refleja en el com
   expect(csvText).toContain('"Peña, café"');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('#loginScreen')).toBeVisible();
-  await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321');
+  await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!');
   await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
   await page.locator('#navConfigBtn').click(); await expect(page.locator('#configView')).toBeVisible();
   await expect(page.locator('#confName')).toHaveValue('Tienda local aislada');

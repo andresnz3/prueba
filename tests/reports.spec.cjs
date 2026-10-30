@@ -16,7 +16,7 @@ test.afterEach(async ({ page }) => {
   expect(browserErrors.get(page)).toEqual([]);
 });
 
-async function iniciarSesion(page, username = "andres", password = "4321") {
+async function iniciarSesion(page, username = "andres", password = "Prueba-Local-Propietario-2026!") {
   await page.goto("/");
   await page.locator("#loginUsername").fill(username);
   await page.locator("#loginPassword").fill(password);
@@ -757,17 +757,10 @@ test("Clientes y CxP ocultan IDs internos en tabla y Excel, y conservan acciones
   await expect(payableRow).not.toContainText(technicalSupplierId);
 });
 
-test("el rol vendedor requiere clave de gestor para acceder a Reportes", async ({ page }) => {
-  await iniciarSesion(page, "vendedor1", "1234");
+test("el propietario puede consultar Reportes", async ({ page }) => {
+  await iniciarSesion(page, "andres", "Prueba-Local-Propietario-2026!");
   await page.locator("#navReportesBtn").click();
-  await expect(page.locator("#authModal")).toBeVisible();
-  await page.locator("#gestorPassword").fill("incorrecta");
-  await page.locator("#authForm button[type='submit']").click();
-  await expect(page.locator("#authError")).toBeVisible();
-  await expect(page.locator("#reportesView")).toBeHidden();
-
-  await page.locator("#gestorPassword").fill("4321");
-  await page.locator("#authForm button[type='submit']").click();
   await expect(page.locator("#reportesView")).toBeVisible();
+  await expect(page.locator("#authModal")).toBeHidden();
   await expect(page.locator("#repVentas")).toHaveText("C$0.00");
 });

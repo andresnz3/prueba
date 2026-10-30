@@ -5,7 +5,7 @@ const { openCash } = require('./cash-fixture.cjs');
 async function fixture(page) {
   await page.goto('/');
   await page.locator('#loginUsername').fill('andres');
-  await page.locator('#loginPassword').fill('4321');
+  await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!');
   await page.locator('#loginForm button[type=submit]').click();
   await expect(page.locator('#app')).toBeVisible();
   await page.evaluate(async () => {
@@ -61,7 +61,7 @@ for (const afterClose of [false, true]) test('anular compra contado devuelve una
   await page.locator('#navCajaBtn').click();
   await expect(page.locator('#cajaResumenEsperado')).toHaveText(afterClose ? 'C$10.00' : 'C$100.00');
   await page.reload();
-  await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('4321');
+  await page.locator('#loginUsername').fill('andres'); await page.locator('#loginPassword').fill('Prueba-Local-Propietario-2026!');
   await page.locator('#loginForm button[type=submit]').click(); await expect(page.locator('#app')).toBeVisible();
   expect((await state(page)).sessions).toEqual(after.sessions);
 });

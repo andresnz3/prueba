@@ -21,7 +21,10 @@ const MIGRATIONS = [
   { version: '014', file: '014_historical_migration_operations.sql', requires: ['013'], checks: migration014 },
   { version: '015', file: '015_historical_zero_inventory_events.sql', requires: ['014'], checks: migration015 },
   { version: '016', file: '016_historical_orders_without_price_snapshot.sql', requires: ['003', '015'], checks: migration016 },
-  { version: '017', file: '017_connected_standard_plan.sql', requires: ['006'], checks: migration017 }
+  { version: '017', file: '017_connected_standard_plan.sql', requires: ['006'], checks: migration017 },
+  { version: '018', file: '018_shared_login_rate_limits.sql', requires: ['017'], checks: migration018 },
+  { version: '019', file: '019_local_perpetual_licenses.sql', requires: ['018'], checks: migration019 },
+  { version: '020', file: '020_local_license_business_identity.sql', requires: ['019'], checks: migration020 }
 ];
 
 const BASE_TABLES = [
@@ -283,6 +286,64 @@ async function migration017(db, database) {
     [database, 'business_subscriptions', 'chk_business_subscriptions_plan']);
   const clause = String(row?.checkClause || '').toUpperCase();
   return [Boolean(row && ['LOCAL', 'CONECTADO_BASICO', 'CONECTADO_ESTANDAR', 'CONECTADO_PREMIUM'].every(code => clause.includes(code)))];
+}
+async function migration018(db, database) {
+  return [
+    await tableExists(db, database, 'auth_login_rate_limits'),
+    await columnsExist(db, database, 'auth_login_rate_limits', ['bucket_hash', 'attempts', 'window_started_at', 'updated_at']),
+    await indexExists(db, database, 'auth_login_rate_limits', 'idx_auth_login_rate_limits_updated'),
+    await constraintExists(db, database, 'auth_login_rate_limits', 'chk_auth_login_rate_limits_attempts', 'CHECK')
+  ];
+}
+
+async function migration019(db, database) {
+  const tables = ['local_licenses', 'local_license_installations', 'local_license_events', 'local_license_challenges', 'local_license_rate_limits'];
+  const tableChecks = await Promise.all(tables.map(table => tableExists(db, database, table)));
+  const columns = await Promise.all([
+    columnsExist(db, database, 'local_licenses', ['code_hash', 'customer_name', 'customer_reference', 'status', 'active_installation_hash', 'active_public_key', 'issued_by_user_id', 'issued_by_username', 'created_at', 'activated_at', 'revoked_at', 'revocation_reason', 'transfer_count']),
+    columnsExist(db, database, 'local_license_installations', ['license_id', 'installation_hash', 'public_key', 'public_key_hash', 'state', 'activated_at', 'last_seen_at', 'ended_at']),
+    columnsExist(db, database, 'local_license_events', ['license_id', 'event_type', 'actor_user_id', 'actor_username', 'reason', 'details', 'created_at']),
+    columnsExist(db, database, 'local_license_challenges', ['challenge_id', 'challenge_hash', 'purpose', 'expires_at', 'used_at']),
+    columnsExist(db, database, 'local_license_rate_limits', ['bucket_hash', 'attempts', 'window_started_at', 'updated_at'])
+  ]);
+  const indexes = await Promise.all([
+    indexExists(db, database, 'local_licenses', 'uq_local_licenses_code_hash'),
+    indexExists(db, database, 'local_licenses', 'idx_local_licenses_status_created'),
+    indexExists(db, database, 'local_licenses', 'idx_local_licenses_customer'),
+    indexExists(db, database, 'local_license_installations', 'uq_local_license_installation'),
+    indexExists(db, database, 'local_license_installations', 'idx_local_license_installation_state'),
+    indexExists(db, database, 'local_license_events', 'idx_local_license_events_license_date'),
+    indexExists(db, database, 'local_license_challenges', 'idx_local_license_challenges_expiry'),
+    indexExists(db, database, 'local_license_rate_limits', 'idx_local_license_rate_limits_updated')
+  ]);
+  const foreignKeys = await Promise.all([
+    constraintExists(db, database, 'local_license_installations', 'fk_local_license_installation_license', 'FOREIGN KEY'),
+    constraintExists(db, database, 'local_license_events', 'fk_local_license_event_license', 'FOREIGN KEY')
+  ]);
+  const checks = await Promise.all([
+    constraintExists(db, database, 'local_license_rate_limits', 'chk_local_license_rate_limits_attempts', 'CHECK')
+  ]);
+  return [...tableChecks, ...columns, ...indexes, ...foreignKeys, ...checks];
+}
+
+async function migration020(db, database) {
+  const businessHashColumn = async table => {
+    const row = await scalar(db, 'SELECT data_type AS dataType,character_maximum_length AS maxLength,is_nullable AS nullable,column_default AS columnDefault,character_set_name AS characterSet,collation_name AS collationName FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name=\'local_business_id_hash\'', [database, table]);
+    return Boolean(row && row.dataType === 'char' && Number(row.maxLength) === 64 && row.nullable === 'YES' && row.columnDefault === null && row.characterSet === 'ascii' && row.collationName === 'ascii_bin');
+  };
+  const columns = await Promise.all([
+    businessHashColumn('local_licenses'),
+    businessHashColumn('local_license_installations')
+  ]);
+  const businessHashIndex = async (table, index) => {
+    const row = await scalar(db, 'SELECT column_name AS columnName,non_unique AS nonUnique FROM information_schema.statistics WHERE table_schema=? AND table_name=? AND index_name=? AND seq_in_index=1', [database, table, index]);
+    return Boolean(row && row.columnName === 'local_business_id_hash' && Number(row.nonUnique) === 1);
+  };
+  const indexes = await Promise.all([
+    businessHashIndex('local_licenses', 'idx_local_licenses_business_id_hash'),
+    businessHashIndex('local_license_installations', 'idx_local_license_installations_business_id_hash')
+  ]);
+  return [...columns, ...indexes];
 }
 
 async function migrationState(migration, db, database) {

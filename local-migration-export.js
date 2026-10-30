@@ -14,7 +14,7 @@
   ].map(normalizeFieldName));
   const SENSITIVE_KEYS = new Set([
     'password', 'passwordhash', 'pass', 'credential', 'credentials', 'token', 'accesstoken', 'refreshtoken', 'sessiontoken',
-    'secret', 'apikey', 'privatekey', 'signingkey', 'encryptionkey', 'username', 'userid', 'useragent', 'authsession',
+    'secret', 'apikey', 'privatekey', 'signingkey', 'encryptionkey', 'licensecode', 'licenseid', 'licensekey', 'licensepermit', 'licensestatus', 'installationid', 'installationsignature', 'username', 'userid', 'useragent', 'authsession',
     'authsessionid', 'jwt', 'salt', 'sessiontoken'
   ]);
   const WARNING_LABELS = [
@@ -223,7 +223,7 @@
     const clean = {};
     for (const [key, nested] of Object.entries(value)) {
       const normalizedKey = normalizeFieldName(key);
-      const credentialLike = /(password|passwd|token|secret|credential|username|userid|useragent|privatekey|signingkey|encryptionkey)/.test(normalizedKey);
+      const credentialLike = /(password|passwd|token|secret|credential|license(code|id|key|permit|status)|installation(id|signature)|username|userid|useragent|privatekey|signingkey|encryptionkey)/.test(normalizedKey);
       const authKeyLike = /^(auth|login|private|public|signing|encryption)key(?:id|value)?$/.test(normalizedKey);
       const accountId = /^(user|usuario|vendedor|cajero|cashier|seller)(id|_id)$/.test(normalizedKey);
       if (SAFE_RELATION_KEYS.has(normalizedKey) || (!SENSITIVE_KEYS.has(normalizedKey) && !credentialLike && !authKeyLike && !accountId)) {
@@ -503,6 +503,20 @@
     generateButton.addEventListener('click', generate);
     downloadButton.addEventListener('click', download);
   }
+
+  async function prepareRecoveryCopy() {
+    await generate();
+    if (!packageData) throw new Error('LOCAL_EXPORT_UNAVAILABLE');
+    return packageData.value.summary;
+  }
+
+  function downloadRecoveryCopy() {
+    if (!packageData) throw new Error('LOCAL_EXPORT_UNAVAILABLE');
+    download();
+    return packageData.value.summary;
+  }
+
+  window.PosLocalMigrationExport = Object.freeze({ prepareRecoveryCopy, downloadRecoveryCopy });
 
   init();
 })();
