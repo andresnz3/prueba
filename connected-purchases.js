@@ -133,8 +133,7 @@
     try {
       if (view === 'purchasesView') {
         state.purchasesOffset = 0;
-        await Promise.all([loadSuppliers(true), loadProducts()]);
-        await renderPurchases(el('connectedPurchasesSearch').value.trim());
+        await Promise.all([loadSuppliers(true), loadProducts(), renderPurchases(el('connectedPurchasesSearch').value.trim())]);
       } else if (view === 'payablesView') {
         state.payablesOffset = 0;
         await loadSuppliers(false);

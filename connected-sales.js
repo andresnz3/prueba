@@ -509,11 +509,14 @@
   async function load(view) {
     if (activeScope !== scope()) { activeScope = scope(); quote = quoteInput = null; }
     showPending();
-    if (view === 'salesView' || view === 'cajaView') {
-      const settings = await api(client => client.salesFlow()); salesFlow = settings.salesFlow;
-      await refreshNextInvoiceNumber(); renderCheckoutMode();
+    if (view === 'salesView') {
+      const [settings] = await Promise.all([
+        api(client => client.salesFlow()),
+        refreshNextInvoiceNumber(),
+        window.PosClients.loadCreditClients()
+      ]);
+      salesFlow = settings.salesFlow; renderCheckoutMode();
     }
-    if (view === 'salesView') await window.PosClients.loadCreditClients();
     if (view === 'clientsView') await window.PosClients.load(view);
     if (view === 'historyView') { markHistorySummaryLoading(); await loadHistory(); }
     if (view === 'cajaView') {

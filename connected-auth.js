@@ -15,6 +15,7 @@
   const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'reports', configView: 'settings' };
   let identity = null, ownerBusinessId = null, supportContext = null, activeView = null, grant = null, pendingView = null;
   let generation = 0;
+  let verificationFlight = null, accessCheckFlight = null, verifiedLoadScope = null;
   let systemAdminReady = false, systemAdminBusinesses = [], systemAdminUsers = [], systemAdminUserCapacity = null, systemAdminBilling = null, systemAdminLicenses = [], systemAdminActiveLocalBusinesses = null, systemAdminSelectedBusinessId = '', systemAdminMigrationTargetId = '', systemAdminTab = 'businesses';
   let systemAdminDeleteBusiness = null, systemAdminDeleteTrigger = null, systemAdminDeletePreview = null, systemAdminDeletePreviewToken = 0, systemAdminPaymentBusiness = null, systemAdminPaymentTrigger = null;
   const assertGeneration = value => { if (generation !== value) throw new window.PosApiError('STALE_REQUEST'); };
@@ -84,18 +85,38 @@
     el('businessContext').classList.remove('hidden');
     el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN'); syncSystemAdminAccess(); el('renewSessionBtn').classList.remove('hidden');
     el('loginError').classList.add('hidden');
-    grant = null; await api.enter('sales'); assertGeneration(version); await window.PosInventory.load('salesView'); assertGeneration(version); activeView = 'salesView'; await window.PosSales.load(activeView); assertGeneration(version); renderPosView(activeView); actualizarCatalogo();
+    grant = null; await api.enter('sales'); assertGeneration(version);
+    await withVerifiedLoadScope(version, () => Promise.all([window.PosInventory.load('salesView'), window.PosSales.load('salesView')]));
+    assertGeneration(version); activeView = 'salesView'; renderPosView(activeView); actualizarCatalogo();
     el('loginScreen').classList.add('hidden'); el('app').classList.remove('hidden');
   }
-  async function verify() {
+  function verify() {
     const version = generation;
-    const value = await api.me(); assertGeneration(version);
-    if (!identity || value.user.businessId !== ownerBusinessId || value.user.id !== identity.id) throw new window.PosApiError('INVALID_SESSION', 401);
-    identity = value.user; window.PosRuntime.setUser(identity); syncSupportBanner(value.support);
-    el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN');
-    if (!syncSystemAdminAccess() && activeView === 'systemAdminView') { activeView = 'salesView'; renderPosView(activeView); }
-    scheduleExpiry(value);
-    return value;
+    if (verificationFlight?.generation === version) return verificationFlight.promise;
+    const flight = { generation: version, promise: null };
+    flight.promise = (async () => {
+      try {
+        const value = await api.me(); assertGeneration(version);
+        if (!identity || value.user.businessId !== ownerBusinessId || value.user.id !== identity.id) throw new window.PosApiError('INVALID_SESSION', 401);
+        identity = value.user; window.PosRuntime.setUser(identity); syncSupportBanner(value.support);
+        el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN');
+        if (!syncSystemAdminAccess() && activeView === 'systemAdminView') { activeView = 'salesView'; renderPosView(activeView); }
+        scheduleExpiry(value);
+        return value;
+      } finally {
+        if (verificationFlight === flight) verificationFlight = null;
+      }
+    })();
+    verificationFlight = flight;
+    return flight.promise;
+  }
+  async function withVerifiedLoadScope(version, operation) {
+    assertGeneration(version);
+    const scope = { generation: version };
+    const previous = verifiedLoadScope;
+    verifiedLoadScope = scope;
+    try { return await operation(); }
+    finally { if (verifiedLoadScope === scope) verifiedLoadScope = previous; }
   }
   function clearSystemAdminMessage() { el('systemAdminMessage').textContent = ''; el('systemAdminMessage').classList.add('hidden'); }
   function systemAdminNotice(text) { message('systemAdminMessage', text); }
@@ -659,11 +680,14 @@
         activeView = view; renderPosView(view); renderUsers(result.users); renderUserCapacity(result.capacity); return;
       }
       await api.enter(views[view]); assertGeneration(version);
-      await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version); await window.PosPurchases.load(view); assertGeneration(version); await window.PosExpenses.load(view); assertGeneration(version);
-      if (view === 'configView') { const settings = await api.businessSettings(); assertGeneration(version); window.PosRuntime.setBusinessSettings(settings); }
-      activeView = view; renderPosView(view); window.PosMigrationHistory?.activate(view); pendingView = null;
-      if (view === 'reportesView') { await window.PosReports.load(); assertGeneration(version); }
-      if (view === 'dashboardView') { await window.PosDashboard.load(); assertGeneration(version); }
+      await withVerifiedLoadScope(version, async () => {
+        await Promise.all([window.PosInventory.load(view), window.PosSales.load(view), window.PosPurchases.load(view), window.PosExpenses.load(view)]);
+        assertGeneration(version);
+        if (view === 'configView') { const settings = await api.businessSettings(); assertGeneration(version); window.PosRuntime.setBusinessSettings(settings); }
+        activeView = view; renderPosView(view); window.PosMigrationHistory?.activate(view); pendingView = null;
+        if (view === 'reportesView') { await window.PosReports.load(); assertGeneration(version); }
+        if (view === 'dashboardView') { await window.PosDashboard.load(); assertGeneration(version); }
+      });
     } catch (failure) {
       if (failure.code === 'STALE_REQUEST') return;
       grant = null; clearTimeout(grantTimer);
@@ -709,10 +733,13 @@
     try {
       const value = await api.authorize(views[view], el('grantAdminUsername').value.trim(), el('gestorPassword').value);
       await api.enter(views[view]); assertGeneration(version);
-      await window.PosInventory.load(view); assertGeneration(version); await window.PosSales.load(view); assertGeneration(version); await window.PosPurchases.load(view); assertGeneration(version); await window.PosExpenses.load(view); assertGeneration(version);
+      await withVerifiedLoadScope(version, async () => {
+        await Promise.all([window.PosInventory.load(view), window.PosSales.load(view), window.PosPurchases.load(view), window.PosExpenses.load(view)]);
+        assertGeneration(version);
+        if (view === 'reportesView') await window.PosReports.load();
+      });
       grant = { view, until: Date.parse(value.expiresAt) }; activeView = view; pendingView = null;
       el('authModal').classList.add('hidden'); renderPosView(view); window.PosMigrationHistory?.activate(view);
-      if (view === 'reportesView') await window.PosReports.load();
       clearTimeout(grantTimer); grantTimer = setTimeout(() => { grant = null; navigate('salesView'); }, Math.max(0, grant.until - Date.now()));
     } catch (failure) { error(failure, 'authError'); }
     finally { el('gestorPassword').value = ''; button.disabled = false; busy = false; }
@@ -1004,14 +1031,24 @@
     try { await establish(await api.renew()); clearTimeout(grantTimer); message('connectedNotice', 'Sesión renovada. Los permisos temporales deben solicitarse nuevamente.'); }
     catch (failure) { error(failure); } finally { busy = false; }
   });
-  const check = async () => {
+  const checkOnce = async () => {
     if (!identity || busy || document.hidden) return;
-    try { await verify(); if (activeView && views[activeView]) await api.access(views[activeView]); if (activeView === 'usersView') await api.users(); if (activeView === 'systemAdminView') await api.adminBusinesses(); }
+    const version = generation;
+    try { await verify(); if (generation !== version) throw new window.PosApiError('STALE_REQUEST'); if (busy || document.hidden) return; if (activeView && views[activeView]) await api.access(views[activeView]); if (busy || document.hidden) return; if (activeView === 'usersView') await api.users(); if (activeView === 'systemAdminView') await api.adminBusinesses(); }
     catch (failure) {
       if (failure.code === 'MODULE_FORBIDDEN') { grant = null; await navigate('salesView'); }
       else if (failure.code === 'NETWORK_ERROR') expire('No se pudo verificar la sesión. Vuelve a conectar e inicia sesión; no se habilita acceso local automáticamente.');
       else error(failure);
     }
+  };
+  const check = () => {
+    if (!identity || busy || document.hidden) return Promise.resolve();
+    const version = generation;
+    if (accessCheckFlight?.generation === version) return accessCheckFlight.promise;
+    const flight = { generation: version, promise: null };
+    flight.promise = checkOnce().finally(() => { if (accessCheckFlight === flight) accessCheckFlight = null; });
+    accessCheckFlight = flight;
+    return flight.promise;
   };
   setInterval(check, 15000); document.addEventListener('visibilitychange', check); window.addEventListener('focus', check);
   window.addEventListener('pagehide', () => {
@@ -1019,7 +1056,9 @@
     if (grant) api.leave(views[grant.view]).catch(() => {});
   });
   async function inventoryOperation(operation) {
-    mutationLock(); const version = generation; await verify(); assertGeneration(version);
+    mutationLock(); const version = generation;
+    if (verifiedLoadScope?.generation !== version) await verify();
+    assertGeneration(version);
     const result = await operation(api, effectiveBusinessId());
     assertGeneration(version); return result;
   }

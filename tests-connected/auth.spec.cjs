@@ -134,3 +134,95 @@ test('login conectado usable en pantalla movil', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath('login-mobile.png'), fullPage: true });
 });
+
+test('medición de navegación a Ventas y verificaciones de sesión', async ({ page }) => {
+  await open(page); await login(page);
+  await page.locator('#navInventoryBtn').click(); await expect(page.locator('#inventoryView')).toBeVisible();
+  const requests = [];
+  page.on('request', request => {
+    if (!request.url().startsWith(apiBase)) return;
+    requests.push({ method: request.method(), path: new URL(request.url()).pathname, startedAt: Date.now() });
+  });
+  const startedAt = Date.now();
+  await page.locator('#navSalesBtn').click();
+  await expect(page.locator('#salesView')).toBeVisible();
+  const elapsedMs = Date.now() - startedAt;
+  const sessionChecks = requests.filter(request => request.path === '/api/auth/me');
+  const dataPaths = requests.filter(request => ['/api/catalog/products', '/api/business-settings/sales-flow', '/api/sales/next-invoice', '/api/sales/clients'].includes(request.path));
+  const dataStartSpanMs = dataPaths.length ? Math.max(...dataPaths.map(request => request.startedAt)) - Math.min(...dataPaths.map(request => request.startedAt)) : null;
+  console.log('NAV_SALES_METRIC ' + JSON.stringify({ elapsedMs, sessionChecks: sessionChecks.length, dataRequests: dataPaths.length, dataStartSpanMs }));
+  expect(sessionChecks).toHaveLength(1);
+  expect(dataPaths).toHaveLength(4);
+});
+
+test('una identidad de otro negocio recibida durante la verificación obliga a iniciar sesión nuevamente', async ({ page }) => {
+  await open(page); await login(page);
+  await page.route(apiBase + '/auth/me', async route => {
+    const response = await route.fetch(); const value = await response.json();
+    value.user.businessId = businessB; value.user.username = 'otheradmin';
+    await route.fulfill({ response, json: value });
+  });
+  await page.locator('#navInventoryBtn').click();
+  await expect(page.locator('#loginScreen')).toBeVisible();
+  await expect(page.locator('#loginError')).toContainText('sesi');
+  await expect(page.locator('#inventoryView')).toBeHidden();
+});
+
+test('el backend vuelve a validar la sesión en lecturas después de la verificación de navegación', async ({ page, context }) => {
+  await open(page); await login(page);
+  const productStatuses = [];
+  page.on('response', response => { if (new URL(response.url()).pathname === '/api/products') productStatuses.push(response.status()); });
+  await page.route(apiBase + '/products**', async route => {
+    await expireDatabaseSession(context);
+    await route.continue();
+  });
+  await page.locator('#navInventoryBtn').click();
+  await expect(page.locator('#loginScreen')).toBeVisible();
+  expect(productStatuses).toContain(401);
+  await expect(page.locator('#inventoryView')).toBeHidden();
+});
+
+test('foco y visibilidad simultáneos comparten una sola comprobación de acceso', async ({ page }) => {
+  await open(page); await login(page);
+  const requests = [];
+  page.on('request', request => {
+    if (!request.url().startsWith(apiBase)) return;
+    const path = new URL(request.url()).pathname;
+    if (path === '/api/auth/me' || path === '/api/auth/access/sales') requests.push(path);
+  });
+  await page.evaluate(() => {
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('focus'));
+  });
+  await expect.poll(() => requests.filter(path => path === '/api/auth/access/sales').length).toBe(1);
+  expect(requests.filter(path => path === '/api/auth/me')).toHaveLength(1);
+  expect(requests.filter(path => path === '/api/auth/access/sales')).toHaveLength(1);
+});
+
+test('Compras, Caja y Reportes validan una vez y cargan solo los datos necesarios', async ({ page }) => {
+  await open(page); await login(page);
+  const requests = [];
+  page.on('request', request => {
+    if (request.url().startsWith(apiBase)) requests.push(new URL(request.url()).pathname);
+  });
+  const navigateAndCapture = async (button, view, waitForStatus) => {
+    const start = requests.length;
+    await page.locator('#' + button).click(); await expect(page.locator('#' + view)).toBeVisible();
+    if (waitForStatus) await expect(page.locator('#' + waitForStatus)).toBeHidden();
+    return requests.slice(start);
+  };
+  const purchases = await navigateAndCapture('navPurchasesBtn', 'purchasesView');
+  expect(purchases.filter(path => path === '/api/auth/me')).toHaveLength(1);
+  expect(purchases.filter(path => ['/api/purchases/suppliers', '/api/purchases/products', '/api/purchases'].includes(path))).toHaveLength(3);
+  const cash = await navigateAndCapture('navCajaBtn', 'cajaView');
+  expect(cash.filter(path => path === '/api/auth/me')).toHaveLength(1);
+  expect(cash.filter(path => ['/api/cash/sessions', '/api/cash/overview'].includes(path))).toHaveLength(2);
+  expect(cash).not.toContain('/api/business-settings/sales-flow');
+  expect(cash).not.toContain('/api/sales/next-invoice');
+  const reports = await navigateAndCapture('navReportesBtn', 'reportesView', 'connectedReportStatus');
+  expect(reports.filter(path => path === '/api/auth/me')).toHaveLength(1);
+  expect(reports.filter(path => path === '/api/reports/connected')).toHaveLength(1);
+  const dashboard = await navigateAndCapture('navDashboardBtn', 'dashboardView', 'dashboardStatus');
+  expect(dashboard.filter(path => path === '/api/auth/me')).toHaveLength(1);
+  expect(dashboard.filter(path => path === '/api/reports/connected')).toHaveLength(1);
+});
