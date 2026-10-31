@@ -66,7 +66,18 @@ function authRoutes({ repo, auth, users, config }) {
   router.delete('/auth/authorizations/:module', async (req, res) => { v.body(req.body, []); await auth.leave(req.auth, v.moduleName(req.params.module)); res.status(204).end(); });
   router.post('/auth/modules/:module/enter', async (req, res) => {
     v.body(req.body, []); const result = await auth.enter(req.auth, v.moduleName(req.params.module));
-    if (!result.allowed) throw httpError(403, 'MODULE_FORBIDDEN'); res.json(result);
+    if (!result.allowed) throw httpError(403, 'MODULE_FORBIDDEN');
+    const current = result.current;
+    const owner = current.support?.actor || current;
+    const support = current.support ? {
+      businessId: String(current.business_id), businessName: current.business_name,
+      expiresAt: new Date(current.support.expiresAt).toISOString(), user: publicUser(current)
+    } : undefined;
+    res.json({
+      module: result.module, allowed: true, user: publicUser(owner),
+      ...(support ? { support } : {}), expiresAt: owner.expires_at,
+      csrfToken: sessionCsrf(config.secret, owner.token_hash)
+    });
   });
   router.post('/users', m.admin, async (req, res) => {
     const data = v.body(req.body, ['username', 'fullName', 'password', 'role']);

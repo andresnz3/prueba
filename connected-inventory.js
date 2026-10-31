@@ -4,9 +4,10 @@
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
   el('productForm').noValidate = true; el('ajusteInventarioForm').noValidate = true;
-  let rows = [], editing = null, busy = false, uncertain = false;
+  let rows = [], editing = null, busy = false, uncertain = false, loadFlights = new Map();
   let photoFile = null, photoPreview = null, photoError = null, uploadedPhoto = null;
   const imageInput = el('prodImageInput');
+  const loadScopeKey = () => { const current = window.PosRuntime.salesInput(); return encodeURIComponent(window.POS_API_BASE_URL) + '|' + current.businessId + '|' + current.userId; };
   imageInput.accept = 'image/jpeg,image/png,image/webp';
   function resetPhoto() {
     if (photoPreview) URL.revokeObjectURL(photoPreview);
@@ -73,11 +74,23 @@
     if (index < 0) rows.push(product); else rows[index] = product;
     window.PosRuntime.setProducts(rows);
   }
-  async function load(view) {
-    if (!['inventoryView', 'salesView'].includes(view)) { closePanels(); return; }
+  async function loadOnce(view, currentScope) {
     const result = await window.PosConnected.inventoryOperation((api, business) => all(offset => api.products(view === 'salesView', offset), business));
+    if (currentScope !== loadScopeKey()) return;
     rows = result; window.PosRuntime.setProducts(rows);
     if (view !== 'inventoryView') closePanels();
+  }
+  async function load(view, { refresh = false } = {}) {
+    if (!['inventoryView', 'salesView'].includes(view)) { closePanels(); return; }
+    const currentScope = loadScopeKey(), key = view + '|' + currentScope;
+    const active = loadFlights.get(key);
+    if (active) { if (refresh) active.dirty = true; return active.promise; }
+    const flight = { dirty: false, promise: null };
+    flight.promise = (async () => {
+      do { flight.dirty = false; await loadOnce(view, currentScope); } while (flight.dirty && currentScope === loadScopeKey());
+    })().finally(() => { if (loadFlights.get(key) === flight) loadFlights.delete(key); });
+    loadFlights.set(key, flight);
+    return flight.promise;
   }
   async function fail(failure) {
     if (failure.code === 'STALE_REQUEST') return;
@@ -102,7 +115,7 @@
     try { await operation(); } catch (failure) { await fail(failure); }
     finally { busy = false; buttons.forEach(button => { button.disabled = false; }); }
   }
-  async function refresh() { return run(async () => { await load('inventoryView'); uncertain = false; closePanels(); }); }
+  async function refresh() { return run(async () => { await load('inventoryView', { refresh: true }); uncertain = false; closePanels(); }); }
   el('refreshInventoryBtn').addEventListener('click', refresh);
   el('addNewProductBtn').addEventListener('click', () => { resetPhoto(); editing = null; });
   async function detail(id) {

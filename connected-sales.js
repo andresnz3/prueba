@@ -4,7 +4,7 @@
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
   const financialKinds = ['PURCHASE', 'EDIT_PURCHASE', 'CANCEL_PURCHASE', 'EXPENSE', 'CANCEL_EXPENSE', 'SUPPLIER_PAYMENT', 'CUSTOMER_PAYMENT_VOID', 'SUPPLIER_PAYMENT_VOID', 'CASH_MANUAL'];
-  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, displayedCashSessions = [], salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0;
+  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, displayedCashSessions = [], salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0, historyLoadFlight = null, historyLoadDirty = false;
   const state = () => window.PosRuntime.salesInput();
   const scope = () => { const s = state(); return 'posOperation_' + encodeURIComponent(window.POS_API_BASE_URL) + '_' + s.businessId + '_' + s.userId; };
   function pending() {
@@ -66,13 +66,15 @@
       const node = el(id); if (node) node.textContent = 'Cargando…';
     }
   }
-  async function refreshHistorySummary(sales = historySales) {
+  async function refreshHistorySummary(sales = historySales, reportRequest = null) {
     const request = ++historySummaryRequest;
     const range = window.PosPeriodFilters?.range('history') || { from: '', until: '' };
     if (range.error) { setHistoryStatus(range.error); return; }
     setHistoryStatus('Actualizando indicadores conectados…');
     try {
-      const report = await api(client => client.connectedReport(historyBound(range.from), historyBound(range.until, true)));
+      const summaryResult = await (reportRequest || api(client => client.connectedReport(historyBound(range.from), historyBound(range.until, true))));
+      if (summaryResult?.failure) throw summaryResult.failure;
+      const report = summaryResult?.report || summaryResult;
       if (request !== historySummaryRequest) return;
       const now = new Date();
       const todayTotal = sales.reduce((sum, sale) => {
@@ -103,7 +105,10 @@
       if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
     }
   }
-  async function loadHistory() {
+  async function loadHistoryOnce() {
+    const range = window.PosPeriodFilters?.range('history') || { from: '', until: '' };
+    const reportRequest = range.error ? null : api(client => client.connectedReport(historyBound(range.from), historyBound(range.until, true)))
+      .then(report => ({ report }), failure => ({ failure }));
     const [salesPage, historicalOrders] = await Promise.all([pages('sales'), api(client => client.historicalOrders())]);
     const rows = salesPage.map(mappedSale).reverse();
     historySales = rows;
@@ -124,7 +129,16 @@
         }
       }
     }
-    await refreshHistorySummary(rows);
+    await refreshHistorySummary(rows, reportRequest);
+  }
+  async function loadHistory({ refresh = false } = {}) {
+    if (historyLoadFlight) { if (refresh) historyLoadDirty = true; return historyLoadFlight; }
+    const flight = (async () => {
+      do { historyLoadDirty = false; await loadHistoryOnce(); } while (historyLoadDirty);
+    })();
+    historyLoadFlight = flight;
+    try { return await flight; }
+    finally { if (historyLoadFlight === flight) historyLoadFlight = null; }
   }
   async function refreshNextInvoiceNumber() {
     nextInvoiceNumber = await api(client => client.nextInvoiceNumber());
@@ -196,7 +210,7 @@
           : 'Venta anulada. Stock repuesto. La devolución por tarjeta o transferencia debe realizarse fuera del POS por el mismo medio.';
         showAlert(notice);
       }
-      try { await window.PosInventory.load('salesView'); } catch (error) { if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else showAlert('La operación está confirmada. No se pudo actualizar el catálogo; vuelve a Ventas para consultarlo.'); }
+    try { await window.PosInventory.load('salesView', { refresh: true }); } catch (error) { if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else showAlert('La operación está confirmada. No se pudo actualizar el catálogo; vuelve a Ventas para consultarlo.'); }
     }
     if (result.kind === 'ABANDONED') showAlert('La operación no estaba registrada y quedó descartada en el servidor. Puedes preparar el cobro nuevamente.');
     if (result.order && !result.sale) {
@@ -561,7 +575,7 @@
     if (event.detail?.id === 'history' && !el('historyView').classList.contains('hidden')) refreshHistorySummary();
   });
   document.addEventListener('connected:report-data-changed', () => {
-    if (!el('historyView').classList.contains('hidden')) loadHistory().catch(error => setHistoryStatus(window.PosMessages.fromError(error, 'No se pudo actualizar el historial. Inténtalo de nuevo.')));
+    if (!el('historyView').classList.contains('hidden')) loadHistory({ refresh: true }).catch(error => setHistoryStatus(window.PosMessages.fromError(error, 'No se pudo actualizar el historial. Inténtalo de nuevo.')));
   });
   const auditTable = el('auditTableBody').closest('.history-table-container'); auditTable.previousElementSibling.classList.add('hidden'); auditTable.classList.add('hidden');
   const hideAuditTableTools = () => { const toolbar = auditTable.previousElementSibling; if (toolbar?.classList.contains('data-table-toolbar')) toolbar.classList.add('hidden'); };

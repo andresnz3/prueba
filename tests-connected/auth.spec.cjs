@@ -113,19 +113,15 @@ test('modo local nuevo exige licencia antes del propietario y cambiar a conectad
   expect(requests.map(url => new URL(url).pathname)).toEqual(['/api/auth/me']);
 });
 
-test('respuesta tardia no reabre una sesion vencida', async ({ page }) => {
+test('sesion que vence durante la entrada al modulo vuelve al login', async ({ page, context }) => {
   await open(page); await login(page);
-  await page.route(apiBase + '/auth/me', async route => {
-    const response = await route.fetch(); const data = await response.json();
-    data.expiresAt = new Date(Date.now() + 150).toISOString();
-    await route.fulfill({ response, json: data });
-  });
   await page.route(apiBase + '/auth/modules/inventory/enter', async route => {
-    await new Promise(resolve => setTimeout(resolve, 500)); await route.continue();
+    await new Promise(resolve => setTimeout(resolve, 150));
+    await expireDatabaseSession(context);
+    await route.continue();
   });
   await page.locator('#navInventoryBtn').click();
   await expect(page.locator('#loginScreen')).toBeVisible();
-  await page.waitForTimeout(700);
   await expect(page.locator('#inventoryView')).toBeHidden(); await expect(page.locator('#app')).toBeHidden();
 });
 test('login conectado usable en pantalla movil', async ({ page }) => {
@@ -135,9 +131,10 @@ test('login conectado usable en pantalla movil', async ({ page }) => {
   await page.screenshot({ path: test.info().outputPath('login-mobile.png'), fullPage: true });
 });
 
-test('medición de navegación a Ventas y verificaciones de sesión', async ({ page }) => {
+test('mide navegación conectada y recibe sesión autorizada junto con la entrada al módulo', async ({ page }) => {
   await open(page); await login(page);
   await page.locator('#navInventoryBtn').click(); await expect(page.locator('#inventoryView')).toBeVisible();
+  await page.waitForTimeout(350);
   const requests = [];
   page.on('request', request => {
     if (!request.url().startsWith(apiBase)) return;
@@ -148,18 +145,97 @@ test('medición de navegación a Ventas y verificaciones de sesión', async ({ p
   await expect(page.locator('#salesView')).toBeVisible();
   const elapsedMs = Date.now() - startedAt;
   const sessionChecks = requests.filter(request => request.path === '/api/auth/me');
+  const moduleEntries = requests.filter(request => request.path === '/api/auth/modules/sales/enter');
   const dataPaths = requests.filter(request => ['/api/catalog/products', '/api/business-settings/sales-flow', '/api/sales/next-invoice', '/api/sales/clients'].includes(request.path));
   const dataStartSpanMs = dataPaths.length ? Math.max(...dataPaths.map(request => request.startedAt)) - Math.min(...dataPaths.map(request => request.startedAt)) : null;
-  console.log('NAV_SALES_METRIC ' + JSON.stringify({ elapsedMs, sessionChecks: sessionChecks.length, dataRequests: dataPaths.length, dataStartSpanMs }));
-  expect(sessionChecks).toHaveLength(1);
+  console.log('NAV_SALES_METRIC ' + JSON.stringify({ elapsedMs, sessionChecks: sessionChecks.length, moduleEntries: moduleEntries.length, dataRequests: dataPaths.length, dataStartSpanMs }));
+  expect(sessionChecks).toHaveLength(0);
+  expect(moduleEntries).toHaveLength(1);
   expect(dataPaths).toHaveLength(4);
 });
 
-test('una identidad de otro negocio recibida durante la verificación obliga a iniciar sesión nuevamente', async ({ page }) => {
+test('clics repetidos durante una navegación no duplican autorización ni cargas', async ({ page }) => {
   await open(page); await login(page);
-  await page.route(apiBase + '/auth/me', async route => {
+  const requests = [];
+  page.on('request', request => { if (request.url().startsWith(apiBase)) requests.push(new URL(request.url()).pathname); });
+  await page.route(apiBase + '/auth/modules/inventory/enter', async route => {
+    await new Promise(resolve => setTimeout(resolve, 250)); await route.continue();
+  });
+  await page.locator('#navInventoryBtn').click();
+  await page.evaluate(() => document.getElementById('navInventoryBtn').click());
+  await expect(page.locator('#inventoryView')).toBeVisible();
+  expect(requests.filter(path => path === '/api/auth/modules/inventory/enter')).toHaveLength(1);
+  expect(requests.filter(path => path === '/api/products')).toHaveLength(1);
+});
+
+test('cargas simultáneas de Inventario comparten la misma lectura del catálogo', async ({ page }) => {
+  await open(page); await login(page);
+  const productRequests = [];
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/products') productRequests.push(request); });
+  await page.route(apiBase + '/products**', async route => {
+    await new Promise(resolve => setTimeout(resolve, 250)); await route.continue();
+  });
+  await page.evaluate(() => Promise.all([window.PosInventory.load('inventoryView'), window.PosInventory.load('inventoryView')]));
+  expect(productRequests).toHaveLength(1);
+});
+
+test('la navegación muestra estado accesible sin mostrar el módulo destino antes de autorizarlo', async ({ page }) => {
+  await open(page); await login(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route(apiBase + '/auth/modules/inventory/enter', async route => {
+    await new Promise(resolve => setTimeout(resolve, 250)); await route.continue();
+  });
+  await page.locator('#navInventoryBtn').click();
+  await expect(page.locator('#connectedNavigationStatus')).toContainText('Cargando Inventario');
+  await expect(page.locator('#connectedNavigationStatus')).toHaveAttribute('role', 'status');
+  await expect(page.locator('#app')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#inventoryView')).toBeHidden();
+  const statusBounds = await page.locator('#connectedNavigationStatus').boundingBox();
+  expect(statusBounds.x).toBeGreaterThanOrEqual(0);
+  expect(statusBounds.x + statusBounds.width).toBeLessThanOrEqual(390);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.locator('#inventoryView')).toBeVisible();
+  await expect(page.locator('#connectedNavigationStatus')).toBeHidden();
+});
+
+test('cargas simultáneas de Reportes comparten la misma solicitud sin cachear datos', async ({ page }) => {
+  await open(page); await login(page); await page.locator('#navReportesBtn').click();
+  await expect(page.locator('#reportesView')).toBeVisible(); await expect(page.locator('#connectedReportStatus')).toBeHidden();
+  const reportRequests = [];
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/reports/connected') reportRequests.push(request); });
+  await page.route(apiBase + '/reports/connected**', async route => {
+    await new Promise(resolve => setTimeout(resolve, 250)); await route.continue();
+  });
+  await page.evaluate(() => Promise.all([window.PosReports.load(), window.PosReports.load()]));
+  expect(reportRequests).toHaveLength(1);
+});
+
+test('Historial carga ventas, órdenes y resumen en paralelo y una sola vez', async ({ page }) => {
+  await open(page); await login(page);
+  const requests = [];
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname;
+    if (['/api/sales', '/api/sales/orders/history', '/api/reports/connected'].includes(path)) requests.push({ path, startedAt: Date.now() });
+  });
+  await page.locator('#navHistoryBtn').click(); await expect(page.locator('#historyView')).toBeVisible();
+  await expect(page.locator('#connectedHistoryStatus')).toBeHidden();
+  const required = ['/api/sales', '/api/sales/orders/history', '/api/reports/connected'];
+  for (const path of required) expect(requests.filter(request => request.path === path)).toHaveLength(1);
+  const starts = requests.map(request => request.startedAt);
+  expect(Math.max(...starts) - Math.min(...starts)).toBeLessThanOrEqual(100);
+  requests.length = 0;
+  await Promise.all([
+    page.evaluate(() => window.PosSales.load('historyView')),
+    page.evaluate(() => window.PosSales.load('historyView'))
+  ]);
+  for (const path of required) expect(requests.filter(request => request.path === path)).toHaveLength(1);
+});
+
+test('una identidad de otro negocio recibida al entrar al módulo obliga a iniciar sesión nuevamente', async ({ page }) => {
+  await open(page); await login(page);
+  await page.route(apiBase + '/auth/modules/inventory/enter', async route => {
     const response = await route.fetch(); const value = await response.json();
-    value.user.businessId = businessB; value.user.username = 'otheradmin';
+    if (value.allowed === true) { value.user.businessId = businessB; value.user.username = 'otheradmin'; }
     await route.fulfill({ response, json: value });
   });
   await page.locator('#navInventoryBtn').click();
@@ -182,8 +258,9 @@ test('el backend vuelve a validar la sesión en lecturas después de la verifica
   await expect(page.locator('#inventoryView')).toBeHidden();
 });
 
-test('foco y visibilidad simultáneos comparten una sola comprobación de acceso', async ({ page }) => {
+test('eventos consecutivos de foco y visibilidad se agrupan en una sola comprobación', async ({ page }) => {
   await open(page); await login(page);
+  await page.waitForTimeout(2100);
   const requests = [];
   page.on('request', request => {
     if (!request.url().startsWith(apiBase)) return;
@@ -192,7 +269,9 @@ test('foco y visibilidad simultáneos comparten una sola comprobación de acceso
   });
   await page.evaluate(() => {
     document.dispatchEvent(new Event('visibilitychange'));
+    setTimeout(() => document.dispatchEvent(new Event('visibilitychange')), 70);
     window.dispatchEvent(new Event('focus'));
+    setTimeout(() => window.dispatchEvent(new Event('focus')), 120);
   });
   await expect.poll(() => requests.filter(path => path === '/api/auth/access/sales').length).toBe(1);
   expect(requests.filter(path => path === '/api/auth/me')).toHaveLength(1);
@@ -212,17 +291,21 @@ test('Compras, Caja y Reportes validan una vez y cargan solo los datos necesario
     return requests.slice(start);
   };
   const purchases = await navigateAndCapture('navPurchasesBtn', 'purchasesView');
-  expect(purchases.filter(path => path === '/api/auth/me')).toHaveLength(1);
+  expect(purchases.filter(path => path === '/api/auth/me')).toHaveLength(0);
+  expect(purchases.filter(path => path === '/api/auth/modules/purchases/enter')).toHaveLength(1);
   expect(purchases.filter(path => ['/api/purchases/suppliers', '/api/purchases/products', '/api/purchases'].includes(path))).toHaveLength(3);
   const cash = await navigateAndCapture('navCajaBtn', 'cajaView');
-  expect(cash.filter(path => path === '/api/auth/me')).toHaveLength(1);
+  expect(cash.filter(path => path === '/api/auth/me')).toHaveLength(0);
+  expect(cash.filter(path => path === '/api/auth/modules/cash/enter')).toHaveLength(1);
   expect(cash.filter(path => ['/api/cash/sessions', '/api/cash/overview'].includes(path))).toHaveLength(2);
   expect(cash).not.toContain('/api/business-settings/sales-flow');
   expect(cash).not.toContain('/api/sales/next-invoice');
   const reports = await navigateAndCapture('navReportesBtn', 'reportesView', 'connectedReportStatus');
-  expect(reports.filter(path => path === '/api/auth/me')).toHaveLength(1);
+  expect(reports.filter(path => path === '/api/auth/me')).toHaveLength(0);
+  expect(reports.filter(path => path === '/api/auth/modules/reports/enter')).toHaveLength(1);
   expect(reports.filter(path => path === '/api/reports/connected')).toHaveLength(1);
   const dashboard = await navigateAndCapture('navDashboardBtn', 'dashboardView', 'dashboardStatus');
-  expect(dashboard.filter(path => path === '/api/auth/me')).toHaveLength(1);
+  expect(dashboard.filter(path => path === '/api/auth/me')).toHaveLength(0);
+  expect(dashboard.filter(path => path === '/api/auth/modules/reports/enter')).toHaveLength(1);
   expect(dashboard.filter(path => path === '/api/reports/connected')).toHaveLength(1);
 });

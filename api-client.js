@@ -484,7 +484,14 @@
     }
     async logout() { await this.#write('/auth/logout', 'POST', {}); this.#csrf = null; this.#ownerIdentity = null; this.#support = null; }
     async renew() { return this.#acceptSession(session(await this.#write('/auth/renew', 'POST', {}))); }
-    async enter(module) { const value = await this.#write('/auth/modules/' + encodeURIComponent(module) + '/enter', 'POST', {}); if (value?.module !== module || value.allowed !== true) throw new ApiError('INVALID_RESPONSE'); return value; }
+    async enter(module) {
+      const value = await this.#write('/auth/modules/' + encodeURIComponent(module) + '/enter', 'POST', {});
+      if (value?.module !== module || value.allowed !== true) throw new ApiError('INVALID_RESPONSE');
+      const current = session(value);
+      if (this.#ownerIdentity && (this.#ownerIdentity.id !== current.user.id || this.#ownerIdentity.businessId !== current.user.businessId)) throw new ApiError('INVALID_SESSION', 401);
+      this.#acceptSession(current);
+      return { ...current, module, allowed: true };
+    }
     async access(module) { const value = await this.#request('/auth/access/' + encodeURIComponent(module)); if (value?.module !== module || value.allowed !== true) throw new ApiError('INVALID_RESPONSE'); return value; }
     async authorize(module, adminUsername, adminPassword) {
       const value = await this.#write('/auth/authorizations', 'POST', { module, adminUsername, adminPassword });

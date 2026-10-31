@@ -14,8 +14,8 @@
   const api = new window.PosApiClient(window.POS_API_BASE_URL);
   const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'reports', configView: 'settings' };
   let identity = null, ownerBusinessId = null, supportContext = null, activeView = null, grant = null, pendingView = null;
-  let generation = 0;
-  let verificationFlight = null, accessCheckFlight = null, verifiedLoadScope = null;
+  let generation = 0, lastSessionVerifiedAt = 0, lastAutomaticAccessCheckAt = 0;
+  let verificationFlight = null, accessCheckFlight = null, verifiedLoadScope = null, automaticCheckTimer = null;
   let systemAdminReady = false, systemAdminBusinesses = [], systemAdminUsers = [], systemAdminUserCapacity = null, systemAdminBilling = null, systemAdminLicenses = [], systemAdminActiveLocalBusinesses = null, systemAdminSelectedBusinessId = '', systemAdminMigrationTargetId = '', systemAdminTab = 'businesses';
   let systemAdminDeleteBusiness = null, systemAdminDeleteTrigger = null, systemAdminDeletePreview = null, systemAdminDeletePreviewToken = 0, systemAdminPaymentBusiness = null, systemAdminPaymentTrigger = null;
   const assertGeneration = value => { if (generation !== value) throw new window.PosApiError('STALE_REQUEST'); };
@@ -43,7 +43,7 @@
   function canView(view) { return Boolean(identity && (view === 'salesView' || view === 'configView' || (view === 'systemAdminView' && canAccessSystemAdmin()) || identity.role === 'ADMIN' || (grant?.view === view && grant.until > Date.now()))); }
   function expire(text = 'La sesión venció o fue revocada. Inicia sesión nuevamente.') {
     generation++; identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminDeletePreview = null; systemAdminDeletePreviewToken++; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminUserCapacity = null; systemAdminBilling = null; systemAdminLicenses = []; systemAdminSelectedBusinessId = ''; systemAdminMigrationTargetId = ''; clearIssuedLocalLicense(); window.PosMigrationPreview.reset(); window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
-    clearTimeout(expiryTimer); clearTimeout(grantTimer); clearPasswords();
+    clearTimeout(expiryTimer); clearTimeout(grantTimer); clearTimeout(automaticCheckTimer); automaticCheckTimer = null; lastSessionVerifiedAt = 0; lastAutomaticAccessCheckAt = 0; clearPasswords(); clearNavigationStatus();
     document.querySelectorAll('.modal, .view-panel').forEach(node => node.classList.add('hidden'));
     el('app').classList.add('hidden'); el('app').inert = false; el('loginScreen').classList.remove('hidden');
     el('navUsersBtn').classList.add('hidden'); el('renewSessionBtn').classList.add('hidden');
@@ -61,6 +61,26 @@
   function scheduleExpiry(value) {
     clearTimeout(expiryTimer);
     expiryTimer = setTimeout(() => expire(), Math.max(0, Date.parse(value.expiresAt) - Date.now()));
+  }
+  function setNavigationStatus(view) {
+    const labels = { salesView: 'Ventas', inventoryView: 'Inventario', purchasesView: 'Compras', payablesView: 'Cuentas por pagar', clientsView: 'Clientes y créditos', suppliersView: 'Proveedores', historyView: 'Historial', cajaView: 'Caja', gastosView: 'Gastos', reportesView: 'Reportes', dashboardView: 'Dashboard', configView: 'Configuración', usersView: 'Usuarios' };
+    const status = el('connectedNavigationStatus');
+    status.textContent = 'Cargando ' + (labels[view] || 'el módulo') + '…';
+    status.classList.remove('hidden');
+  }
+  function clearNavigationStatus() {
+    const status = el('connectedNavigationStatus');
+    status.textContent = '';
+    status.classList.add('hidden');
+  }
+  function acceptVerifiedSession(value, version) {
+    assertGeneration(version);
+    if (!identity || value.user.businessId !== ownerBusinessId || value.user.id !== identity.id) throw new window.PosApiError('INVALID_SESSION', 401);
+    identity = value.user; window.PosRuntime.setUser(identity); syncSupportBanner(value.support);
+    el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN');
+    if (!syncSystemAdminAccess() && activeView === 'systemAdminView') { activeView = 'salesView'; renderPosView(activeView); }
+    scheduleExpiry(value); lastSessionVerifiedAt = Date.now();
+    return value;
   }
   async function establish(value) {
     const version = ++generation;
@@ -85,7 +105,7 @@
     el('businessContext').classList.remove('hidden');
     el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN'); syncSystemAdminAccess(); el('renewSessionBtn').classList.remove('hidden');
     el('loginError').classList.add('hidden');
-    grant = null; await api.enter('sales'); assertGeneration(version);
+    grant = null; acceptVerifiedSession(await api.enter('sales'), version);
     await withVerifiedLoadScope(version, () => Promise.all([window.PosInventory.load('salesView'), window.PosSales.load('salesView')]));
     assertGeneration(version); activeView = 'salesView'; renderPosView(activeView); actualizarCatalogo();
     el('loginScreen').classList.add('hidden'); el('app').classList.remove('hidden');
@@ -96,13 +116,7 @@
     const flight = { generation: version, promise: null };
     flight.promise = (async () => {
       try {
-        const value = await api.me(); assertGeneration(version);
-        if (!identity || value.user.businessId !== ownerBusinessId || value.user.id !== identity.id) throw new window.PosApiError('INVALID_SESSION', 401);
-        identity = value.user; window.PosRuntime.setUser(identity); syncSupportBanner(value.support);
-        el('navUsersBtn').classList.toggle('hidden', identity.role !== 'ADMIN');
-        if (!syncSystemAdminAccess() && activeView === 'systemAdminView') { activeView = 'salesView'; renderPosView(activeView); }
-        scheduleExpiry(value);
-        return value;
+        return acceptVerifiedSession(await api.me(), version);
       } finally {
         if (verificationFlight === flight) verificationFlight = null;
       }
@@ -669,17 +683,21 @@
     if (view === 'systemAdminView') { await openSystemAdmin(); return; }
     if (!views[view] && view !== 'usersView') return;
     busy = true; el('app').inert = true;
+    el('app').setAttribute('aria-busy', 'true'); setNavigationStatus(view);
     const previous = activeView; const version = generation;
     try {
-      await verify();
-      if (previous && previous !== view && grant) { await api.leave(views[previous]); grant = null; clearTimeout(grantTimer); }
       if (view === 'usersView') {
         // /users autoriza en el servidor; un cambio visual de rol nunca habilita esta ruta.
+        await verify();
+        if (previous && previous !== view && grant) { await api.leave(views[previous]); grant = null; clearTimeout(grantTimer); }
         userPage = 0; const result = await api.users(); assertGeneration(version);
         if (identity.role !== 'ADMIN') throw new window.PosApiError('ADMIN_REQUIRED', 403);
         activeView = view; renderPosView(view); renderUsers(result.users); renderUserCapacity(result.capacity); return;
       }
-      await api.enter(views[view]); assertGeneration(version);
+      // El servidor valida sesión, negocio y permiso dentro de /enter y devuelve
+      // el contexto ya verificado. No se hace un /auth/me serial antes de entrar.
+      if (previous && previous !== view && grant) { grant = null; clearTimeout(grantTimer); }
+      acceptVerifiedSession(await api.enter(views[view]), version);
       await withVerifiedLoadScope(version, async () => {
         await Promise.all([window.PosInventory.load(view), window.PosSales.load(view), window.PosPurchases.load(view), window.PosExpenses.load(view)]);
         assertGeneration(version);
@@ -691,15 +709,23 @@
     } catch (failure) {
       if (failure.code === 'STALE_REQUEST') return;
       grant = null; clearTimeout(grantTimer);
-      if (failure.code === 'MODULE_FORBIDDEN' && identity?.role === 'VENDEDOR') {
-        activeView = 'salesView'; renderPosView(activeView); pendingView = view;
-        el('authError').classList.add('hidden'); el('authModal').classList.remove('hidden'); el('grantAdminUsername').focus();
+      if (failure.code === 'MODULE_FORBIDDEN') {
+        // Un rechazo puede deberse a un cambio reciente de rol. Actualiza la
+        // identidad antes de decidir si corresponde pedir autorización temporal.
+        try { await verify(); assertGeneration(version); }
+        catch (refreshFailure) { if (refreshFailure.code !== 'STALE_REQUEST') error(refreshFailure); return; }
+        if (identity?.role === 'VENDEDOR') {
+          activeView = 'salesView'; renderPosView(activeView); pendingView = view;
+          el('authError').classList.add('hidden'); el('authModal').classList.remove('hidden'); el('grantAdminUsername').focus();
+        } else error(failure);
       } else {
         // Conserva la vista actual si una carga falla; esconder todos los paneles
         // deja el POS en blanco y bloquea la navegación a otros módulos.
         error(failure);
       }
-    } finally { busy = false; el('app').inert = false; }
+    } finally {
+      busy = false; el('app').inert = false; el('app').removeAttribute('aria-busy'); clearNavigationStatus();
+    }
   }
   async function login() {
     if (busy) return; if (!window.PosValidation.validate(el('loginForm'))) return; busy = true; const button = el('loginForm').querySelector('button[type=submit]'); button.disabled = true;
@@ -732,7 +758,7 @@
     const view = pendingView; const version = generation; busy = true; const button = el('authForm').querySelector('button[type=submit]'); button.disabled = true;
     try {
       const value = await api.authorize(views[view], el('grantAdminUsername').value.trim(), el('gestorPassword').value);
-      await api.enter(views[view]); assertGeneration(version);
+      acceptVerifiedSession(await api.enter(views[view]), version);
       await withVerifiedLoadScope(version, async () => {
         await Promise.all([window.PosInventory.load(view), window.PosSales.load(view), window.PosPurchases.load(view), window.PosExpenses.load(view)]);
         assertGeneration(version);
@@ -1031,10 +1057,20 @@
     try { await establish(await api.renew()); clearTimeout(grantTimer); message('connectedNotice', 'Sesión renovada. Los permisos temporales deben solicitarse nuevamente.'); }
     catch (failure) { error(failure); } finally { busy = false; }
   });
+  const automaticCheckDebounceMs = 180, automaticCheckCooldownMs = 1000, sessionFreshnessWindowMs = 2000;
   const checkOnce = async () => {
     if (!identity || busy || document.hidden) return;
     const version = generation;
-    try { await verify(); if (generation !== version) throw new window.PosApiError('STALE_REQUEST'); if (busy || document.hidden) return; if (activeView && views[activeView]) await api.access(views[activeView]); if (busy || document.hidden) return; if (activeView === 'usersView') await api.users(); if (activeView === 'systemAdminView') await api.adminBusinesses(); }
+    try {
+      if (Date.now() - lastSessionVerifiedAt >= sessionFreshnessWindowMs || ['usersView', 'systemAdminView'].includes(activeView)) await verify();
+      if (generation !== version) throw new window.PosApiError('STALE_REQUEST');
+      if (busy || document.hidden) return;
+      if (activeView && views[activeView]) await api.access(views[activeView]);
+      if (busy || document.hidden) return;
+      if (activeView === 'usersView') await api.users();
+      if (activeView === 'systemAdminView') await api.adminBusinesses();
+      lastAutomaticAccessCheckAt = Date.now();
+    }
     catch (failure) {
       if (failure.code === 'MODULE_FORBIDDEN') { grant = null; await navigate('salesView'); }
       else if (failure.code === 'NETWORK_ERROR') expire('No se pudo verificar la sesión. Vuelve a conectar e inicia sesión; no se habilita acceso local automáticamente.');
@@ -1043,12 +1079,19 @@
   };
   const check = () => {
     if (!identity || busy || document.hidden) return Promise.resolve();
+    clearTimeout(automaticCheckTimer);
     const version = generation;
-    if (accessCheckFlight?.generation === version) return accessCheckFlight.promise;
-    const flight = { generation: version, promise: null };
-    flight.promise = checkOnce().finally(() => { if (accessCheckFlight === flight) accessCheckFlight = null; });
-    accessCheckFlight = flight;
-    return flight.promise;
+    automaticCheckTimer = setTimeout(() => {
+      automaticCheckTimer = null;
+      if (!identity || busy || document.hidden || generation !== version || Date.now() - lastAutomaticAccessCheckAt < automaticCheckCooldownMs) return;
+      if (accessCheckFlight?.generation === version) return;
+      const flight = { generation: version, promise: null };
+      flight.promise = checkOnce().finally(() => {
+        if (accessCheckFlight === flight) accessCheckFlight = null;
+        if (generation === version && identity && !busy && !document.hidden) lastAutomaticAccessCheckAt = Date.now();
+      });
+      accessCheckFlight = flight;
+    }, automaticCheckDebounceMs);
   };
   setInterval(check, 15000); document.addEventListener('visibilitychange', check); window.addEventListener('focus', check);
   window.addEventListener('pagehide', () => {

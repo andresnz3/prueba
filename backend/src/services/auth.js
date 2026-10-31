@@ -73,7 +73,7 @@ function createAuthService(repo, config) {
     return repo.tenant(auth, async (db, current) => {
       // Se revoca el modulo anterior aunque el destino sea rechazado.
       await repo.rows(db, 'DELETE FROM session_authorizations WHERE business_id = ? AND session_id = ? AND module <> ?', [current.business_id, current.session_id, module]);
-      return { allowed: await canAccess(current, module, db), module };
+      return { allowed: await canAccess(current, module, db), module, current };
     });
   }
   return { login, logout, renew, canAccess, authorize, leave, enter };

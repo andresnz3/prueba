@@ -37,7 +37,7 @@
   const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', CONFIRMED: 'Confirmado', PENDING: 'Pendiente', VOID: 'Anulado', POSTED: 'Registrado' })[value] || 'Por revisar';
   const saleStatusLabel = row => row.isHistorical ? 'Histórica · ' + statusLabel(row.status) : statusLabel(row.status);
   const setText = (id, value) => { const node = el(id); if (node) node.textContent = value; };
-  let report = null, requestId = 0;
+  let report = null, requestId = 0, loadFlight = null, loadDirty = false;
   function businessIdentitySheet() {
     const identity = window.PosRuntime?.businessIdentity?.();
     if (!identity) return null;
@@ -168,7 +168,7 @@
     window.PosTables?.refreshDataTable(el('repCajaMovimientosBody'));
     window.PosTables?.refreshDataTable(el('repCajaBody'));
   }
-  async function load() {
+  async function loadOnce() {
     const current = ++requestId, status = el('connectedReportStatus');
     try {
       report = null;
@@ -187,6 +187,17 @@
       if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
       return false;
     }
+  }
+  async function load({ refresh = false } = {}) {
+    if (loadFlight) { if (refresh) loadDirty = true; return loadFlight; }
+    const flight = (async () => {
+      let result;
+      do { loadDirty = false; result = await loadOnce(); } while (loadDirty);
+      return result;
+    })();
+    loadFlight = flight;
+    try { return await flight; }
+    finally { if (loadFlight === flight) loadFlight = null; }
   }
   function exportExcel(scope = 'all') {
     if (!report) { window.showAlert?.('Espera a que termine de cargar el reporte conectado para exportar.'); return false; }
@@ -217,7 +228,7 @@
   }
   document.addEventListener('connected:report-data-changed', () => {
     report = null;
-    if (!el('reportesView')?.classList.contains('hidden')) load();
+    if (!el('reportesView')?.classList.contains('hidden')) load({ refresh: true });
   });
   const exportSalesButton = el('exportReportsSalesBtn');
   if (exportSalesButton) exportSalesButton.onclick = event => { event.preventDefault(); exportExcel('sales'); };

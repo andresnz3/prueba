@@ -18,7 +18,7 @@
   const movementLabel = value => ({ SALE: 'Venta', CUSTOMER_PAYMENT: 'Abono de cliente', REVERSAL: 'Devolución', MANUAL_ENTRY: 'Entrada manual', MANUAL_EXIT: 'Salida manual', EXPENSE: 'Gasto', SUPPLIER_PAYMENT: 'Pago a proveedor' })[value] || 'Movimiento por revisar';
   const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', CONFIRMED: 'Confirmado', PENDING: 'Pendiente', VOID: 'Anulado', POSTED: 'Registrado', PARTIAL: 'Parcial', PAID: 'Pagada', OPEN: 'Pendiente', OVERDUE: 'Vencida', PENDING_CONFIRMATION: 'Por confirmar' })[value] || 'Por revisar';
   const saleStatusLabel = row => row.isHistorical ? 'Histórica · ' + statusLabel(row.status) : statusLabel(row.status);
-  let currentData = null, requestId = 0;
+  let currentData = null, requestId = 0, loadFlight = null, loadDirty = false;
 
   function apiRange() {
     const range = window.PosDashboardPeriod?.range() || { from: '', until: '' };
@@ -104,7 +104,7 @@
     const note = el('connectedDashboardStatus');
     if (note && data.sales.historyLimited) note.textContent += ` Se muestran las ${data.sales.history.length} ventas más recientes; los indicadores incluyen el período completo.`;
   }
-  async function load() {
+  async function loadOnce() {
     const current = ++requestId, status = el('dashboardStatus');
     try {
       currentData = null;
@@ -121,6 +121,17 @@
       if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
       return false;
     }
+  }
+  async function load({ refresh = false } = {}) {
+    if (loadFlight) { if (refresh) loadDirty = true; return loadFlight; }
+    const flight = (async () => {
+      let result;
+      do { loadDirty = false; result = await loadOnce(); } while (loadDirty);
+      return result;
+    })();
+    loadFlight = flight;
+    try { return await flight; }
+    finally { if (loadFlight === flight) loadFlight = null; }
   }
   function exportSheets() {
     if (!currentData) return null;
@@ -173,11 +184,11 @@
   const exportButton = document.querySelector('.dashboard-heading button');
   if (exportButton) exportButton.onclick = event => { event.preventDefault(); exportExcel(); };
   document.addEventListener('dashboard:period-changed', () => {
-    if (!el('dashboardView')?.classList.contains('hidden')) load();
+    if (!el('dashboardView')?.classList.contains('hidden')) load({ refresh: true });
   });
   document.addEventListener('connected:report-data-changed', () => {
     currentData = null;
-    if (!el('dashboardView')?.classList.contains('hidden')) load();
+    if (!el('dashboardView')?.classList.contains('hidden')) load({ refresh: true });
   });
   window.PosDashboard = Object.freeze({ load, exportSheets, exportExcel });
 })();

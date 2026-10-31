@@ -231,6 +231,11 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
       assert.equal(deniedSupport.status, 403); assert.equal(deniedSupport.data.error.code, 'SYSTEM_ADMIN_REQUIRED');
       const startedSupport = await systemOwner.request('/admin/support-session', 'POST', { businessId });
       assert.equal(startedSupport.status, 200); assert.equal(startedSupport.data.support.businessId, businessId); assert.equal(startedSupport.data.support.user.username, 'branchadmin');
+      const supportEntry = await systemOwner.request('/auth/modules/inventory/enter', 'POST');
+      assert.equal(supportEntry.status, 200); assert.equal(supportEntry.data.allowed, true); assert.equal(supportEntry.data.module, 'inventory');
+      assert.equal(supportEntry.data.user.id, rootId); assert.equal(supportEntry.data.user.businessId, businessA);
+      assert.equal(supportEntry.data.support.businessId, businessId); assert.equal(supportEntry.data.support.user.username, 'branchadmin');
+      assert.match(supportEntry.data.csrfToken, /^[A-Za-z0-9_-]{43}$/); assert.equal(JSON.stringify(supportEntry.data).includes('token_hash'), false);
       const ownerDuringSupport = await systemOwner.request('/auth/me');
       assert.equal(ownerDuringSupport.status, 200); assert.equal(ownerDuringSupport.data.user.id, rootId); assert.equal(ownerDuringSupport.data.user.businessId, businessA);
       assert.equal(ownerDuringSupport.data.support.businessId, businessId); assert.equal(ownerDuringSupport.data.support.businessName, 'Panel temporary C');
@@ -305,7 +310,11 @@ test('Integracion MySQL de autenticacion y multiempresa', async t => {
   await t.test('revoca al abandonar modulo y al entrar en Ventas', async () => {
     assert.equal((await seller.request('/auth/authorizations/inventory', 'DELETE')).status, 204);
     assert.equal((await seller.request('/auth/access/inventory')).status, 403);
-    await grant(); assert.equal((await seller.request('/auth/modules/sales/enter', 'POST')).status, 200);
+    await grant();
+    const enteredSales = await seller.request('/auth/modules/sales/enter', 'POST');
+    assert.equal(enteredSales.status, 200); assert.equal(enteredSales.data.allowed, true); assert.equal(enteredSales.data.module, 'sales');
+    assert.equal(enteredSales.data.user.id, sellerId); assert.equal(enteredSales.data.user.businessId, businessA); assert.equal(enteredSales.data.user.role, 'VENDEDOR');
+    assert.match(enteredSales.data.csrfToken, /^[A-Za-z0-9_-]{43}$/); assert.equal(JSON.stringify(enteredSales.data).includes('token_hash'), false);
     assert.equal((await seller.request('/auth/access/inventory')).status, 403);
   });
   await t.test('cambiar modulo sustituye permiso y navegar a destino rechazado revoca anterior', async () => {
