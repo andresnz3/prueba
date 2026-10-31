@@ -33,6 +33,112 @@ test('ojito de contraseña funciona por teclado y permite el login conectado',as
   await login(page); await expect(page.locator('#salesView')).toBeVisible();
 });
 
+test('navigation shows the authorized module before delayed financial data finishes', async ({ page }) => {
+  await open(page); await login(page);
+  await page.locator('#navInventoryBtn').click(); await expect(page.locator('#inventoryView')).toBeVisible();
+  await expect(page.locator('#inventoryView .connected-module-loading')).toBeHidden({ timeout: 5000 });
+  await page.route(apiBase + '/sales/next-invoice**', async route => { await new Promise(resolve => setTimeout(resolve, 350)); await route.continue(); });
+  const requests = [], requestDetails = new WeakMap();
+  page.on('request', request => {
+    if (!request.url().startsWith(apiBase)) return;
+    const detail = { method: request.method(), path: new URL(request.url()).pathname, startedAt: Date.now() };
+    requests.push(detail); requestDetails.set(request, detail);
+  });
+  page.on('requestfinished', request => {
+    const detail = requestDetails.get(request);
+    if (detail) { detail.finishedAt = Date.now(); detail.durationMs = detail.finishedAt - detail.startedAt; }
+  });
+  await page.evaluate(() => {
+    const panel = document.getElementById('salesView'), button = document.getElementById('navSalesBtn');
+    const metric = { timeOrigin: performance.timeOrigin, clickAt: null, shellAt: null, completeAt: null };
+    const observe = () => {
+      if (metric.clickAt === null) return;
+      if (!panel.classList.contains('hidden') && metric.shellAt === null) metric.shellAt = performance.now();
+      if (metric.shellAt !== null && !panel.querySelector('.connected-module-loading') && metric.completeAt === null) metric.completeAt = performance.now();
+    };
+    button.addEventListener('click', () => { metric.clickAt = performance.now(); observe(); }, { capture: true, once: true });
+    const observer = new MutationObserver(observe); observer.observe(panel, { attributes: true, childList: true, subtree: true });
+    window.__posNavigationMetric = { metric, observer };
+  });
+  await page.locator('#navSalesBtn').click();
+  await expect(page.locator('#salesView')).toBeVisible();
+  const loading = page.locator('#salesView .connected-module-loading');
+  await expect(loading).toBeVisible();
+  await expect(page.locator('#salesView')).toHaveAttribute('aria-busy', 'true');
+  expect(await page.locator('#salesView > :not(.connected-module-loading)').first().evaluate(node => node.inert && node.getAttribute('aria-hidden') === 'true')).toBe(true);
+  await expect(loading).toBeHidden({ timeout: 5000 });
+  const browserMetric = await page.evaluate(() => { window.__posNavigationMetric.observer.disconnect(); return window.__posNavigationMetric.metric; });
+  const clickWallTime = browserMetric.timeOrigin + browserMetric.clickAt;
+  const visibleMs = browserMetric.shellAt - browserMetric.clickAt;
+  const fullyLoadedMs = browserMetric.completeAt - browserMetric.clickAt;
+  const sessionChecks = requests.filter(request => request.path === '/api/auth/me');
+  const entries = requests.filter(request => request.path === '/api/auth/modules/sales/enter');
+  const data = requests.filter(request => ['/api/catalog/products', '/api/business-settings/sales-flow', '/api/sales/next-invoice', '/api/sales/clients'].includes(request.path));
+  const dataStartSpanMs = Math.max(...data.map(request => request.startedAt)) - Math.min(...data.map(request => request.startedAt));
+  const authCompleteMs = entries[0]?.finishedAt ? entries[0].finishedAt - clickWallTime : null;
+  const lastDataCompleteMs = Math.max(...data.map(request => request.finishedAt - clickWallTime));
+  console.log('NAV_SALES_PROGRESS_METRIC ' + JSON.stringify({ visibleMs: Math.round(visibleMs), authorizationHttpMs: entries[0]?.durationMs ?? null, shellAfterAuthorizationMs: authCompleteMs === null ? null : Math.round(visibleMs - authCompleteMs), fullyLoadedMs: Math.round(fullyLoadedMs), dataResponseMs: data.map(({ path, durationMs }) => ({ path, durationMs })), renderAfterLastResponseMs: Math.round(fullyLoadedMs - lastDataCompleteMs), perceivedLeadMs: Math.round(fullyLoadedMs - visibleMs), sessionChecks: sessionChecks.length, moduleEntries: entries.length, dataRequests: data.length, dataStartSpanMs }));
+  expect(sessionChecks).toHaveLength(0); expect(entries).toHaveLength(1); expect(data).toHaveLength(4);
+  expect(fullyLoadedMs - visibleMs).toBeGreaterThanOrEqual(250); expect(dataStartSpanMs).toBeLessThan(100);
+});
+
+test('late inventory response cannot replace the module selected afterwards', async ({ page }) => {
+  await open(page); await login(page);
+  let releaseInventory; const inventoryGate = new Promise(resolve => { releaseInventory = resolve; });
+  let markStarted; const inventoryStarted = new Promise(resolve => { markStarted = resolve; });
+  await page.route(apiBase + '/products**', async route => { markStarted(); await inventoryGate; await route.continue(); });
+  await page.locator('#navInventoryBtn').click();
+  await expect(page.locator('#inventoryView .connected-module-loading')).toBeVisible(); await inventoryStarted;
+  await page.locator('#navCajaBtn').click();
+  await expect(page.locator('#cajaView .connected-module-loading')).toBeHidden({ timeout: 5000 });
+  releaseInventory();
+  await expect(page.locator('#inventoryView .connected-module-loading')).toHaveCount(0);
+  await expect(page.locator('#cajaView')).toBeVisible(); await expect(page.locator('#navCajaBtn')).toHaveClass(/active/);
+  await expect(page.locator('#inventoryView')).toBeHidden();
+});
+
+test('the latest module click wins while an earlier authorization is still pending', async ({ page }) => {
+  await open(page); await login(page);
+  let releaseInventory; const inventoryGate = new Promise(resolve => { releaseInventory = resolve; });
+  let markStarted; const inventoryStarted = new Promise(resolve => { markStarted = resolve; });
+  const entries = [];
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith('/api/auth/modules/') && path.endsWith('/enter')) entries.push(path);
+  });
+  await page.route(apiBase + '/auth/modules/inventory/enter', async route => { markStarted(); await inventoryGate; await route.continue(); });
+  await page.locator('#navInventoryBtn').click(); await inventoryStarted;
+  await expect(page.locator('#salesView')).toBeHidden();
+  await expect(page.locator('#connectedNavigationStatus')).toContainText('Cargando Inventario');
+  await page.locator('#navCajaBtn').click();
+  await expect(page.locator('#cajaView .connected-module-loading')).toBeHidden({ timeout: 5000 });
+  releaseInventory();
+  await expect(page.locator('#cajaView')).toBeVisible(); await expect(page.locator('#navCajaBtn')).toHaveClass(/active/);
+  await expect(page.locator('#inventoryView')).toBeHidden();
+  expect(entries).toContain('/api/auth/modules/inventory/enter');
+  expect(entries).toContain('/api/auth/modules/cash/enter');
+});
+
+test('failed module load offers a retry that authorizes again', async ({ page }) => {
+  await open(page); await login(page);
+  let productAttempts = 0, entries = 0;
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/auth/modules/inventory/enter') entries++; });
+  await page.route(apiBase + '/products**', async route => {
+    productAttempts++;
+    if (productAttempts === 1) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'DATABASE_BUSY' }) });
+    await route.continue();
+  });
+  await page.locator('#navInventoryBtn').click();
+  const loading = page.locator('#inventoryView .connected-module-loading');
+  await expect(loading).toHaveClass(/is-error/);
+  await expect(loading.getByRole('button', { name: 'Reintentar carga' })).toBeVisible();
+  await loading.getByRole('button', { name: 'Reintentar carga' }).click();
+  await expect.poll(() => productAttempts, { timeout: 5000 }).toBe(2);
+  await expect.poll(() => entries, { timeout: 5000 }).toBe(2);
+  await expect(page.locator('#inventoryView .connected-module-loading')).toBeHidden({ timeout: 5000 });
+  expect(productAttempts).toBe(2); expect(entries).toBe(2);
+});
+
 test('ADMIN inicia sesion real, negocio resuelto y restauracion mediante cookies', async ({ page }) => {
   await open(page); await expect(page.locator('#loginBusinessId')).toHaveCount(0);
   const loginBodies = []; page.on('request', request => { if (request.url() === apiBase + '/auth/login') loginBodies.push(JSON.parse(request.postData())); });
@@ -200,7 +306,8 @@ test('la navegación muestra estado accesible sin mostrar el módulo destino ant
 
 test('cargas simultáneas de Reportes comparten la misma solicitud sin cachear datos', async ({ page }) => {
   await open(page); await login(page); await page.locator('#navReportesBtn').click();
-  await expect(page.locator('#reportesView')).toBeVisible(); await expect(page.locator('#connectedReportStatus')).toBeHidden();
+  await expect(page.locator('#reportesView')).toBeVisible();
+  await expect(page.locator('#reportesView .connected-module-loading')).toBeHidden({ timeout: 5000 });
   const reportRequests = [];
   page.on('request', request => { if (new URL(request.url()).pathname === '/api/reports/connected') reportRequests.push(request); });
   await page.route(apiBase + '/reports/connected**', async route => {
@@ -218,6 +325,7 @@ test('Historial carga ventas, órdenes y resumen en paralelo y una sola vez', as
     if (['/api/sales', '/api/sales/orders/history', '/api/reports/connected'].includes(path)) requests.push({ path, startedAt: Date.now() });
   });
   await page.locator('#navHistoryBtn').click(); await expect(page.locator('#historyView')).toBeVisible();
+  await expect(page.locator('#historyView .connected-module-loading')).toBeHidden({ timeout: 5000 });
   await expect(page.locator('#connectedHistoryStatus')).toBeHidden();
   const required = ['/api/sales', '/api/sales/orders/history', '/api/reports/connected'];
   for (const path of required) expect(requests.filter(request => request.path === path)).toHaveLength(1);
@@ -287,6 +395,7 @@ test('Compras, Caja y Reportes validan una vez y cargan solo los datos necesario
   const navigateAndCapture = async (button, view, waitForStatus) => {
     const start = requests.length;
     await page.locator('#' + button).click(); await expect(page.locator('#' + view)).toBeVisible();
+    await expect(page.locator('#' + view + ' .connected-module-loading')).toBeHidden({ timeout: 5000 });
     if (waitForStatus) await expect(page.locator('#' + waitForStatus)).toBeHidden();
     return requests.slice(start);
   };

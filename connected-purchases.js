@@ -17,10 +17,12 @@
   const state = { suppliers: [], products: [], purchasesOffset: 0, payablesOffset: 0, purchaseHasNext: false, payableHasNext: false, quickSupplier: false, cart: [], purchaseSearchTimer: 0, supplierSearchTimer: 0, payableSearchTimer: 0, operationKey: null, currentView: null, loadedPurchase: null, editingPurchase: null };
   const pageSize = 100;
 
-  async function allPages(fetchPage, business) {
+  const navigationIsCurrent = navigation => !navigation || window.PosConnected.isNavigationCurrent(navigation);
+  async function allPages(fetchPage, business, navigation) {
     const values = [];
     for (let offset = 0; ; offset += pageSize) {
       const page = await fetchPage(offset);
+      if (!navigationIsCurrent(navigation)) return values;
       if (page.some(value => value.businessId !== business)) throw new window.PosApiError('INVALID_SESSION', 401);
       values.push(...page);
       if (page.length < pageSize) return values;
@@ -54,18 +56,23 @@
   function refreshDerived() {
     document.dispatchEvent(new Event('connected:report-data-changed'));
   }
-  async function loadSuppliers(modulePurchase = false, query = '') {
-    state.suppliers = await request(async (api, business) => allPages(offset => modulePurchase ? api.purchaseSuppliers(offset, query) : api.suppliers(offset, query), business));
+  async function loadSuppliers(modulePurchase = false, query = '', navigation) {
+    const suppliers = await request(async (api, business) => allPages(offset => modulePurchase ? api.purchaseSuppliers(offset, query) : api.suppliers(offset, query), business, navigation));
+    if (!navigationIsCurrent(navigation)) return false;
+    state.suppliers = suppliers;
     return state.suppliers;
   }
-  async function loadProducts() {
-    state.products = await request(async (api, business) => allPages(offset => api.purchaseProducts(offset), business));
+  async function loadProducts(navigation) {
+    const products = await request(async (api, business) => allPages(offset => api.purchaseProducts(offset), business, navigation));
+    if (!navigationIsCurrent(navigation)) return false;
+    state.products = products;
     window.PosRuntime.setProducts(state.products);
     return state.products;
   }
-  async function renderPurchases(query = '') {
+  async function renderPurchases(query = '', navigation) {
     const offset = state.purchasesOffset;
-    const result = await request((api, business) => allPages(pageOffset => api.purchases(pageOffset, query), business));
+    const result = await request((api, business) => allPages(pageOffset => api.purchases(pageOffset, query), business, navigation));
+    if (!navigationIsCurrent(navigation)) return false;
     const range = window.PosPeriodFilters?.range('purchases') || { from: '', until: '' };
     const filtered = result.filter(purchase => window.PosPeriodFilters?.matches(purchase.createdAt, range));
     const page = filtered;
@@ -81,13 +88,18 @@
       return '<tr data-table-date="' + esc(dayKey(purchase.createdAt)) + '"><td>' + esc(dateTime(purchase.createdAt)) + '</td><td>' + purchaseReference(purchase) + '</td><td>' + esc(purchase.supplierName) + '</td><td>' + Number(purchase.itemCount || 0) + ' productos</td><td>' + total + '</td><td>' + esc(status) + '</td><td>' + actions + '</td></tr>';
     }), 'No hay facturas de compra registradas.');
     el('connectedPurchasesStatus').textContent = filtered.length + ' compra(s) dentro del período seleccionado.';
+    return true;
   }
-  async function renderPayables() {
-    const results = await request(async (api, business) => {
-      const [rows, summary] = await Promise.all([allPages(offset => api.payables(offset), business), api.payablesSummary()]);
+  async function loadPayablesData(navigation) {
+    return request(async (api, business) => {
+      const [rows, summary] = await Promise.all([allPages(offset => api.payables(offset), business, navigation), api.payablesSummary()]);
       if (summary.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401);
       return { rows, summary };
     });
+  }
+  async function renderPayables(navigation, prefetched = null, suppliers = state.suppliers) {
+    const results = prefetched || await loadPayablesData(navigation);
+    if (!navigationIsCurrent(navigation)) return false;
     const range = window.PosPeriodFilters?.range('payables') || { from: '', until: '' };
     const allOpen = results.rows.filter(purchase => Number(purchase.balance) > 0);
     const inPeriod = allOpen.filter(purchase => window.PosPeriodFilters?.matches(purchase.dueAt, range));
@@ -100,7 +112,7 @@
       groups.set(id, group);
     }
     const rows = [...groups.values()].sort((a, b) => Date.parse(a.nextDueAt) - Date.parse(b.nextDueAt)).map(group => {
-      const supplier = state.suppliers.find(item => String(item.id) === group.id);
+      const supplier = suppliers.find(item => String(item.id) === group.id);
       const balance = allOpen.filter(invoice => String(invoice.supplierId) === group.id).reduce((total, invoice) => total + Number(invoice.balance || 0), 0);
       const action = '<button type="button" class="btn btn-sm btn-info" data-supplier-action="statement" data-supplier-id="' + esc(group.id) + '">Ver Facturas</button>';
       return '<tr><td><strong>' + esc(supplier?.name || group.name) + '</strong></td><td>' + esc(supplier?.phone || '—') + '</td><td style="color:#d32f2f;font-weight:bold;">' + esc(date(group.nextDueAt)) + '</td><td style="color:#d32f2f;font-weight:bold;font-size:1.1em;">' + money(balance) + '</td><td>' + action + '</td></tr>';
@@ -108,6 +120,7 @@
     setTable('connectedPayablesTableBody', 5, rows, 'No hay facturas pendientes con vencimiento en este período.');
     const status = el('connectedPayablesStatus');
     if (status) status.textContent = inPeriod.length + ' factura(s) con vencimiento dentro del período seleccionado.';
+    return true;
   }
   function renderSuppliers(rows = state.suppliers) {
     setTable('connectedSuppliersTableBody', 6, rows.map(supplier => {
@@ -126,20 +139,24 @@
     const list = el('supplierDataList');
     if (list) list.innerHTML = state.suppliers.filter(row => row.active).map(row => '<option value="' + esc(row.name) + '"></option>').join('');
   }
-  async function load(view) {
+  async function load(view, { navigation } = {}) {
+    if (!navigationIsCurrent(navigation)) return false;
     state.currentView = view;
     if (!['purchasesView', 'payablesView', 'suppliersView'].includes(view)) return false;
     setConnectedView();
     try {
       if (view === 'purchasesView') {
         state.purchasesOffset = 0;
-        await Promise.all([loadSuppliers(true), loadProducts(), renderPurchases(el('connectedPurchasesSearch').value.trim())]);
+        const results = await Promise.all([loadSuppliers(true, '', navigation), loadProducts(navigation), renderPurchases(el('connectedPurchasesSearch').value.trim(), navigation)]);
+        return navigationIsCurrent(navigation) && results.every(result => result !== false);
       } else if (view === 'payablesView') {
         state.payablesOffset = 0;
-        await loadSuppliers(false);
-        await renderPayables(el('connectedPayablesSearch').value.trim());
+        const [suppliers, payableData] = await Promise.all([loadSuppliers(false, '', navigation), loadPayablesData(navigation)]);
+        if (!navigationIsCurrent(navigation) || suppliers === false) return false;
+        return renderPayables(navigation, payableData, suppliers);
       } else {
-        await loadSuppliers(false);
+        const suppliers = await loadSuppliers(false, '', navigation);
+        if (suppliers === false || !navigationIsCurrent(navigation)) return false;
         renderSuppliers();
       }
       return true;
@@ -435,7 +452,7 @@
   el('cancelConnectedPurchaseClose').addEventListener('click', () => el('cancelConnectedPurchaseModal').classList.add('hidden'));
   function applyPeriod(view) {
     if (view === 'purchasesView') { state.purchasesOffset = 0; return renderPurchases(el('connectedPurchasesSearch').value.trim()).catch(error => showError(error, 'connectedPurchasesStatus')); }
-    if (view === 'payablesView') { state.payablesOffset = 0; return renderPayables(el('connectedPayablesSearch').value.trim()).catch(error => showError(error, 'connectedPayablesStatus')); }
+    if (view === 'payablesView') { state.payablesOffset = 0; return renderPayables().catch(error => showError(error, 'connectedPayablesStatus')); }
     return Promise.resolve();
   }
   document.addEventListener('pos:period-changed', event => {

@@ -118,7 +118,7 @@ test('Caja e Historial distinguen efectivo confirmado y pagos pendientes',async(
     await add(page,product);await page.locator('input[name=paymentMethod][value='+method+']').check();await page.locator('#processSaleBtn').click();await expect(page.locator('#ticketModal')).toBeVisible();
     const sale=(await call(page,'sales')).find(value=>value.paymentMethod===method.toUpperCase()&&value.items.some(item=>item.productId===product.id));expect(sale.cashStatus).toBe('PENDING');await page.locator('#newSaleBtn').click();
     await page.locator('#navCajaBtn').click();cash=await call(page,'currentCash',true);movement=cash.movements.find(value=>value.saleId===sale.id);expect(movement.status).toBe('PENDING');expect(movement.payment_method).toBe(method.toUpperCase());
-    row=page.locator('#cajaMovimientosBody tr').filter({hasText:'Venta #'+sale.invoiceNumber});await expect(row).toContainText('Pendiente de confirmaci\u00f3n');
+    row=page.locator('#cajaMovimientosBody tr').filter({hasText:'Venta #'+sale.invoiceNumber});await expect(row).toContainText(/pendiente de confirmaci\u00f3n/i);
     await page.locator('#navHistoryBtn').click();saleRow=page.locator('#historyTableBody tr').filter({hasText:'#'+sale.invoiceNumber});await expect(saleRow).toContainText(method==='card'?'TARJETA':'TRANSFERENCIA');await expect(saleRow).toContainText('PENDIENTE DE CONFIRMACI\u00d3N');
     await page.locator('#navSalesBtn').click();
   }

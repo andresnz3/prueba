@@ -61,10 +61,12 @@
     if (value.businessId !== business) throw new window.PosApiError('INVALID_SESSION', 401);
     return value;
   }
-  async function all(fetchPage, business) {
+  const navigationIsCurrent = navigation => !navigation || window.PosConnected.isNavigationCurrent(navigation);
+  async function all(fetchPage, business, navigation) {
     const result = [];
     for (let offset = 0; ; offset += 100) {
       const page = await fetchPage(offset);
+      if (!navigationIsCurrent(navigation)) throw new window.PosApiError('STALE_REQUEST');
       for (const value of page) result.push(ensureBusiness(value, business));
       if (page.length < 100) return result;
     }
@@ -74,20 +76,25 @@
     if (index < 0) rows.push(product); else rows[index] = product;
     window.PosRuntime.setProducts(rows);
   }
-  async function loadOnce(view, currentScope) {
-    const result = await window.PosConnected.inventoryOperation((api, business) => all(offset => api.products(view === 'salesView', offset), business));
-    if (currentScope !== loadScopeKey()) return;
+  async function loadOnce(view, currentScope, navigation) {
+    const result = await window.PosConnected.inventoryOperation((api, business) => all(offset => api.products(view === 'salesView', offset), business, navigation));
+    if (!navigationIsCurrent(navigation) || currentScope !== loadScopeKey()) return false;
     rows = result; window.PosRuntime.setProducts(rows);
     if (view !== 'inventoryView') closePanels();
+    return true;
   }
-  async function load(view, { refresh = false } = {}) {
-    if (!['inventoryView', 'salesView'].includes(view)) { closePanels(); return; }
+  async function load(view, { refresh = false, navigation } = {}) {
+    if (!['inventoryView', 'salesView'].includes(view)) { closePanels(); return true; }
+    if (!navigationIsCurrent(navigation)) return false;
     const currentScope = loadScopeKey(), key = view + '|' + currentScope;
     const active = loadFlights.get(key);
-    if (active) { if (refresh) active.dirty = true; return active.promise; }
-    const flight = { dirty: false, promise: null };
+    const navigationId = navigation?.id ?? null;
+    if (active?.navigationId === navigationId) { if (refresh) active.dirty = true; return active.promise; }
+    const flight = { dirty: false, promise: null, navigationId };
     flight.promise = (async () => {
-      do { flight.dirty = false; await loadOnce(view, currentScope); } while (flight.dirty && currentScope === loadScopeKey());
+      let loaded;
+      do { flight.dirty = false; loaded = await loadOnce(view, currentScope, navigation); } while (flight.dirty && currentScope === loadScopeKey() && navigationIsCurrent(navigation));
+      return loaded;
     })().finally(() => { if (loadFlights.get(key) === flight) loadFlights.delete(key); });
     loadFlights.set(key, flight);
     return flight.promise;

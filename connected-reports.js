@@ -37,7 +37,7 @@
   const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', CONFIRMED: 'Confirmado', PENDING: 'Pendiente', VOID: 'Anulado', POSTED: 'Registrado' })[value] || 'Por revisar';
   const saleStatusLabel = row => row.isHistorical ? 'Histórica · ' + statusLabel(row.status) : statusLabel(row.status);
   const setText = (id, value) => { const node = el(id); if (node) node.textContent = value; };
-  let report = null, requestId = 0, loadFlight = null, loadDirty = false;
+  let report = null, requestId = 0, loadFlight = null;
   function businessIdentitySheet() {
     const identity = window.PosRuntime?.businessIdentity?.();
     if (!identity) return null;
@@ -168,7 +168,9 @@
     window.PosTables?.refreshDataTable(el('repCajaMovimientosBody'));
     window.PosTables?.refreshDataTable(el('repCajaBody'));
   }
-  async function loadOnce() {
+  const navigationIsCurrent = navigation => !navigation || window.PosConnected.isNavigationCurrent(navigation);
+  async function loadOnce(navigation) {
+    if (!navigationIsCurrent(navigation)) return false;
     const current = ++requestId, status = el('connectedReportStatus');
     try {
       report = null;
@@ -178,25 +180,27 @@
       if (rangeLabel) rangeLabel.textContent = labelRange(selected.fromValue, selected.untilValue);
       if (status) { status.textContent = 'Cargando reportes…'; status.classList.remove('hidden'); }
       const data = await window.PosConnected.inventoryOperation(client => client.connectedReport(selected.from, selected.until));
-      if (current !== requestId) return false;
+      if (current !== requestId || !navigationIsCurrent(navigation)) return false;
       render(data);
       return true;
     } catch (failure) {
-      if (current !== requestId) return false;
+      if (current !== requestId || !navigationIsCurrent(navigation)) return false;
       if (status) { status.textContent = window.PosMessages.fromError(failure, 'No se pudieron cargar los reportes. Actualiza la pantalla e inténtalo de nuevo.'); status.classList.remove('hidden'); }
       if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
       return false;
     }
   }
-  async function load({ refresh = false } = {}) {
-    if (loadFlight) { if (refresh) loadDirty = true; return loadFlight; }
-    const flight = (async () => {
+  async function load({ refresh = false, navigation } = {}) {
+    if (!navigationIsCurrent(navigation)) return false;
+    if (loadFlight && (!navigation || loadFlight.navigationId === navigation.id)) { if (refresh) loadFlight.dirty = true; return loadFlight.promise; }
+    const flight = { navigationId: navigation?.id ?? null, dirty: false, promise: null };
+    flight.promise = (async () => {
       let result;
-      do { loadDirty = false; result = await loadOnce(); } while (loadDirty);
+      do { flight.dirty = false; result = await loadOnce(navigation); } while (flight.dirty && navigationIsCurrent(navigation));
       return result;
     })();
     loadFlight = flight;
-    try { return await flight; }
+    try { return await flight.promise; }
     finally { if (loadFlight === flight) loadFlight = null; }
   }
   function exportExcel(scope = 'all') {

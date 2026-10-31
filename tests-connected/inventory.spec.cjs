@@ -178,7 +178,13 @@ test('otro negocio no ve productos ni movimientos ajenos', async ({ page }) => {
   expect((await call(page, 'products')).value.some(p => p.barcode === item.barcode)).toBe(false); expect((await call(page, 'product', product.id)).code).toBe('PRODUCT_NOT_FOUND'); expect((await call(page, 'movements', product.id)).code).toBe('PRODUCT_NOT_FOUND');
 });
 test('fallo de lectura no utiliza productos de Dexie como respaldo', async ({ page }) => {
-  await login(page); await page.route(api + '/products?**', route => route.abort()); await page.locator('#navInventoryBtn').click(); await expect(page.locator('#connectedNotice')).toContainText('No hay conexión con el sistema'); await expect(page.locator('#inventoryView')).toBeHidden();
+  await login(page); await page.route(api + '/products?**', route => route.abort()); await page.locator('#navInventoryBtn').click();
+  const loading = page.locator('#inventoryView .connected-module-loading');
+  await expect(loading).toHaveClass(/is-error/);
+  await expect(loading).toContainText('No hay conexión con el sistema');
+  await expect(loading.getByRole('button', { name: 'Reintentar carga' })).toBeVisible();
+  await expect(page.locator('#inventoryTableBody')).toBeHidden();
+  expect(await page.evaluate(() => localDB)).toBeNull();
 });
 test('fallo de escritura no crea producto fantasma ni reintenta automaticamente', async ({ page }) => {
   await login(page); await inventory(page); let writes = 0; await page.route(api + '/products', route => { writes++; return route.abort(); }); await page.locator('#addNewProductBtn').click();

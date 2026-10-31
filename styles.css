@@ -1151,6 +1151,39 @@ input[type="radio"] { width: auto; height: auto; accent-color: var(--primary); }
 #migrationCreditIssues .migration-credit-issue-details ul { display: grid; gap: 4px; margin: 0 0 8px; padding-left: 18px; }
 #migrationCreditIssues .migration-credit-issue-details li { display: list-item; padding: 0; border: 0; background: transparent; color: #334155; }
 
+.view-panel.connected-module-is-loading { position: relative; isolation: isolate; min-height: 220px; }
+.view-panel.connected-navigation-authorizing { visibility: hidden; }
+.connected-module-is-loading > :not(.connected-module-loading) { visibility: hidden; }
+.connected-module-loading {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  padding: 20px;
+  border-radius: inherit;
+  background: var(--surface, #fff);
+  color: var(--text, #1f2937);
+}
+.connected-module-loading-card {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(100%, 340px);
+  padding: 22px;
+  border: 1px solid var(--border, #dbe4ef);
+  border-radius: 12px;
+  background: var(--surface-2, #f8fafc);
+  text-align: center;
+}
+.connected-module-loading-icon { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.connected-module-loading-message { margin: 0; color: var(--text-muted, #64748b); line-height: 1.45; }
+.connected-module-loading.is-error { background: var(--surface, #fff); }
+.connected-module-loading.is-error .connected-module-loading-card { border-color: #fecaca; }
+.connected-module-loading.is-error .connected-module-loading-message { color: #991b1b; }
+.connected-module-loading .btn { margin: 0; }
+
 .local-license-gate,
 .local-license-actions { display: grid; gap: 12px; margin: 14px 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-2); }
 .local-license-gate h2 { margin: 0; color: var(--text); font-size: 1.08rem; }

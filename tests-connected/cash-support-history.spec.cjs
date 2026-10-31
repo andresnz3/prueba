@@ -64,12 +64,17 @@ test('Caja histórica del negocio administrado permite reintento sin pantalla en
     failNextOverview = false;
     return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'TEMPORARY_TEST_FAILURE', message: 'Fallo temporal de prueba' } }) });
   });
+  let cashModuleEntries = 0;
+  page.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/auth/modules/cash/enter') cashModuleEntries++;
+  });
   await page.locator('#navCajaBtn').click();
   await expect(page.locator('#cajaView')).toBeVisible();
-  await expect(page.locator('#cashLoadStatus')).toBeVisible();
-  await expect(page.locator('#cashLoadMessage')).toContainText('No se pudo cargar Caja. Revisa la conexión e inténtalo nuevamente.');
-  await expect(page.locator('#retryCashLoadBtn')).toBeVisible();
-  await expect(page.locator('#abrirCajaBtn')).toBeDisabled();
+  const cashError = page.locator('#cajaView .connected-module-loading.is-error');
+  await expect(cashError).toBeVisible();
+  await expect(cashError).toContainText('No se pudieron cargar los datos');
+  await expect(cashError.getByRole('button', { name: 'Reintentar carga' })).toBeVisible();
+  await expect(page.locator('#abrirCajaBtn')).toBeHidden();
   await expect(page.locator('#salesView')).toBeHidden();
 
   const rawResponse = await page.evaluate(async () => {
@@ -104,10 +109,13 @@ test('Caja histórica del negocio administrado permite reintento sin pantalla en
   failNextOverview = true;
   await page.locator('#navSalesBtn').click();
   await page.locator('#navCajaBtn').click();
-  await expect(page.locator('#cashLoadStatus')).toBeVisible();
-  await expect(page.locator('#abrirCajaBtn')).toBeDisabled();
-  await page.locator('#retryCashLoadBtn').click();
-  await expect(page.locator('#cashLoadStatus')).toBeHidden();
+  const failedCashLoad = page.locator('#cajaView .connected-module-loading.is-error');
+  await expect(failedCashLoad).toBeVisible();
+  await expect(page.locator('#abrirCajaBtn')).toBeHidden();
+  const entryBeforeRetry = cashModuleEntries;
+  await failedCashLoad.getByRole('button', { name: 'Reintentar carga' }).click();
+  await expect.poll(() => cashModuleEntries).toBe(entryBeforeRetry + 1);
+  await expect(page.locator('#cajaView .connected-module-loading')).toBeHidden();
   await expect(page.locator('#cajaHistorialBody tr[data-table-date]')).toHaveCount(5);
   await expect(page.locator('#cajaMovimientosBody tr[data-table-date]')).toHaveCount(32);
 

@@ -990,7 +990,7 @@ function switchView(viewId) {
     if (connectedMode) return window.PosConnected.navigate(viewId);
     return renderPosView(viewId);
 }
-function renderPosView(viewId) {
+function renderPosView(viewId, { deferConnectedContent = false } = {}) {
     if (viewId === "systemAdminView" && !window.PosConnected?.canAccessSystemAdmin?.()) return false;
     window.PosAutocomplete?.closeAll();
     clearTimeout(salesFocusTimer);
@@ -1002,11 +1002,12 @@ function renderPosView(viewId) {
     const activeBtnId = Object.keys(NAV_MAP).find(k => NAV_MAP[k] === viewId);
     if (activeBtnId && document.getElementById(activeBtnId)) document.getElementById(activeBtnId).classList.add("active");
 
-    if(viewId === "salesView") salesFocusTimer = setTimeout(() => {
+    if(viewId === "salesView" && !(connectedMode && deferConnectedContent)) salesFocusTimer = setTimeout(() => {
         const activeElement = document.activeElement;
         const editingField = activeElement?.matches('input, textarea, select') || activeElement?.isContentEditable;
         if (!app?.classList.contains("hidden") && !targetElement?.classList.contains("hidden") && !topOpenModal() && !editingField) barcodeInput?.focus();
     }, 100);
+    if (!deferConnectedContent || !connectedMode) {
     if(viewId === "inventoryView") actualizarTablaInventario();
     if(viewId === "purchasesView") actualizarTablaCompras();
     if(viewId === "payablesView") actualizarTablaCuentasPorPagar();
@@ -1018,7 +1019,23 @@ function renderPosView(viewId) {
     if(viewId === "reportesView") { initReportesFiltros(); renderReportes(); }
     if(viewId === "dashboardView") renderDashboard();
     if(viewId === "configView") cargarVistaConfiguracion();
+    }
 }
+window.renderConnectedModuleContent = viewId => {
+    if (viewId === "inventoryView") actualizarTablaInventario();
+    if (viewId === "salesView") actualizarCatalogo();
+    if (viewId === "configView") cargarVistaConfiguracion();
+    if (viewId === "gastosView") renderGastosSelect();
+    if (viewId === "dashboardView") renderDashboard();
+};
+window.focusConnectedSalesScanner = () => {
+    clearTimeout(salesFocusTimer);
+    salesFocusTimer = setTimeout(() => {
+        const activeElement = document.activeElement;
+        const editingField = activeElement?.matches('input, textarea, select') || activeElement?.isContentEditable;
+        if (!app?.classList.contains("hidden") && !document.getElementById("salesView")?.classList.contains("hidden") && !topOpenModal() && !editingField) barcodeInput?.focus();
+    }, 100);
+};
 
 document.getElementById("confLogoInput")?.addEventListener("change", function(e) {
     const file = e.target.files[0];

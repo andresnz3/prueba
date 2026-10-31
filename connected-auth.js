@@ -14,10 +14,11 @@
   const api = new window.PosApiClient(window.POS_API_BASE_URL);
   const views = { salesView: 'sales', inventoryView: 'inventory', purchasesView: 'purchases', payablesView: 'payables', clientsView: 'clients', suppliersView: 'suppliers', historyView: 'history', cajaView: 'cash', gastosView: 'expenses', reportesView: 'reports', dashboardView: 'reports', configView: 'settings' };
   let identity = null, ownerBusinessId = null, supportContext = null, activeView = null, grant = null, pendingView = null;
-  let generation = 0, lastSessionVerifiedAt = 0, lastAutomaticAccessCheckAt = 0;
+  let generation = 0, navigationSequence = 0, pendingNavigationRequestId = null, pendingNavigationTarget = null, pendingNavigationMask = null, lastSessionVerifiedAt = 0, lastAutomaticAccessCheckAt = 0;
   let verificationFlight = null, accessCheckFlight = null, verifiedLoadScope = null, automaticCheckTimer = null;
   let systemAdminReady = false, systemAdminBusinesses = [], systemAdminUsers = [], systemAdminUserCapacity = null, systemAdminBilling = null, systemAdminLicenses = [], systemAdminActiveLocalBusinesses = null, systemAdminSelectedBusinessId = '', systemAdminMigrationTargetId = '', systemAdminTab = 'businesses';
   let systemAdminDeleteBusiness = null, systemAdminDeleteTrigger = null, systemAdminDeletePreview = null, systemAdminDeletePreviewToken = 0, systemAdminPaymentBusiness = null, systemAdminPaymentTrigger = null;
+  const moduleLoadStates = new Map();
   const assertGeneration = value => { if (generation !== value) throw new window.PosApiError('STALE_REQUEST'); };
   let expiryTimer, grantTimer, busy = false, passwordUserId = null, userPage = 0;
   function message(id, text) { el(id).textContent = window.PosMessages.text(text, 'No se pudo completar la solicitud. Inténtalo nuevamente.'); el(id).classList.remove('hidden'); }
@@ -42,10 +43,12 @@
   function canAccessSystemAdmin() { return isSystemAdmin() && systemAdminReady; }
   function canView(view) { return Boolean(identity && (view === 'salesView' || view === 'configView' || (view === 'systemAdminView' && canAccessSystemAdmin()) || identity.role === 'ADMIN' || (grant?.view === view && grant.until > Date.now()))); }
   function expire(text = 'La sesión venció o fue revocada. Inicia sesión nuevamente.') {
-    generation++; identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminDeletePreview = null; systemAdminDeletePreviewToken++; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminUserCapacity = null; systemAdminBilling = null; systemAdminLicenses = []; systemAdminSelectedBusinessId = ''; systemAdminMigrationTargetId = ''; clearIssuedLocalLicense(); window.PosMigrationPreview.reset(); window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
+    generation++; navigationSequence++; pendingNavigationRequestId = null; pendingNavigationTarget = null; busy = false; clearPendingNavigationMask(false); identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminDeletePreview = null; systemAdminDeletePreviewToken++; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminUserCapacity = null; systemAdminBilling = null; systemAdminLicenses = []; systemAdminSelectedBusinessId = ''; systemAdminMigrationTargetId = ''; clearIssuedLocalLicense(); window.PosMigrationPreview.reset(); window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
+    for (const state of [...moduleLoadStates.values()]) clearModuleLoadState(state);
+    moduleLoadStates.clear();
     clearTimeout(expiryTimer); clearTimeout(grantTimer); clearTimeout(automaticCheckTimer); automaticCheckTimer = null; lastSessionVerifiedAt = 0; lastAutomaticAccessCheckAt = 0; clearPasswords(); clearNavigationStatus();
     document.querySelectorAll('.modal, .view-panel').forEach(node => node.classList.add('hidden'));
-    el('app').classList.add('hidden'); el('app').inert = false; el('loginScreen').classList.remove('hidden');
+    el('app').classList.add('hidden'); el('app').inert = false; el('app').removeAttribute('aria-busy'); el('loginScreen').classList.remove('hidden');
     el('navUsersBtn').classList.add('hidden'); el('renewSessionBtn').classList.add('hidden');
     el('navSystemAdminBtn').classList.add('hidden'); el('systemAdminView').classList.add('hidden');
     el('authMode').disabled = false;
@@ -72,6 +75,151 @@
     const status = el('connectedNavigationStatus');
     status.textContent = '';
     status.classList.add('hidden');
+  }
+  function maskActiveModuleForAuthorization() {
+    if (pendingNavigationMask) return;
+    const panel = el(activeView);
+    if (!panel || panel.classList.contains('hidden')) return;
+    pendingNavigationMask = { panel, view: activeView, userId: identity?.id, businessId: effectiveBusinessId(), inert: panel.inert, ariaHidden: panel.getAttribute('aria-hidden') };
+    panel.inert = true; panel.setAttribute('aria-hidden', 'true'); panel.classList.add('connected-navigation-authorizing');
+  }
+  function clearPendingNavigationMask(restore = true) {
+    const mask = pendingNavigationMask;
+    if (!mask) return;
+    pendingNavigationMask = null;
+    mask.panel.classList.remove('connected-navigation-authorizing');
+    mask.panel.inert = mask.inert;
+    if (mask.ariaHidden === null) mask.panel.removeAttribute('aria-hidden');
+    else mask.panel.setAttribute('aria-hidden', mask.ariaHidden);
+    if (restore && mask.panel.isConnected && mask.userId === identity?.id && mask.businessId === effectiveBusinessId() && canView(mask.view)) return;
+    if (restore) {
+      document.querySelectorAll('.view-panel').forEach(node => node.classList.add('hidden'));
+      activeView = null;
+    }
+  }
+  function navigationScope(context) {
+    return Boolean(context && identity && context.generation === generation && context.userId === identity.id
+      && context.ownerBusinessId === ownerBusinessId && context.businessId === effectiveBusinessId());
+  }
+  function isNavigationCurrent(context) {
+    return Boolean(navigationScope(context) && context.id === navigationSequence && context.view === activeView);
+  }
+  function clearModuleLoadState(state) {
+    if (!state) return;
+    const { panel, overlay } = state;
+    for (const [child, saved] of state.children) {
+      if (!child.isConnected) continue;
+      child.inert = saved.inert;
+      if (saved.ariaHidden === null) child.removeAttribute('aria-hidden');
+      else child.setAttribute('aria-hidden', saved.ariaHidden);
+    }
+    overlay.remove();
+    panel.classList.remove('connected-module-is-loading');
+    if (state.ariaBusy === null) panel.removeAttribute('aria-busy');
+    else panel.setAttribute('aria-busy', state.ariaBusy);
+    if (moduleLoadStates.get(panel.id) === state) moduleLoadStates.delete(panel.id);
+  }
+  function showModuleLoading(context) {
+    const panel = el(context.view);
+    if (!panel) return null;
+    clearModuleLoadState(moduleLoadStates.get(context.view));
+    const overlay = document.createElement('div');
+    overlay.className = 'connected-module-loading';
+    overlay.dataset.navigationId = String(context.id);
+    overlay.setAttribute('role', 'status');
+    overlay.setAttribute('aria-live', 'polite');
+    const card = document.createElement('div');
+    card.className = 'connected-module-loading-card';
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('class', 'ic connected-module-loading-icon');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M12 7v5l3 2'); icon.append(path);
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', '12'); circle.setAttribute('cy', '12'); circle.setAttribute('r', '9'); icon.append(circle);
+    const text = document.createElement('p'); text.className = 'connected-module-loading-message';
+    text.textContent = 'Cargando ' + navigationLabel(context.view) + '…';
+    const retry = document.createElement('button'); retry.className = 'btn btn-secondary hidden'; retry.type = 'button'; retry.textContent = 'Reintentar carga';
+    retry.addEventListener('click', () => { if (activeView === context.view && !busy) void navigate(context.view); });
+    card.append(icon, text, retry); overlay.append(card);
+    const children = new Map();
+    for (const child of [...panel.children]) {
+      children.set(child, { inert: child.inert, ariaHidden: child.getAttribute('aria-hidden') });
+      child.inert = true; child.setAttribute('aria-hidden', 'true');
+    }
+    panel.append(overlay);
+    const state = { context, panel, overlay, message: text, retry, children, ariaBusy: panel.getAttribute('aria-busy') };
+    panel.classList.add('connected-module-is-loading'); panel.setAttribute('aria-busy', 'true');
+    moduleLoadStates.set(panel.id, state);
+    return state;
+  }
+  function navigationLabel(view) {
+    return ({ salesView: 'Ventas', inventoryView: 'Inventario', purchasesView: 'Compras', payablesView: 'Cuentas por pagar', clientsView: 'Clientes y créditos', suppliersView: 'Proveedores', historyView: 'Historial', cajaView: 'Caja', gastosView: 'Gastos', reportesView: 'Reportes', dashboardView: 'Dashboard', configView: 'Configuración' })[view] || 'el módulo';
+  }
+  function showModuleLoadError(context, text) {
+    if (!isNavigationCurrent(context)) return false;
+    const state = moduleLoadStates.get(context.view);
+    if (!state || state.context.id !== context.id) return false;
+    state.overlay.classList.add('is-error'); state.overlay.setAttribute('role', 'alert'); state.overlay.setAttribute('aria-live', 'assertive');
+    state.message.textContent = window.PosMessages.text(text, 'No se pudieron cargar los datos. Revisa la conexión e inténtalo nuevamente.');
+    state.retry.classList.remove('hidden'); state.panel.setAttribute('aria-busy', 'false');
+    clearNavigationStatus(); return true;
+  }
+  function finishModuleLoad(context) {
+    if (!isNavigationCurrent(context)) return false;
+    const state = moduleLoadStates.get(context.view);
+    if (!state || state.context.id !== context.id) return false;
+    clearModuleLoadState(state); clearNavigationStatus();
+    if (context.view === 'salesView') window.focusConnectedSalesScanner?.();
+    return true;
+  }
+  function renderLoadedModule(view) {
+    window.renderConnectedModuleContent?.(view);
+  }
+  async function loadAuthorizedModule(context) {
+    return withVerifiedLoadScope(context.generation, async () => {
+      const tasks = [];
+      if (!isNavigationCurrent(context)) return false;
+      if (context.view === 'salesView') tasks.push(window.PosInventory.load(context.view, { navigation: context }), window.PosSales.load(context.view, { navigation: context }));
+      else if (context.view === 'inventoryView') tasks.push(window.PosInventory.load(context.view, { navigation: context }));
+      else if (['purchasesView', 'payablesView', 'suppliersView'].includes(context.view)) tasks.push(window.PosPurchases.load(context.view, { navigation: context }));
+      else if (['clientsView', 'historyView', 'cajaView'].includes(context.view)) tasks.push(window.PosSales.load(context.view, { navigation: context }));
+      else if (context.view === 'gastosView') tasks.push(window.PosExpenses.load(context.view, { navigation: context }));
+      else if (context.view === 'reportesView') tasks.push(window.PosReports.load({ navigation: context }));
+      else if (context.view === 'dashboardView') tasks.push(window.PosDashboard.load({ navigation: context }));
+      else if (context.view === 'configView') tasks.push(api.businessSettings().then(settings => { if (isNavigationCurrent(context)) window.PosRuntime.setBusinessSettings(settings); return isNavigationCurrent(context); }));
+      else throw new window.PosApiError('INVALID_INPUT');
+      if (window.PosMigrationHistory?.activate) tasks.push(Promise.resolve(window.PosMigrationHistory.activate(context.view, context)));
+      const results = await Promise.all(tasks);
+      if (!isNavigationCurrent(context)) return false;
+      if (results.some(result => result === false)) return false;
+      renderLoadedModule(context.view);
+      return true;
+    });
+  }
+  function beginAuthorizedNavigation(view, version, requestId = ++navigationSequence) {
+    clearPendingNavigationMask(false);
+    const context = { id: requestId, view, generation: version, userId: identity?.id, ownerBusinessId, businessId: effectiveBusinessId() };
+    activeView = view; pendingView = null;
+    for (const state of [...moduleLoadStates.values()]) clearModuleLoadState(state);
+    renderPosView(view, { deferConnectedContent: true });
+    clearNavigationStatus();
+    showModuleLoading(context);
+    void loadAuthorizedModule(context).then(ok => {
+      if (!isNavigationCurrent(context)) return;
+      if (ok) finishModuleLoad(context);
+      else showModuleLoadError(context, 'No se pudieron cargar los datos de ' + navigationLabel(view) + '. Revisa la conexión y vuelve a intentarlo.');
+    }).catch(failure => {
+      if (!isNavigationCurrent(context)) return;
+      if (failure.code === 'INVALID_SESSION') { error(failure); return; }
+      if (failure.code === 'MODULE_FORBIDDEN' && identity?.role === 'VENDEDOR') {
+        clearModuleLoadState(moduleLoadStates.get(view)); grant = null; activeView = 'salesView'; pendingView = view;
+        renderPosView(activeView); el('authModal').classList.remove('hidden'); el('grantAdminUsername').focus(); clearNavigationStatus(); return;
+      }
+      showModuleLoadError(context, window.PosMessages.fromError(failure, 'No se pudieron cargar los datos de ' + navigationLabel(view) + '. Revisa la conexión y vuelve a intentarlo.'));
+    });
+    return context;
   }
   function acceptVerifiedSession(value, version) {
     assertGeneration(version);
@@ -678,7 +826,7 @@
       if (failure.code !== 'STALE_REQUEST') error(failure, 'connectedNotice');
     } finally { busy = false; el('app').inert = false; }
   }
-  async function navigate(view) {
+  async function navigateLegacy(view) {
     if (busy || !identity) return;
     if (view === 'systemAdminView') { await openSystemAdmin(); return; }
     if (!views[view] && view !== 'usersView') return;
@@ -727,6 +875,45 @@
       busy = false; el('app').inert = false; el('app').removeAttribute('aria-busy'); clearNavigationStatus();
     }
   }
+  async function navigate(view) {
+    if (!identity || (busy && pendingNavigationRequestId === null)) return;
+    if (view === 'systemAdminView' || view === 'usersView') return navigateLegacy(view);
+    if (!views[view]) return;
+    if (pendingNavigationRequestId !== null && pendingNavigationTarget === view) return;
+    const pending = moduleLoadStates.get(view);
+    if (view === activeView && pending && !pending.overlay.classList.contains('is-error')) return;
+    const requestId = ++navigationSequence, previous = activeView, version = generation;
+    pendingNavigationRequestId = requestId; pendingNavigationTarget = view; busy = true;
+    el('app').setAttribute('aria-busy', 'true'); setNavigationStatus(view); maskActiveModuleForAuthorization();
+    for (const state of [...moduleLoadStates.values()]) clearModuleLoadState(state);
+    try {
+      if (previous && previous !== view && grant) { grant = null; clearTimeout(grantTimer); }
+      // Cada cambio de módulo conserva la autorización explícita del servidor.
+      // El panel solo se muestra después de recibir el contexto autorizado.
+      const authorized = await api.enter(views[view]);
+      if (requestId !== navigationSequence || version !== generation) return;
+      acceptVerifiedSession(authorized, version);
+      beginAuthorizedNavigation(view, version, requestId);
+    } catch (failure) {
+      if (requestId !== navigationSequence || version !== generation) return;
+      if (failure.code === 'STALE_REQUEST') return;
+      grant = null; clearTimeout(grantTimer);
+      if (failure.code === 'MODULE_FORBIDDEN') {
+        try { await verify(); assertGeneration(version); }
+        catch (refreshFailure) { if (refreshFailure.code !== 'STALE_REQUEST') error(refreshFailure); return; }
+        if (requestId !== navigationSequence || version !== generation) return;
+        if (identity?.role === 'VENDEDOR') {
+          clearPendingNavigationMask(false);
+          activeView = 'salesView'; renderPosView(activeView); pendingView = view;
+          el('authError').classList.add('hidden'); el('authModal').classList.remove('hidden'); el('grantAdminUsername').focus();
+        } else { clearPendingNavigationMask(true); error(failure); }
+      } else { clearPendingNavigationMask(true); error(failure); }
+    } finally {
+      if (pendingNavigationRequestId === requestId) {
+        pendingNavigationRequestId = null; pendingNavigationTarget = null; busy = false; el('app').removeAttribute('aria-busy'); clearNavigationStatus();
+      }
+    }
+  }
   async function login() {
     if (busy) return; if (!window.PosValidation.validate(el('loginForm'))) return; busy = true; const button = el('loginForm').querySelector('button[type=submit]'); button.disabled = true;
     try {
@@ -759,13 +946,9 @@
     try {
       const value = await api.authorize(views[view], el('grantAdminUsername').value.trim(), el('gestorPassword').value);
       acceptVerifiedSession(await api.enter(views[view]), version);
-      await withVerifiedLoadScope(version, async () => {
-        await Promise.all([window.PosInventory.load(view), window.PosSales.load(view), window.PosPurchases.load(view), window.PosExpenses.load(view)]);
-        assertGeneration(version);
-        if (view === 'reportesView') await window.PosReports.load();
-      });
-      grant = { view, until: Date.parse(value.expiresAt) }; activeView = view; pendingView = null;
-      el('authModal').classList.add('hidden'); renderPosView(view); window.PosMigrationHistory?.activate(view);
+      grant = { view, until: Date.parse(value.expiresAt) };
+      el('authModal').classList.add('hidden');
+      beginAuthorizedNavigation(view, version, ++navigationSequence);
       clearTimeout(grantTimer); grantTimer = setTimeout(() => { grant = null; navigate('salesView'); }, Math.max(0, grant.until - Date.now()));
     } catch (failure) { error(failure, 'authError'); }
     finally { el('gestorPassword').value = ''; button.disabled = false; busy = false; }
@@ -1111,7 +1294,7 @@
     window.PosRuntime.setBusinessSettings(result);
     return result;
   }
-  window.PosConnected = Object.freeze({ login, logout, navigate, authorize, canView, inventoryOperation, effectiveBusinessId, handleError: error, canAccessSystemAdmin,
+  window.PosConnected = Object.freeze({ login, logout, navigate, authorize, canView, inventoryOperation, effectiveBusinessId, isNavigationCurrent, handleError: error, canAccessSystemAdmin,
     migrationHistory: (module, offset = 0, limit = 50) => api.migrationHistory(module, offset, limit),
     updateBusinessSettings: data => settingsOperation(() => api.updateBusinessSettings(data)),
     importLegacyBusinessSettings: data => settingsOperation(() => api.importLegacyBusinessSettings(data)),

@@ -4,7 +4,7 @@
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
   const financialKinds = ['PURCHASE', 'EDIT_PURCHASE', 'CANCEL_PURCHASE', 'EXPENSE', 'CANCEL_EXPENSE', 'SUPPLIER_PAYMENT', 'CUSTOMER_PAYMENT_VOID', 'SUPPLIER_PAYMENT_VOID', 'CASH_MANUAL'];
-  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, displayedCashSessions = [], salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0, historyLoadFlight = null, historyLoadDirty = false;
+  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, displayedCashSessions = [], salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0, historyLoadFlight = null;
   const state = () => window.PosRuntime.salesInput();
   const scope = () => { const s = state(); return 'posOperation_' + encodeURIComponent(window.POS_API_BASE_URL) + '_' + s.businessId + '_' + s.userId; };
   function pending() {
@@ -19,11 +19,13 @@
   function notice(text = '') { el('saleOperationMessage').textContent = text; el('saleOperationMessage').classList.toggle('hidden', !text); el('recoverSaleBtn').classList.toggle('hidden', !text); }
   function showPending() { if (pending()) notice('Hay una operación cuyo resultado debe comprobarse antes de volver a cobrar. Requiere conexión.'); else notice(); }
   function api(action) { return window.PosConnected.inventoryOperation(action); }
-  async function pages(method) {
+  const navigationIsCurrent = navigation => !navigation || window.PosConnected.isNavigationCurrent(navigation);
+  async function pages(method, navigation) {
     return api(async (client, business) => {
       const list = []; let maxId = null;
       for (let offset = 0; ; offset += 100) {
         const values = await client[method](offset, maxId);
+        if (!navigationIsCurrent(navigation)) return list;
         if (!maxId && values.length) maxId = values[0].id;
         if (values.some(value => value.businessId !== business)) throw new window.PosApiError('INVALID_RESPONSE');
         list.push(...values); if (values.length < 100) return list;
@@ -66,16 +68,17 @@
       const node = el(id); if (node) node.textContent = 'Cargando…';
     }
   }
-  async function refreshHistorySummary(sales = historySales, reportRequest = null) {
+  async function refreshHistorySummary(sales = historySales, reportRequest = null, navigation) {
     const request = ++historySummaryRequest;
     const range = window.PosPeriodFilters?.range('history') || { from: '', until: '' };
-    if (range.error) { setHistoryStatus(range.error); return; }
+    if (range.error) { setHistoryStatus(range.error); return false; }
     setHistoryStatus('Actualizando indicadores conectados…');
     try {
       const summaryResult = await (reportRequest || api(client => client.connectedReport(historyBound(range.from), historyBound(range.until, true))));
       if (summaryResult?.failure) throw summaryResult.failure;
+      if (!navigationIsCurrent(navigation)) return false;
       const report = summaryResult?.report || summaryResult;
-      if (request !== historySummaryRequest) return;
+      if (request !== historySummaryRequest) return false;
       const now = new Date();
       const todayTotal = sales.reduce((sum, sale) => {
         const date = new Date(sale.fechaTS);
@@ -96,20 +99,24 @@
       renderHistoryList('lowStockList', lowStock, 'Sin alertas.', product => `${product.name}: ${product.stock} uds.`);
       renderHistoryList('topSellingList', report.sales.topProducts.slice(0, 5), 'Sin datos.', product => `${product.name}: ${Number(product.quantity)} uds.`);
       setHistoryStatus('');
+      return true;
     } catch (error) {
-      if (request !== historySummaryRequest) return;
+      if (!navigationIsCurrent(navigation)) return false;
+      if (request !== historySummaryRequest) return false;
       for (const id of ['summaryTodaySales', 'summaryTotalSales', 'summaryCashSales', 'summaryCardSales', 'summaryTransferSales', 'summaryCreditSales', 'summaryTotalExpenses']) { const node = el(id); if (node) node.textContent = '—'; }
       renderHistoryList('lowStockList', [], 'No disponible sin autorización de Reportes.', value => value);
       renderHistoryList('topSellingList', [], 'No disponible sin autorización de Reportes.', value => value);
       setHistoryStatus(error.code === 'MODULE_FORBIDDEN' ? 'Los indicadores requieren autorización para Reportes. El historial de ventas sigue disponible.' : window.PosMessages.fromError(error, 'No se pudieron cargar los indicadores. Actualiza la pantalla e inténtalo de nuevo.'));
       if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
+      return error.code === 'MODULE_FORBIDDEN';
     }
   }
-  async function loadHistoryOnce() {
+  async function loadHistoryOnce(navigation) {
     const range = window.PosPeriodFilters?.range('history') || { from: '', until: '' };
     const reportRequest = range.error ? null : api(client => client.connectedReport(historyBound(range.from), historyBound(range.until, true)))
       .then(report => ({ report }), failure => ({ failure }));
-    const [salesPage, historicalOrders] = await Promise.all([pages('sales'), api(client => client.historicalOrders())]);
+    const [salesPage, historicalOrders] = await Promise.all([pages('sales', navigation), api(client => client.historicalOrders())]);
+    if (!navigationIsCurrent(navigation)) return false;
     const rows = salesPage.map(mappedSale).reverse();
     historySales = rows;
     window.PosRuntime.setSales(rows);
@@ -129,19 +136,27 @@
         }
       }
     }
-    await refreshHistorySummary(rows, reportRequest);
+    const summaryLoaded = await refreshHistorySummary(rows, reportRequest, navigation);
+    return summaryLoaded !== false;
   }
-  async function loadHistory({ refresh = false } = {}) {
-    if (historyLoadFlight) { if (refresh) historyLoadDirty = true; return historyLoadFlight; }
-    const flight = (async () => {
-      do { historyLoadDirty = false; await loadHistoryOnce(); } while (historyLoadDirty);
+  let historyLoadNavigationId = null;
+  async function loadHistory({ refresh = false, navigation } = {}) {
+    if (historyLoadFlight && (!navigation || historyLoadNavigationId === navigation.id)) { if (refresh) historyLoadFlight.dirty = true; return historyLoadFlight.promise; }
+    const flight = { navigationId: navigation?.id ?? null, dirty: false, promise: null };
+    flight.promise = (async () => {
+      let result;
+      do { flight.dirty = false; result = await loadHistoryOnce(navigation); } while (flight.dirty && navigationIsCurrent(navigation));
+      return result;
     })();
     historyLoadFlight = flight;
-    try { return await flight; }
+    historyLoadNavigationId = flight.navigationId;
+    try { return await flight.promise; }
     finally { if (historyLoadFlight === flight) historyLoadFlight = null; }
   }
-  async function refreshNextInvoiceNumber() {
-    nextInvoiceNumber = await api(client => client.nextInvoiceNumber());
+  async function refreshNextInvoiceNumber(navigation) {
+    const numberValue = await api(client => client.nextInvoiceNumber());
+    if (!navigationIsCurrent(navigation)) return false;
+    nextInvoiceNumber = numberValue;
     const number = el('currentSaleNumber'); if (number) number.textContent = nextInvoiceNumber;
     return nextInvoiceNumber;
   }
@@ -520,24 +535,28 @@
     const range = window.PosPeriodFilters?.range('cash');
     for (const id of ['cajaMovimientosBody', 'cajaHistorialBody', 'cajaOperacionesBody', 'cajaPendientesHistoricosBody']) window.PosPeriodFilters?.filterTable(id, range);
   }
-  async function load(view) {
+  async function load(view, { navigation } = {}) {
+    if (!navigationIsCurrent(navigation)) return false;
     if (activeScope !== scope()) { activeScope = scope(); quote = quoteInput = null; }
     showPending();
     if (view === 'salesView') {
-      const [settings] = await Promise.all([
+      const [settings, invoiceLoaded, creditClientsLoaded] = await Promise.all([
         api(client => client.salesFlow()),
-        refreshNextInvoiceNumber(),
-        window.PosClients.loadCreditClients()
+        refreshNextInvoiceNumber(navigation),
+        window.PosClients.loadCreditClients(undefined, navigation)
       ]);
+      if (!navigationIsCurrent(navigation) || invoiceLoaded === false || creditClientsLoaded === false) return false;
       salesFlow = settings.salesFlow; renderCheckoutMode();
+      return true;
     }
-    if (view === 'clientsView') await window.PosClients.load(view);
-    if (view === 'historyView') { markHistorySummaryLoading(); await loadHistory(); }
+    if (view === 'clientsView') return window.PosClients.load(view, null, navigation);
+    if (view === 'historyView') { markHistorySummaryLoading(); return loadHistory({ navigation }); }
     if (view === 'cajaView') {
       cashLoadStatus('Cargando el historial de Caja…', true);
       clearCashDataForRetry();
       try {
-        const [sessions, overview] = await Promise.all([pages('cashSessions'), api(client => client.cashOverview())]);
+        const [sessions, overview] = await Promise.all([pages('cashSessions', navigation), api(client => client.cashOverview())]);
+        if (!navigationIsCurrent(navigation)) return false;
         currentCash = sessions.find(value => value.status === 'OPEN') || null;
         displayedCashSessions = sessions.map(mappedCash);
         window.PosRuntime.setCash(displayedCashSessions);
@@ -545,6 +564,7 @@
         cashLoadStatus();
         return true;
       } catch (failure) {
+        if (!navigationIsCurrent(navigation)) return false;
         clearCashDataForRetry();
         cashLoadStatus(window.PosMessages.fromError(failure, 'No se pudo cargar Caja. Revisa la conexión e inténtalo nuevamente.'));
         if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);

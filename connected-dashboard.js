@@ -18,7 +18,7 @@
   const movementLabel = value => ({ SALE: 'Venta', CUSTOMER_PAYMENT: 'Abono de cliente', REVERSAL: 'Devolución', MANUAL_ENTRY: 'Entrada manual', MANUAL_EXIT: 'Salida manual', EXPENSE: 'Gasto', SUPPLIER_PAYMENT: 'Pago a proveedor' })[value] || 'Movimiento por revisar';
   const statusLabel = value => ({ COMPLETED: 'Completada', CANCELLED: 'Anulada', CONFIRMED: 'Confirmado', PENDING: 'Pendiente', VOID: 'Anulado', POSTED: 'Registrado', PARTIAL: 'Parcial', PAID: 'Pagada', OPEN: 'Pendiente', OVERDUE: 'Vencida', PENDING_CONFIRMATION: 'Por confirmar' })[value] || 'Por revisar';
   const saleStatusLabel = row => row.isHistorical ? 'Histórica · ' + statusLabel(row.status) : statusLabel(row.status);
-  let currentData = null, requestId = 0, loadFlight = null, loadDirty = false;
+  let currentData = null, requestId = 0, loadFlight = null;
 
   function apiRange() {
     const range = window.PosDashboardPeriod?.range() || { from: '', until: '' };
@@ -104,33 +104,37 @@
     const note = el('connectedDashboardStatus');
     if (note && data.sales.historyLimited) note.textContent += ` Se muestran las ${data.sales.history.length} ventas más recientes; los indicadores incluyen el período completo.`;
   }
-  async function loadOnce() {
+  const navigationIsCurrent = navigation => !navigation || window.PosConnected.isNavigationCurrent(navigation);
+  async function loadOnce(navigation) {
+    if (!navigationIsCurrent(navigation)) return false;
     const current = ++requestId, status = el('dashboardStatus');
     try {
       currentData = null;
       if (status) { status.textContent = 'Cargando dashboard…'; status.classList.remove('hidden'); }
       const range = apiRange();
       const data = await window.PosConnected.inventoryOperation(client => client.connectedReport(range.from, range.until));
-      if (current !== requestId) return false;
+      if (current !== requestId || !navigationIsCurrent(navigation)) return false;
       render(data);
       if (status) status.classList.add('hidden');
       return true;
     } catch (failure) {
-      if (current !== requestId) return false;
+      if (current !== requestId || !navigationIsCurrent(navigation)) return false;
       if (status) { status.textContent = window.PosMessages.fromError(failure, 'No se pudo cargar el resumen del negocio. Actualiza la pantalla e inténtalo de nuevo.'); status.classList.remove('hidden'); }
       if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
       return false;
     }
   }
-  async function load({ refresh = false } = {}) {
-    if (loadFlight) { if (refresh) loadDirty = true; return loadFlight; }
-    const flight = (async () => {
+  async function load({ refresh = false, navigation } = {}) {
+    if (!navigationIsCurrent(navigation)) return false;
+    if (loadFlight && (!navigation || loadFlight.navigationId === navigation.id)) { if (refresh) loadFlight.dirty = true; return loadFlight.promise; }
+    const flight = { navigationId: navigation?.id ?? null, dirty: false, promise: null };
+    flight.promise = (async () => {
       let result;
-      do { loadDirty = false; result = await loadOnce(); } while (loadDirty);
+      do { flight.dirty = false; result = await loadOnce(navigation); } while (flight.dirty && navigationIsCurrent(navigation));
       return result;
     })();
     loadFlight = flight;
-    try { return await flight; }
+    try { return await flight.promise; }
     finally { if (loadFlight === flight) loadFlight = null; }
   }
   function exportSheets() {

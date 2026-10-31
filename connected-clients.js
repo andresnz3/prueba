@@ -16,11 +16,13 @@
     node.textContent = window.PosMessages.text(text, 'No se pudo completar la solicitud. Inténtalo nuevamente.'); node.className = 'message ' + kind;
     node.classList.toggle('hidden', !text);
   }
-  async function allPages(method, q = '') {
+  const navigationIsCurrent = navigation => !navigation || window.PosConnected.isNavigationCurrent(navigation);
+  async function allPages(method, q = '', navigation) {
     return api(async client => {
       const result = [];
       for (let offset = 0; offset < 5000; offset += 100) {
         const page = await client[method](offset, q);
+        if (!navigationIsCurrent(navigation)) return result;
         result.push(...page);
         if (page.length < 100) return result;
       }
@@ -75,7 +77,7 @@
       actions.append(button); row.append(actions); body.append(row);
     }
   }
-  async function load(view = 'clientsView', q = null) {
+  async function load(view = 'clientsView', q = null, navigation) {
     if (!connectedMode || view !== 'clientsView') return;
     const searchInput = el('clientSearchInput');
     const isUserSearching = document.activeElement === searchInput;
@@ -87,13 +89,15 @@
     const request = ++pageRequest; message('Cargando clientes y cuentas por cobrar...', 'info');
     el('connectedClientsControls')?.classList.remove('hidden');
     try {
-      const [nextClients, nextReceivables] = await Promise.all([allPages('clients', query), allPages('receivables', query)]);
-      if (request !== pageRequest) return;
-      if (isUserSearching && query !== (searchInput?.value.trim() || '')) return;
+      const [nextClients, nextReceivables] = await Promise.all([allPages('clients', query, navigation), allPages('receivables', query, navigation)]);
+      if (request !== pageRequest || !navigationIsCurrent(navigation)) return false;
+      if (isUserSearching && query !== (searchInput?.value.trim() || '')) return false;
       clients = nextClients; receivables = nextReceivables;
       renderClients(); renderReceivables(); message('');
       if (isUserSearching && !selectedClientSuggestionId) clientAutocomplete?.refresh();
-    } catch (error) { if (request === pageRequest) message(window.PosMessages.fromError(error, 'No se pudieron cargar los clientes y sus saldos. Actualiza la pantalla e inténtalo de nuevo.'), 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
+      return true;
+    } catch (error) { if (!navigationIsCurrent(navigation)) return false; if (request === pageRequest) message(window.PosMessages.fromError(error, 'No se pudieron cargar los clientes y sus saldos. Actualiza la pantalla e inténtalo de nuevo.'), 'error'); if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); }
+    return false;
   }
   function fillCreditSelect(values, selected) {
     const select = el('creditClientSelect'); if (!select) return;
@@ -109,17 +113,19 @@
     el('creditDays').value = chosen ? String(chosen.creditDays) : '30';
     if (document.activeElement === el('creditClientSearch')) creditAutocomplete?.refresh();
   }
-  async function loadCreditClients(selectedId) {
+  async function loadCreditClients(selectedId, navigation) {
     const explicitSelection = selectedId !== undefined && selectedId !== null && String(selectedId) !== '';
     const request = ++creditRequest, selected = explicitSelection ? String(selectedId) : el('creditClientSelect')?.value;
     try {
-      const values = await allPages('creditClients');
-      if (request !== creditRequest) return;
+      const values = await allPages('creditClients', '', navigation);
+      if (request !== creditRequest || !navigationIsCurrent(navigation)) return false;
       const current = values.find(client => client.id === String(selected) && client.active);
       const keepSelection = explicitSelection || (current && normalize(current.name) === normalize(el('creditClientSearch')?.value));
       fillCreditSelect(values, keepSelection ? selected : '');
+      return true;
     }
-    catch (error) { if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else window.showAlert(window.PosMessages.fromError(error, 'No se pudo cargar la lista de clientes. Actualiza la pantalla e inténtalo de nuevo.')); }
+    catch (error) { if (!navigationIsCurrent(navigation)) return false; if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error); else if (!navigation) window.showAlert(window.PosMessages.fromError(error, 'No se pudo cargar la lista de clientes. Actualiza la pantalla e inténtalo de nuevo.')); }
+    return false;
   }
   function edit(id) {
     const client = clients.find(item => item.id === String(id)); if (!client) return;

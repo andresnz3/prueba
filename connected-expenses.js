@@ -48,21 +48,25 @@
     if (pageLabel) pageLabel.textContent = count ? `Mostrando ${offset + 1}–${Math.min(offset + 100, count)} de ${count} en el período` : 'Sin gastos en el período';
   }
 
-  async function load(view = 'gastosView') {
+  const navigationIsCurrent = navigation => !navigation || window.PosConnected.isNavigationCurrent(navigation);
+  async function load(view = 'gastosView', { navigation } = {}) {
     if (view !== 'gastosView') return true;
+    if (!navigationIsCurrent(navigation)) return false;
     const current = ++requestId;
     try {
       status('Cargando gastos…');
       const result = await window.PosConnected.inventoryOperation(async client => {
         const first = await client.expenses(0);
+        if (!navigationIsCurrent(navigation)) return { expenses: [], summary: first.summary };
         const expenses = [...first.expenses];
         for (let pageOffset = 100; pageOffset < first.summary.count; pageOffset += 100) {
           const page = await client.expenses(pageOffset);
+          if (!navigationIsCurrent(navigation)) return { expenses: [], summary: first.summary };
           expenses.push(...page.expenses);
         }
         return { expenses, summary: first.summary };
       });
-      if (current !== requestId) return false;
+      if (current !== requestId || !navigationIsCurrent(navigation)) return false;
       rows = result.expenses;
       summary = result.summary;
       offset = 0;
@@ -71,7 +75,7 @@
       el('connectedExpenseStatus')?.classList.add('hidden');
       return true;
     } catch (failure) {
-      if (current !== requestId) return false;
+      if (current !== requestId || !navigationIsCurrent(navigation)) return false;
       status(window.PosMessages.fromError(failure, 'No se pudieron cargar los gastos. Actualiza la pantalla e inténtalo de nuevo.'), true);
       if (failure.code === 'INVALID_SESSION') window.PosConnected.handleError(failure);
       return false;
