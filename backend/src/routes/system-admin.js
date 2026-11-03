@@ -17,11 +17,9 @@ function systemAdminRoutes({ repo, config }, imageStore, localLicenseConfig = {}
     const allowed = service.isSystemAdmin(req.auth);
     if (!allowed && !config.production) {
       console.warn('[system-admin] access denied', {
-        username: req.auth?.username ?? null,
         role: req.auth?.role ?? null,
         business_id: req.auth?.business_id ?? null,
         businessId: req.auth?.businessId ?? null,
-        usernameAllowed: req.auth?.username === 'andres',
         roleAllowed: req.auth?.role === 'ADMIN',
         businessAllowed: String(req.auth?.business_id) === '1'
       });

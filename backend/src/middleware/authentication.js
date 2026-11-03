@@ -1,5 +1,6 @@
 'use strict';
 const { cookies, hashToken, equal, validLoginCsrf, sessionCsrf, verifySupportToken } = require('../services/tokens');
+const { isSystemAdmin } = require('../services/system-admin-access');
 const { httpError } = require('./errors');
 const { publicUser } = require('../repositories/auth');
 function authMiddleware(repo, config) {
@@ -15,7 +16,7 @@ function authMiddleware(repo, config) {
     req.ownerAuth = owner;
     req.auth = owner;
     const hasSupportCookie = Boolean(cookies(req)[config.supportCookieName]);
-    if (hasSupportCookie && !(owner.username === 'andres' && owner.role === 'ADMIN' && String(owner.business_id) === '1')) {
+    if (hasSupportCookie && !isSystemAdmin(owner)) {
       res.clearCookie(config.supportCookieName, { httpOnly: true, secure: config.production, sameSite: config.sameSite, path: '/' });
     }
     next();
@@ -27,8 +28,7 @@ function authMiddleware(repo, config) {
     const token = cookies(req)[config.supportCookieName];
     if (!token) return next();
     const claims = verifySupportToken(config.secret, token);
-    const systemOwner = owner.username === 'andres' && owner.role === 'ADMIN' && String(owner.business_id) === '1';
-    if (!systemOwner || !claims || claims.ownerSessionId !== String(owner.session_id) || claims.ownerUserId !== String(owner.user_id) || claims.ownerBusinessId !== String(owner.business_id)) {
+    if (!isSystemAdmin(owner) || !claims || claims.ownerSessionId !== String(owner.session_id) || claims.ownerUserId !== String(owner.user_id) || claims.ownerBusinessId !== String(owner.business_id)) {
       res.clearCookie(config.supportCookieName, { httpOnly: true, secure: config.production, sameSite: config.sameSite, path: '/' });
       throw httpError(401, 'INVALID_SUPPORT_SESSION');
     }

@@ -23,7 +23,7 @@
   let expiryTimer, grantTimer, busy = false, passwordUserId = null, userPage = 0;
   function message(id, text) { el(id).textContent = window.PosMessages.text(text, 'No se pudo completar la solicitud. Inténtalo nuevamente.'); el(id).classList.remove('hidden'); }
   function clearPasswords() { for (const id of ['loginPassword', 'gestorPassword', 'newUserPassword', 'changedUserPassword']) el(id).value = ''; }
-  const isSystemAdmin = () => Boolean(identity && identity.username === 'andres' && identity.role === 'ADMIN' && String(identity.businessId) === '1');
+  const isSystemAdmin = () => Boolean(identity && identity.role === 'ADMIN' && String(identity.businessId) === '1');
   const effectiveBusinessId = () => supportContext?.businessId || ownerBusinessId;
   function syncSupportBanner(support) {
     const banner = el('supportSessionBanner');
@@ -41,7 +41,10 @@
     return allowed;
   }
   function canAccessSystemAdmin() { return isSystemAdmin() && systemAdminReady; }
-  function canView(view) { return Boolean(identity && (view === 'salesView' || view === 'configView' || (view === 'systemAdminView' && canAccessSystemAdmin()) || identity.role === 'ADMIN' || (grant?.view === view && grant.until > Date.now()))); }
+  function canView(view) {
+    if (view === 'systemAdminView') return canAccessSystemAdmin();
+    return Boolean(identity && (view === 'salesView' || view === 'configView' || identity.role === 'ADMIN' || (grant?.view === view && grant.until > Date.now())));
+  }
   function expire(text = 'La sesión venció o fue revocada. Inicia sesión nuevamente.') {
     generation++; navigationSequence++; pendingNavigationRequestId = null; pendingNavigationTarget = null; busy = false; clearPendingNavigationMask(false); identity = null; supportContext = null; systemAdminDeleteBusiness = null; systemAdminDeleteTrigger = null; systemAdminDeletePreview = null; systemAdminDeletePreviewToken++; systemAdminPaymentBusiness = null; systemAdminPaymentTrigger = null; if (ownerBusinessId) window.PosRuntime.setEffectiveBusinessId(ownerBusinessId); systemAdminReady = false; systemAdminBusinesses = []; systemAdminUsers = []; systemAdminUserCapacity = null; systemAdminBilling = null; systemAdminLicenses = []; systemAdminSelectedBusinessId = ''; systemAdminMigrationTargetId = ''; clearIssuedLocalLicense(); window.PosMigrationPreview.reset(); window.PosRuntime.setUser(null); grant = null; pendingView = null; activeView = null;
     for (const state of [...moduleLoadStates.values()]) clearModuleLoadState(state);

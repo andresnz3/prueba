@@ -1,5 +1,6 @@
 'use strict';
 const { httpError } = require('../middleware/errors');
+const { isSystemAdmin } = require('../services/system-admin-access');
 const publicUser = row => ({ id: String(row.user_id ?? row.id), businessId: String(row.business_id), username: row.username, fullName: row.full_name, role: row.role, active: Boolean(row.active), ...(typeof row.business_name === 'string' ? { businessName: row.business_name } : {}), ...(typeof row.business_status === 'string' ? { businessStatus: row.business_status } : {}), ...(row.plan !== undefined ? { plan: row.plan } : {}) });
 async function rows(db, sql, values) { return (await db.execute(sql, values))[0]; }
 async function transaction(pool, work) {
@@ -39,7 +40,7 @@ function createAuthRepository(pool, config) {
       if (auth.support) {
         const actor = auth.support.actor;
         const [owner] = await rows(db, selectSession + 'AND s.business_id = ? AND s.id = ? AND s.token_hash = ? FOR UPDATE', [config.absoluteSeconds, actor.business_id, actor.session_id, actor.token_hash]);
-        if (!owner || owner.username !== 'andres' || owner.role !== 'ADMIN' || String(owner.business_id) !== '1') throw httpError(401, 'SUPPORT_OWNER_SESSION_INVALID');
+        if (!owner || !isSystemAdmin(owner)) throw httpError(401, 'SUPPORT_OWNER_SESSION_INVALID');
         try { await lockBusiness(db, auth.business_id); }
         catch (error) { if (error.publicCode === 'INVALID_SESSION') throw httpError(403, 'SUPPORT_BUSINESS_UNAVAILABLE'); throw error; }
         const [current] = await rows(db, selectSession + 'AND s.business_id = ? AND s.id = ? AND s.token_hash = ? AND u.role = \'ADMIN\' FOR UPDATE', [config.absoluteSeconds, auth.business_id, auth.session_id, auth.token_hash]);
