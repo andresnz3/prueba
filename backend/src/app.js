@@ -9,7 +9,9 @@ function createApp({ config, checkDatabase, authentication, databaseDiagnostics 
   if (typeof databaseDiagnostics === 'function') app.locals.databaseDiagnostics = databaseDiagnostics;
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxyHops ?? 0);
-  app.use(helmet());
+  // Caddy owns HSTS at the public HTTPS edge; do not send a duplicate from
+  // the API container (the private SSH recovery listener remains HTTP).
+  app.use(helmet({ strictTransportSecurity: false }));
   app.use(cors({
     origin(origin, callback) {
       if (!origin) return callback(null, false);
