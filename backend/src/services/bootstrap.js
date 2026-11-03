@@ -1,6 +1,7 @@
 'use strict';
 const { hashPassword } = require('./passwords');
 const { rows } = require('../repositories/auth');
+const { seedDefaultProductCategories } = require('./product-category-values');
 async function bootstrap(pool, input, databaseName) {
   const db = await pool.getConnection();
   const lock = 'pos-bootstrap:' + require('./tokens').hashToken(databaseName).slice(0, 40);
@@ -15,6 +16,7 @@ async function bootstrap(pool, input, databaseName) {
     const hash = await hashPassword(input.password);
     const business = await rows(db, 'INSERT INTO businesses (name) VALUES (?)', [input.businessName]);
     const businessId = String(business.insertId);
+    await seedDefaultProductCategories(db, businessId);
     const user = await rows(db, 'INSERT INTO users (business_id, username, full_name, password_hash, role, active) VALUES (?, ?, ?, ?, \'ADMIN\', TRUE)', [businessId, input.username, input.fullName, hash]);
     await rows(db, 'INSERT INTO audit_logs (business_id, user_id, action, entity, entity_id, details) VALUES (?, ?, \'BOOTSTRAP\', \'businesses\', ?, ?)', [businessId, String(user.insertId), businessId, JSON.stringify({ procedure: 'terminal' })]);
     await db.commit();
