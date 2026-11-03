@@ -25,8 +25,8 @@ test('protected database requires a separate explicit switch', () => {
   assert.equal(parseArguments(['--apply', '--target', 'pos_new_shop', '--confirm-target', 'pos_new_shop', '--install-base-schema']).installBase, true);
 });
 
-test('migration catalog covers 001 through 020 in dependency order', () => {
-  assert.deepEqual(MIGRATIONS.map(migration => migration.version), ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012', '013', '014', '015', '016', '017', '018', '019', '020']);
+test('migration catalog covers 001 through 021 in dependency order', () => {
+  assert.deepEqual(MIGRATIONS.map(migration => migration.version), ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012', '013', '014', '015', '016', '017', '018', '019', '020', '021']);
   assert.deepEqual(MIGRATIONS.find(migration => migration.version === '002').requires, ['001']);
   assert.deepEqual(MIGRATIONS.find(migration => migration.version === '005').requires, ['002', '003']);
   assert.deepEqual(MIGRATIONS.find(migration => migration.version === '010').requires, ['004', '008']);
@@ -40,6 +40,11 @@ test('migration catalog covers 001 through 020 in dependency order', () => {
   assert.deepEqual(MIGRATIONS.find(migration => migration.version === '018').requires, ['017']);
   assert.deepEqual(MIGRATIONS.find(migration => migration.version === '019').requires, ['018']);
   assert.deepEqual(MIGRATIONS.find(migration => migration.version === '020').requires, ['019']);
+  assert.deepEqual(MIGRATIONS.find(migration => migration.version === '021').requires, ['020']);
+  const sql021 = readFileSync(resolve(__dirname, '../../database/migrations/021_business_product_categories.sql'), 'utf8');
+  assert.match(sql021, /UNIQUE KEY uq_product_categories_business_name/);
+  assert.match(sql021, /FOREIGN KEY \(business_id\) REFERENCES businesses/);
+  assert.match(sql021, /INSERT IGNORE INTO product_categories/);
   const sql020 = readFileSync(resolve(__dirname, '../../database/migrations/020_local_license_business_identity.sql'), 'utf8');
   assert.match(sql020, /local_business_id_hash CHAR\(64\).*NULL/s);
   assert.doesNotMatch(sql020, /\b(?:UPDATE|DELETE|DROP)\b/i);

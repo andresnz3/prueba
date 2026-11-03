@@ -310,9 +310,9 @@ function createSystemAdminService(repo, options = {}) {
     const soon = 7;
     const businesses = await repo.rows(repo.pool,
       `SELECT b.id, b.name, b.status, ` + migrationStateSelect + ` AS migration_state, COUNT(DISTINCT u.id) AS user_count,
-        COUNT(DISTINCT CASE WHEN u.active = TRUE AND NOT (u.business_id = 1 AND u.username = 'andres' AND u.role = 'ADMIN') THEN u.id END) AS active_user_count,
-        COUNT(DISTINCT CASE WHEN u.active = FALSE AND NOT (u.business_id = 1 AND u.username = 'andres' AND u.role = 'ADMIN') THEN u.id END) AS inactive_user_count,
-        COUNT(DISTINCT CASE WHEN u.active = TRUE AND u.role = 'ADMIN' AND NOT (u.business_id = 1 AND u.username = 'andres' AND u.role = 'ADMIN') THEN u.id END) AS active_admin_count,
+        COUNT(DISTINCT CASE WHEN u.active = TRUE AND NOT (u.business_id = 1 AND u.role = 'ADMIN') THEN u.id END) AS active_user_count,
+        COUNT(DISTINCT CASE WHEN u.active = FALSE AND NOT (u.business_id = 1 AND u.role = 'ADMIN') THEN u.id END) AS inactive_user_count,
+        COUNT(DISTINCT CASE WHEN u.active = TRUE AND u.role = 'ADMIN' AND NOT (u.business_id = 1 AND u.role = 'ADMIN') THEN u.id END) AS active_admin_count,
         s.plan_code, s.next_due_date,
         (SELECT p.payment_date FROM business_subscription_payments p WHERE p.business_id = b.id ORDER BY p.payment_date DESC, p.id DESC LIMIT 1) AS last_payment_date,
         (SELECT p.amount FROM business_subscription_payments p WHERE p.business_id = b.id ORDER BY p.payment_date DESC, p.id DESC LIMIT 1) AS last_payment_amount
@@ -684,7 +684,7 @@ function createSystemAdminService(repo, options = {}) {
       if (!business) throw httpError(404, 'USER_NOT_FOUND');
       const [user] = await repo.rows(db, 'SELECT id, business_id, username, full_name, role, active FROM users WHERE business_id = ? AND id = ? FOR UPDATE', [identity.business_id, userId]);
       if (!user) throw httpError(404, 'USER_NOT_FOUND');
-      if (!active && user.username === 'andres' && user.role === 'ADMIN' && String(user.business_id) === '1') throw httpError(409, 'SYSTEM_ADMIN_PROTECTED');
+      if (!active && isSystemAdmin(user)) throw httpError(409, 'SYSTEM_ADMIN_PROTECTED');
       if (Boolean(user.active) !== active) {
         if (active) {
           const plan = await businessPlan(repo, db, user.business_id, { lock: true });

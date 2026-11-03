@@ -472,7 +472,7 @@
         const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
       }
       const actions = document.createElement('td');
-      if (user.username === 'andres' && user.role === 'ADMIN' && user.businessId === '1') {
+      if (user.role === 'ADMIN' && String(user.businessId) === '1') {
         const protectedLabel = document.createElement('span'); protectedLabel.className = 'system-admin-help'; protectedLabel.textContent = 'Cuenta protegida'; actions.append(protectedLabel);
       } else {
         const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-secondary'; button.textContent = user.active ? 'Desactivar' : 'Activar';

@@ -1294,11 +1294,9 @@
                     <div class="form-group" style="flex: 1; min-width: 130px;">
                         <label for="prodCategory">Categoría</label>
                         <select id="prodCategory" required>
-                            <option value="Abarrotes">Abarrotes</option>
-                            <option value="Bebidas">Bebidas</option>
-                            <option value="Snacks">Snacks</option>
-                            <option value="Limpieza">Limpieza</option>
+                            <option value="" disabled selected>Selecciona una categoría</option>
                         </select>
+                        <button type="button" id="manageProductCategoriesBtn" class="btn btn-secondary category-management-button" aria-haspopup="dialog" aria-controls="productCategoriesModal" hidden>Administrar categorías</button>
                     </div>
                     <div class="form-group" style="flex: 1; min-width: 130px;"><label for="prodSupplier">Proveedor (Opcional)</label><select id="prodSupplier"><option value="">-- Sin especificar --</option></select></div>
                 </div>
@@ -1563,6 +1561,20 @@
     <script src="local-auth.js"></script>
     <script src="local-license-config.js"></script>
     <script src="local-license.js"></script>
+    <div id="productCategoriesModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="productCategoriesTitle">
+        <div class="modal-overlay"></div>
+        <div class="modal-card product-categories-card">
+            <h2 id="productCategoriesTitle">Categorías de productos</h2>
+            <p class="product-categories-description">Las categorías se guardan únicamente para este negocio. No se eliminan para conservar la clasificación del historial.</p>
+            <form id="productCategoryForm" class="product-category-create-form">
+                <div class="form-group"><label for="newProductCategoryName">Nueva categoría</label><input id="newProductCategoryName" type="text" maxlength="100" autocomplete="off" required></div>
+                <button id="addProductCategoryBtn" type="submit" class="btn btn-primary">Agregar categoría</button>
+            </form>
+            <p id="productCategoryStatus" class="product-category-status" role="status" aria-live="polite"></p>
+            <div id="productCategoryRows" class="product-category-list" aria-label="Categorías del negocio"></div>
+            <div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cerrar</button></div>
+        </div>
+    </div>
     <script src="app.js"></script>
     <script src="connected-inventory.js"></script>
     <script src="connected-sales.js"></script>

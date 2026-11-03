@@ -25,6 +25,7 @@ db.version(9).stores({
 });
 db.version(10).stores({ saleOrders: "id, business_id, status, createdAt" });
 db.version(11).stores({ localAuth: "key" });
+db.version(12).stores({ product_categories: 'id, business_id, normalized_name, &[business_id+normalized_name]' });
 return db;
 }
 let localDB = connectedMode ? null : createPosDatabase('POS_OfflineDB');
@@ -140,6 +141,19 @@ if (!connectedMode) {
     LOCAL_LICENSE_BUSINESS_ID = ensureLocalLicenseBusinessIdentity();
 }
 
+const DEFAULT_PRODUCT_CATEGORIES = ['Abarrotes', 'Bebidas', 'Snacks', 'Limpieza'];
+function normalizeProductCategory(value) { return String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+function validateProductCategory(value) {
+    if (typeof value !== 'string' || Array.from(value).some(character => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f)) throw new Error('CATEGORY_INVALID');
+    const name = value.trim().replace(/\s+/g, ' '), normalizedName = normalizeProductCategory(name);
+    if (!name || [...name].length > 100 || [...normalizedName].length > 100 || !normalizedName) throw new Error('CATEGORY_INVALID');
+    return { name, normalizedName };
+}
+function newLocalProductCategoryId() {
+    const id = createLocalBusinessId();
+    if (!id) throw new Error('CATEGORY_ID_UNAVAILABLE');
+    return id;
+}
 let reporteDesdeTS = null, reporteHastaTS = null;
 let localDataReady = false;
 
@@ -387,6 +401,8 @@ async function initApp() {
     }
     try {
         products = await localDB.products.toArray() || [];
+        await ensureLocalProductCategories();
+        await refreshProductCategoryOptions();
         clients = await localDB.clients.toArray() || [];
         suppliers = await localDB.suppliers.toArray() || [];
         salesHistory = await localDB.sales.toArray() || [];
@@ -422,6 +438,95 @@ async function initApp() {
         showLocalDataLoadError();
         return false;
     }
+}
+
+function localProductCategoryBusinessId() { return String(DEFAULT_BUSINESS_ID); }
+function belongsToLocalProductCategoryBusiness(product) {
+    const id = String(product?.business_id ?? product?.businessId ?? '').trim().toLowerCase();
+    return !id || id === localProductCategoryBusinessId().toLowerCase() || id === LEGACY_LOCAL_BUSINESS_ID;
+}
+async function ensureLocalProductCategories() {
+    if (connectedMode || !localDB?.product_categories) return [];
+    const businessId = localProductCategoryBusinessId();
+    await localDB.transaction('rw', localDB.product_categories, async () => {
+        const stored = await localDB.product_categories.where('business_id').equals(businessId).toArray();
+        const names = new Set(stored.map(item => item.normalized_name));
+        const source = [...DEFAULT_PRODUCT_CATEGORIES, ...products.filter(belongsToLocalProductCategoryBusiness).map(item => item.category)];
+        for (const value of source) {
+            let category;
+            try { category = validateProductCategory(String(value || '')); } catch { continue; }
+            if (names.has(category.normalizedName)) continue;
+            try {
+                await localDB.product_categories.add({ id: newLocalProductCategoryId(), business_id: businessId, active: true, ...category });
+                names.add(category.normalizedName);
+            } catch (error) { if (error?.name !== 'ConstraintError') throw error; }
+        }
+    });
+    return localDB.product_categories.where('business_id').equals(businessId).sortBy('name');
+}
+async function localProductCategories() { return ensureLocalProductCategories(); }
+async function createLocalProductCategory(value) {
+    const category = validateProductCategory(value), businessId = localProductCategoryBusinessId();
+    try { await localDB.product_categories.add({ id: newLocalProductCategoryId(), business_id: businessId, active: true, ...category }); }
+    catch (error) { if (error?.name === 'ConstraintError') throw new Error('CATEGORY_EXISTS', { cause: error }); throw error; }
+    await registrarAuditoria('INVENTARIO', 'CREAR_CATEGORIA', `Creó la categoría "${category.name}"`);
+    return localDB.product_categories.where('business_id').equals(businessId).sortBy('name');
+}
+async function renameLocalProductCategory(id, value) {
+    const category = validateProductCategory(value), businessId = localProductCategoryBusinessId();
+    let previous, changed = [];
+    try {
+        await localDB.transaction('rw', localDB.product_categories, localDB.products, localDB.sync_queue, async () => {
+            previous = await localDB.product_categories.get(id);
+            if (!previous || previous.business_id !== businessId) throw new Error('CATEGORY_NOT_FOUND');
+            const duplicate = await localDB.product_categories.where('[business_id+normalized_name]').equals([businessId, category.normalizedName]).first();
+            if (duplicate && duplicate.id !== id) throw new Error('CATEGORY_EXISTS');
+            await localDB.product_categories.put({ ...previous, ...category });
+            const allProducts = await localDB.products.toArray();
+            changed = allProducts.filter(item => belongsToLocalProductCategoryBusiness(item) && normalizeProductCategory(item.category) === previous.normalized_name)
+                .map(item => ({ ...item, category: category.name }));
+            if (changed.length) {
+                await localDB.products.bulkPut(changed);
+                await localDB.sync_queue.bulkAdd(changed.map(item => ({ action: 'UPDATE', table_name: 'products', data: JSON.stringify(item), status: 'pending' })));
+            }
+        });
+    } catch (error) { if (error?.name === 'ConstraintError') throw new Error('CATEGORY_EXISTS', { cause: error }); throw error; }
+    const changedById = new Map(changed.map(item => [String(item.id), item]));
+    products = products.map(item => changedById.get(String(item.id)) || item);
+    actualizarTablaInventario(); actualizarCatalogo();
+    await registrarAuditoria('INVENTARIO', 'RENOMBRAR_CATEGORIA', `Renombró la categoría "${previous.name}" a "${category.name}"`);
+    return localProductCategories();
+}
+async function setLocalProductCategoryActive(id, active) {
+    const businessId = localProductCategoryBusinessId();
+    let category, changed = false;
+    await localDB.transaction('rw', localDB.product_categories, async () => {
+        category = await localDB.product_categories.get(id);
+        if (!category || category.business_id !== businessId) throw new Error('CATEGORY_NOT_FOUND');
+        if ((category.active !== false) === active) return;
+        await localDB.product_categories.put({ ...category, active });
+        changed = true;
+    });
+    if (changed) await registrarAuditoria('INVENTARIO', active ? 'ACTIVAR_CATEGORIA' : 'DESACTIVAR_CATEGORIA', `${active ? 'Activó' : 'Desactivó'} la categoría "${category.name}"`);
+    return localProductCategories();
+}
+async function refreshProductCategoryOptions(selected = document.getElementById('prodCategory')?.value || '', providedCategories = null) {
+    const allCategories = providedCategories || (connectedMode ? await window.PosInventory.productCategories() : await localProductCategories());
+    const categories = connectedMode ? allCategories : allCategories.filter(item => item.active !== false);
+    const select = document.getElementById('prodCategory');
+    if (!select) return allCategories;
+    select.replaceChildren();
+    const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.disabled = true; placeholder.textContent = 'Selecciona una categoría'; select.append(placeholder);
+    const found = categories.some(item => normalizeProductCategory(item.name) === normalizeProductCategory(selected));
+    const options = [...categories];
+    const inactiveSelection = !connectedMode && allCategories.some(item => item.active === false && normalizeProductCategory(item.name) === normalizeProductCategory(selected));
+    if (selected && !found) options.push({ id: 'legacy-category', name: selected, inactive: inactiveSelection });
+    for (const category of options) { const option = document.createElement('option'); option.value = category.name; option.textContent = category.inactive ? `${category.name} (inactiva)` : category.name; select.append(option); }
+    if (selected) {
+        const match = categories.find(item => normalizeProductCategory(item.name) === normalizeProductCategory(selected));
+        select.value = match?.name || selected;
+    } else if (categories.length) select.value = categories[0].name;
+    return allCategories;
 }
 function showLocalDataLoadError() {
     const message = document.getElementById("localDataLoadError");
@@ -510,6 +615,7 @@ function setLocalAuthScreen() {
 function enterLocalOwner(username) {
     if (!connectedMode && !localDataReady) { showLocalDataLoadError(); return; }
     currentUser = { username, displayName: username };
+    updateProductCategoryAdminVisibility();
     loginScreen?.classList.add("hidden");
     app?.classList.remove("hidden");
     const seller = document.getElementById("sellerName");
@@ -564,6 +670,7 @@ document.getElementById("localOwnerSetupForm")?.addEventListener("submit", async
             if (window.PosLocalAuth.status() !== 'missing') throw new Error('OWNER_ALREADY_CONFIGURED');
             await window.PosLocalAuth.save(prepared);
         });
+        await ensureLocalProductCategories();
         document.getElementById("localOwnerSetupForm")?.reset();
         try { await window.PosLocalAuth.load(localDB); } catch { /* Se conserva el mensaje principal si la base está ocupada. */ }
         setLocalAuthScreen();
@@ -791,7 +898,7 @@ document.querySelectorAll(".close-modal-btn").forEach(btn => {
     btn.addEventListener("click", (e) => { 
         const modal = e.target.closest(".modal"); 
         if (!modal) return;
-        const modalesLectura = ["customAlertModal", "customConfirmModal", "strictConfirmModal", "ticketModal", "statementModal", "kardexModal", "authModal", "supplierModal", "cierreCajaModal", "detalleCierreCajaModal", "migrationRequestModal"];
+        const modalesLectura = ["customAlertModal", "customConfirmModal", "strictConfirmModal", "ticketModal", "statementModal", "kardexModal", "authModal", "supplierModal", "cierreCajaModal", "detalleCierreCajaModal", "migrationRequestModal", "productCategoriesModal"];
         if (modalesLectura.includes(modal.id)) {
             modal.classList.add("hidden");
             if (modal.id === "supplierModal") modal.style.zIndex = ""; 
@@ -879,7 +986,7 @@ document.getElementById("logoutBtn")?.addEventListener("click", async () => {
     if (connectedMode) { await window.PosConnected.logout(); return; }
     detenerCamaraVentas();
     if (currentUser) await registrarAuditoria('SESION', 'LOGOUT', `Cierre de sesión`);
-    app?.classList.add("hidden"); loginScreen?.classList.remove("hidden"); document.getElementById("loginForm")?.reset(); cart = []; resetearDescuentoVenta(); actualizarCarrito(); unlockedModuleId = null; currentUser = null;
+    app?.classList.add("hidden"); loginScreen?.classList.remove("hidden"); document.getElementById("loginForm")?.reset(); cart = []; resetearDescuentoVenta(); actualizarCarrito(); unlockedModuleId = null; currentUser = null; updateProductCategoryAdminVisibility();
     setLocalAuthScreen();
 });
 
@@ -1966,6 +2073,97 @@ document.getElementById("addNewProductBtn")?.addEventListener("click", () => { d
 document.getElementById("quickAddProductFromPurchBtn")?.addEventListener("click", () => { if (connectedMode) return window.PosInventory?.openPurchaseProduct(); document.getElementById("productForm")?.reset(); tempImageBase64 = null; const imgPrevNew = document.getElementById("prodImagePreview"); if (imgPrevNew) { imgPrevNew.src = ""; imgPrevNew.style.display = "none"; } const pi = document.getElementById("prodId"); if(pi) pi.value = ""; document.getElementById("prodMinStock").value = sysConfig.minStock || "5"; document.getElementById("prodMargenRetail").value = "10"; document.getElementById("prodMargenWholesale").value = "10"; actualizarSelectProveedoresProducto(); const pstat = document.getElementById("prodStatus"); if(pstat) pstat.value = "true"; document.getElementById("productModal")?.classList.remove("hidden"); window.calcularPreciosPorMargen(); });
 
 function actualizarSelectProveedoresProducto() { const ps = document.getElementById("prodSupplier"); if(ps) { ps.innerHTML = `<option value="">-- Ninguno --</option>` + suppliers.filter(s => s.active !== false).map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join(""); } }
+
+function productCategoryAdminAllowed() { return connectedMode ? currentUser?.role === 'ADMIN' : Boolean(currentUser); }
+function updateProductCategoryAdminVisibility() {
+    const button = document.getElementById('manageProductCategoriesBtn');
+    if (button) { button.hidden = !productCategoryAdminAllowed(); button.setAttribute('aria-hidden', button.hidden ? 'true' : 'false'); }
+}
+function productCategoryStatus(message, isError = false) {
+    const status = document.getElementById('productCategoryStatus');
+    if (!status) return;
+    status.textContent = message; status.classList.toggle('text-danger', isError); status.setAttribute('role', isError ? 'alert' : 'status');
+}
+function renderProductCategoryRows(categories) {
+    const list = document.getElementById('productCategoryRows');
+    if (!list) return;
+    list.replaceChildren();
+    if (!categories.length) { const empty = document.createElement('p'); empty.textContent = 'Todavía no hay categorías. Agregá la primera para este negocio.'; list.append(empty); return; }
+    for (const category of categories) {
+        const row = document.createElement('div'); row.className = 'product-category-row';
+        const isActive = category.active !== false;
+        row.classList.toggle('is-inactive', !isActive);
+        const input = document.createElement('input'); input.type = 'text'; input.maxLength = 100; input.required = true; input.value = category.name; input.setAttribute('aria-label', `Nombre de la categoría ${category.name}`);
+        const save = document.createElement('button'); save.type = 'button'; save.className = 'btn btn-secondary'; save.textContent = 'Guardar nombre';
+        save.addEventListener('click', async () => {
+            if (!productCategoryAdminAllowed()) { productCategoryStatus('Solo un administrador del negocio puede cambiar las categorías.', true); return; }
+            try {
+                const name = validateProductCategory(input.value).name;
+                if (connectedMode) await window.PosInventory.renameProductCategory(category.id, name);
+                else await renameLocalProductCategory(category.id, name);
+                const refreshed = connectedMode ? await window.PosInventory.productCategories() : await localProductCategories();
+                await refreshProductCategoryOptions(name); renderProductCategoryRows(refreshed); productCategoryStatus('El nombre de la categoría se actualizó.');
+            } catch (error) {
+                const duplicate = error?.code === 'CATEGORY_EXISTS' || error?.message === 'CATEGORY_EXISTS';
+                productCategoryStatus(duplicate ? 'Ya existe una categoría con ese nombre en este negocio.' : error?.status === 403 || error?.code === 'ADMIN_REQUIRED' ? 'Solo un administrador del negocio puede cambiar las categorías.' : 'No se pudo cambiar la categoría. Revisá el nombre e intentá nuevamente.', true);
+                input.focus();
+            }
+        });
+        const actions = document.createElement('div'); actions.className = 'product-category-actions';
+        if (!connectedMode) {
+            const state = document.createElement('span'); state.className = 'product-category-state'; state.textContent = isActive ? 'Activa' : 'Inactiva';
+            const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'btn btn-secondary'; toggle.textContent = isActive ? 'Desactivar' : 'Activar';
+            toggle.addEventListener('click', async () => {
+                if (!productCategoryAdminAllowed()) { productCategoryStatus('Solo el usuario local puede cambiar las categorías.', true); return; }
+                toggle.disabled = true;
+                try {
+                    const active = !isActive;
+                    const refreshed = await setLocalProductCategoryActive(category.id, active);
+                    const editing = Boolean(document.getElementById('prodId')?.value);
+                    const selected = editing ? document.getElementById('prodCategory')?.value || '' : '';
+                    await refreshProductCategoryOptions(selected, refreshed);
+                    renderProductCategoryRows(refreshed);
+                    productCategoryStatus(active ? 'Categoría activada.' : 'Categoría desactivada. No estará disponible para productos nuevos.');
+                } catch {
+                    productCategoryStatus('No se pudo cambiar el estado de la categoría. Intentá nuevamente.', true);
+                } finally { toggle.disabled = false; }
+            });
+            actions.append(state, toggle);
+        }
+        actions.append(save);
+        row.append(input, actions); list.append(row);
+    }
+}
+async function openProductCategoryManager() {
+    updateProductCategoryAdminVisibility();
+    if (!productCategoryAdminAllowed()) { showAlert('Solo un administrador del negocio puede cambiar las categorías.'); return; }
+    try {
+        const categories = connectedMode ? await window.PosInventory.productCategories() : await localProductCategories();
+        renderProductCategoryRows(categories); productCategoryStatus('Las categorías se guardan para este negocio. No se eliminan para conservar su historial.');
+        document.getElementById('productCategoriesModal')?.classList.remove('hidden');
+        document.getElementById('newProductCategoryName')?.focus();
+    } catch { showAlert('No se pudieron cargar las categorías. Revisá tu conexión e intentá nuevamente.'); }
+}
+document.getElementById('manageProductCategoriesBtn')?.addEventListener('click', openProductCategoryManager);
+document.getElementById('productCategoryForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!productCategoryAdminAllowed()) { productCategoryStatus('Solo un administrador del negocio puede cambiar las categorías.', true); return; }
+    const input = document.getElementById('newProductCategoryName'), button = document.getElementById('addProductCategoryBtn');
+    let name;
+    try { name = validateProductCategory(input.value).name; }
+    catch { productCategoryStatus('Ingresá un nombre de categoría de hasta 100 caracteres.', true); input.focus(); return; }
+    button.disabled = true;
+    try {
+        if (connectedMode) await window.PosInventory.createProductCategory(name);
+        else await createLocalProductCategory(name);
+        const categories = connectedMode ? await window.PosInventory.productCategories() : await localProductCategories();
+        renderProductCategoryRows(categories); await refreshProductCategoryOptions(name); input.value = ''; productCategoryStatus('Categoría agregada a este negocio.'); input.focus();
+    } catch (error) {
+        const duplicate = error?.code === 'CATEGORY_EXISTS' || error?.message === 'CATEGORY_EXISTS';
+        productCategoryStatus(duplicate ? 'Ya existe una categoría con ese nombre en este negocio.' : error?.status === 403 || error?.code === 'ADMIN_REQUIRED' ? 'Solo un administrador del negocio puede cambiar las categorías.' : 'No se pudo agregar la categoría. Intentá nuevamente.', true);
+        input.focus();
+    } finally { button.disabled = false; }
+});
 
 window.calcularPreciosPorMargen = function() {
     const cost = parseFloat(document.getElementById("prodCost")?.value) || 0;
@@ -3386,7 +3584,7 @@ window.PosRuntime = Object.freeze({
     setSales(values) { if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto'); salesHistory = values; actualizarTablaHistorial(); },
     publishSale(value) { if (!connectedMode || value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID) throw new Error('Negocio incorrecto'); const index = salesHistory.findIndex(sale => sale.id === value.id); if (index < 0) salesHistory.push(value); else salesHistory[index] = value; actualizarTablaHistorial(); },
     setCash(values) { if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto'); cajaHistorial = values; cajaActual = values.find(value => value.estado === 'abierta') || null; },
-    setUser(user) { currentUser = user ? { ...user, displayName: user.fullName } : null; },
+    setUser(user) { currentUser = user ? { ...user, displayName: user.fullName } : null; updateProductCategoryAdminVisibility(); },
     setBusinessSettings(value) {
         if (!connectedMode || !value || value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID || value.currency !== 'C$') throw new Error('Configuración de negocio incorrecta');
         if (legacyConnectedSettings && legacyConnectedSettings.values.name.trim().toLocaleLowerCase() !== String(value.businessName || '').trim().toLocaleLowerCase()) {
@@ -3423,6 +3621,7 @@ window.PosRuntime = Object.freeze({
         CONNECTED_EFFECTIVE_BUSINESS_ID = businessId;
     },
     openProductEditor: showProductEditor,
+    refreshProductCategoryOptions,
     productImage: () => tempImageBase64,
     setProductImage: image => { tempImageBase64 = image; },
     prepareConnectedBusiness(businessId, apiBaseUrl) {

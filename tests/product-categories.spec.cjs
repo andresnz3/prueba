@@ -23,7 +23,15 @@ test('el propietario local crea y renombra categorías propias del negocio', asy
   const row = page.locator('.product-category-row').filter({ has: categoryInput });
   await categoryInput.fill('Panadería Norte');
   await row.getByRole('button', { name: 'Guardar nombre' }).click();
-  await expect(page.getByRole('textbox', { name: 'Nombre de la categoría Panadería Norte' })).toHaveValue('Panadería Norte');
+  const renamedCategoryInput = page.getByRole('textbox', { name: 'Nombre de la categoría Panadería Norte' });
+  await expect(renamedCategoryInput).toHaveValue('Panadería Norte');
+  const renamedRow = page.locator('.product-category-row').filter({ has: renamedCategoryInput });
+  await renamedRow.getByRole('button', { name: 'Desactivar' }).click();
+  await expect(renamedRow.getByRole('button', { name: 'Activar' })).toBeVisible();
+  await expect(page.locator('#prodCategory option[value="Panadería Norte"]')).toHaveCount(0);
+  await renamedRow.getByRole('button', { name: 'Activar' }).click();
+  await expect(renamedRow.getByRole('button', { name: 'Desactivar' })).toBeVisible();
+  await expect(page.locator('#prodCategory option[value="Panadería Norte"]')).toHaveCount(1);
   await page.locator('#productCategoriesModal .close-modal-btn').click();
 
   await expect(page.locator('#prodCategory option[value="Panadería Norte"]')).toHaveCount(1);

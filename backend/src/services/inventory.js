@@ -4,6 +4,7 @@ const { httpError } = require('../middleware/errors');
 const { units, fixed } = require('./inventory-values');
 const { normalize } = require('./product-images');
 const columns = { barcode: 'barcode', name: 'name', category: 'category', cost: 'cost', marginRetail: 'retail_margin', marginWholesale: 'wholesale_margin', retailPrice: 'retail_price', wholesalePrice: 'wholesale_price', stock: 'stock', minStock: 'min_stock', taxRate: 'tax_rate', image: 'image', active: 'active' };
+const publicCategory = row => ({ id: String(row.id), businessId: String(row.business_id), name: row.name });
 function publicProduct(row, catalog = false) {
   const result = { id: String(row.id), businessId: String(row.business_id), deleted: Boolean(row.deleted) };
   for (const [field, column] of Object.entries(columns)) {
@@ -48,6 +49,37 @@ function createInventoryService({ repo, auth, config }, imageStore) {
       const search = '%' + (options.search || '') + '%';
       const data = await repo.rows(db, 'SELECT * FROM products WHERE business_id = ? AND deleted = FALSE' + (catalog ? ' AND active = TRUE' : '') + ' AND (name LIKE ? OR barcode LIKE ?) ORDER BY id LIMIT ? OFFSET ?', [current.business_id, search, search, options.limit, options.offset]);
       return data.map(row => publicProduct(row, catalog));
+    });
+  }
+  function listCategories(session) {
+    return work(session, 'inventory', async (db, current) => {
+      const data = await repo.rows(db, 'SELECT id, business_id, name FROM product_categories WHERE business_id = ? ORDER BY name, id', [current.business_id]);
+      return data.map(publicCategory);
+    });
+  }
+  function createCategory(session, data) {
+    return work(session, 'inventory', async (db, current) => {
+      if (current.role !== 'ADMIN') throw httpError(403, 'ADMIN_REQUIRED');
+      let result;
+      try { result = await repo.rows(db, 'INSERT INTO product_categories (business_id, name, normalized_name) VALUES (?, ?, ?)', [current.business_id, data.name, data.normalizedName]); }
+      catch (error) { if (error.code === 'ER_DUP_ENTRY') throw httpError(409, 'CATEGORY_EXISTS'); throw error; }
+      const [row] = await repo.rows(db, 'SELECT id, business_id, name FROM product_categories WHERE business_id = ? AND id = ?', [current.business_id, String(result.insertId)]);
+      await repo.audit(db, current, 'CREATE_PRODUCT_CATEGORY', 'product_categories', row.id, { name: row.name });
+      return publicCategory(row);
+    });
+  }
+  function renameCategory(session, id, data) {
+    return work(session, 'inventory', async (db, current) => {
+      if (current.role !== 'ADMIN') throw httpError(403, 'ADMIN_REQUIRED');
+      const [previous] = await repo.rows(db, 'SELECT id, business_id, name FROM product_categories WHERE business_id = ? AND id = ? FOR UPDATE', [current.business_id, id]);
+      if (!previous) throw httpError(404, 'CATEGORY_NOT_FOUND');
+      try {
+        await repo.rows(db, 'UPDATE product_categories SET name = ?, normalized_name = ? WHERE business_id = ? AND id = ?', [data.name, data.normalizedName, current.business_id, id]);
+      } catch (error) { if (error.code === 'ER_DUP_ENTRY') throw httpError(409, 'CATEGORY_EXISTS'); throw error; }
+      const products = await repo.rows(db, 'UPDATE products SET category = ? WHERE business_id = ? AND category = ?', [data.name, current.business_id, previous.name]);
+      const [row] = await repo.rows(db, 'SELECT id, business_id, name FROM product_categories WHERE business_id = ? AND id = ?', [current.business_id, id]);
+      await repo.audit(db, current, 'RENAME_PRODUCT_CATEGORY', 'product_categories', id, { from: previous.name, to: row.name, productsUpdated: Number(products.affectedRows || 0) });
+      return publicCategory(row);
     });
   }
   function get(session, id) { return work(session, 'inventory', async (db, current) => publicProduct(await find(db, current, id))); }
@@ -129,6 +161,6 @@ function createInventoryService({ repo, auth, config }, imageStore) {
       return imageStore.read(current.business_id,image);
     });
   }
-  return { list, get, create, update, adjust, movements, uploadImage, readImage };
+  return { list, listCategories, createCategory, renameCategory, get, create, update, adjust, movements, uploadImage, readImage };
 }
 module.exports = { createInventoryService };

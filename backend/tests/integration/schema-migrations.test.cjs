@@ -15,7 +15,7 @@ test('ordered migrations are tracked, adopted from a compatible existing schema,
   t.after(() => pool.end());
 
   const [ledger] = await pool.execute("SELECT version,status FROM schema_migrations ORDER BY version");
-  assert.deepEqual(ledger.map(row => [row.version, row.status]), Array.from({ length: 20 }, (_, index) => [String(index + 1).padStart(3, '0'), 'APPLIED']));
+  assert.deepEqual(ledger.map(row => [row.version, row.status]), Array.from({ length: 21 }, (_, index) => [String(index + 1).padStart(3, '0'), 'APPLIED']));
   const [rateLimitTable] = await pool.execute("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='auth_login_rate_limits'");
   assert.equal(Number(rateLimitTable[0].count), 1);
   const [orderColumns] = await pool.execute("SELECT column_name AS columnName,is_nullable AS isNullable,column_default AS columnDefault FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='sale_order_items' AND column_name IN ('estimated_unit_price','estimated_subtotal','price_snapshot_available') ORDER BY ordinal_position");

@@ -1,6 +1,7 @@
 'use strict';
 const v = require('../middleware/validation');
 const { httpError } = require('../middleware/errors');
+const { productCategoryName } = require('./product-category-values');
 function decimal(value, scale, digits, signed = false) {
   if (!['string', 'number'].includes(typeof value) || (typeof value === 'number' && !Number.isFinite(value))) v.invalid();
   const raw = String(value);
@@ -56,4 +57,4 @@ function page(query, allowed = []) {
   if (typeof limit !== 'string' || !/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > 100 || typeof offset !== 'string' || !/^\d{1,7}$/.test(offset)) v.invalid();
   return { limit: Number(limit), offset: Number(offset) };
 }
-module.exports = { decimal, fixed, units, product, movement, page };
+module.exports = { decimal, fixed, units, product, productCategoryName, movement, page };

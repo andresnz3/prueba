@@ -272,6 +272,10 @@
     if (!catalog && !/^[a-f0-9]{64}$/.test(value.revision || '')) throw new ApiError('INVALID_RESPONSE');
     return result;
   }
+  function productCategory(value, businessId) {
+    if (!value || !/^[1-9]\d{0,19}$/.test(value.id || '') || value.businessId !== businessId || typeof value.name !== 'string' || !value.name.trim() || [...value.name].length > 100) throw new ApiError('INVALID_RESPONSE');
+    return { id: value.id, businessId: value.businessId, name: value.name };
+  }
   class PosApiClient {
     #csrf = null;
     #ownerIdentity = null;
@@ -451,6 +455,20 @@
       const value = await this.#request((catalog ? '/catalog/products' : '/products') + '?limit=100&offset=' + encodeURIComponent(offset));
       if (!Array.isArray(value?.products) || value.products.length > 100) throw new ApiError('INVALID_RESPONSE');
       return value.products.map(item => product(item, catalog, this.baseUrl));
+    }
+    async productCategories() {
+      const value = await this.#request('/product-categories');
+      if (!Array.isArray(value?.categories) || value.categories.length > 500) throw new ApiError('INVALID_RESPONSE');
+      return value.categories.map(item => productCategory(item, this.#effectiveBusinessId()));
+    }
+    async createProductCategory(name) {
+      const value = await this.#write('/product-categories', 'POST', { name });
+      return productCategory(value?.category, this.#effectiveBusinessId());
+    }
+    async renameProductCategory(id, name) {
+      if (!/^[1-9]\d{0,19}$/.test(String(id))) throw new ApiError('INVALID_INPUT');
+      const value = await this.#write('/product-categories/' + encodeURIComponent(id), 'PATCH', { name });
+      return productCategory(value?.category, this.#effectiveBusinessId());
     }
     async product(id) { const value = await this.#request('/products/' + encodeURIComponent(id)); return product(value?.product, false, this.baseUrl); }
     async createProduct(data) { const value = await this.#write('/products', 'POST', data); return product(value?.product, false, this.baseUrl); }

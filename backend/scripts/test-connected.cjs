@@ -11,6 +11,7 @@ const { createAuthService } = require('../src/services/auth');
 const { createUsersService } = require('../src/services/users');
 const { createApp } = require('../src/app');
 const { hashPassword } = require('../src/services/passwords');
+const { seedDefaultProductCategories } = require('../src/services/product-category-values');
 const fixturePassword = 'Browser-fixture-password-123!';
 const { imageDirectory, removeImages } = require('../tests/helpers/image-fixtures.cjs');
 async function listen(server) { await new Promise((ok, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', ok); }); return 'http://127.0.0.1:' + server.address().port; }
@@ -25,6 +26,7 @@ async function runBrowserTests({ config, database, playwrightArgs = [] }) {
     const passwordHash = await hashPassword(fixturePassword);
     const business = String((await rows(pool, "INSERT INTO businesses (name, status) VALUES (?, 'ACTIVE')", ['Browser fixture A'])).insertId);
     const businessB = String((await rows(pool, "INSERT INTO businesses (name, status) VALUES (?, 'ACTIVE')", ['Browser fixture B'])).insertId);
+    for (const businessId of [business, businessB]) await seedDefaultProductCategories(pool, businessId);
     for (const businessId of [business, businessB]) await rows(pool, "INSERT INTO business_subscriptions (business_id,plan_code) VALUES (?,'CONECTADO_BASICO')", [businessId]);
     for (const [businessId, username, role] of [[business, 'browseradmin', 'ADMIN'], [business, 'andres', 'ADMIN'], [business, 'browserseller', 'VENDEDOR'], [businessB, 'otheradmin', 'ADMIN'], [businessB, 'otherseller', 'VENDEDOR']]) await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [businessId, username, username, passwordHash, role]);
     let apiUrl;

@@ -8,9 +8,9 @@ function inventoryRoutes(authentication, service) {
   const router = Router();
   const m = authMiddleware(authentication.repo, authentication.config);
   // Limitar middleware a estas rutas; no interceptar autenticacion ni otros modulos.
-  router.use(['/products', '/catalog/products', '/inventory'], m.authenticate, (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
-  router.use(['/products', '/inventory'], requireModule(authentication.auth, 'inventory'));
-  router.use(['/products', '/inventory'], (req, res, next) => {
+  router.use(['/products', '/catalog/products', '/inventory', '/product-categories'], m.authenticate, (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+  router.use(['/products', '/inventory', '/product-categories'], requireModule(authentication.auth, 'inventory'));
+  router.use(['/products', '/inventory', '/product-categories'], (req, res, next) => {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       if (!req.is('application/json')) throw httpError(415, 'JSON_REQUIRED');
       return m.csrf(req, res, next);
@@ -22,7 +22,22 @@ function inventoryRoutes(authentication, service) {
     if (req.query.search !== undefined) result.search = v.text(req.query.search, 180);
     return result;
   }
+  function categoryData(value) {
+    try { return values.productCategoryName(value); }
+    catch (error) { if (error instanceof TypeError) v.invalid(); throw error; }
+  }
   router.get('/catalog/products', async (req, res) => res.json({ products: await service.list(req.auth, options(req), true) }));
+  router.get('/product-categories', async (req, res) => { v.body(req.query, []); res.json({ categories: await service.listCategories(req.auth) }); });
+  router.post('/product-categories', m.admin, async (req, res) => {
+    const body = v.body(req.body, ['name']);
+    const data = categoryData(body.name);
+    res.status(201).json({ category: await service.createCategory(req.auth, data) });
+  });
+  router.patch('/product-categories/:id', m.admin, async (req, res) => {
+    const body = v.body(req.body, ['name']);
+    const data = categoryData(body.name);
+    res.json({ category: await service.renameCategory(req.auth, v.id(req.params.id), data) });
+  });
   router.get('/products', async (req, res) => res.json({ products: await service.list(req.auth, options(req)) }));
   router.get('/products/:id', async (req, res) => { v.body(req.query, []); res.json({ product: await service.get(req.auth, v.id(req.params.id)) }); });
   router.get('/products/:id/stock', async (req, res) => { v.body(req.query, []); const product = await service.get(req.auth, v.id(req.params.id)); res.json({ productId: product.id, businessId: product.businessId, stock: product.stock, minStock: product.minStock, revision: product.revision }); });

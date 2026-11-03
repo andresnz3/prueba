@@ -71,6 +71,13 @@ test('un segundo ADMIN del Negocio 1 accede al panel y sus operaciones conservan
   await page.locator('#navSystemAdminBtn').click();
   await expect(page.locator('#systemAdminView')).toBeVisible();
 
+  await page.locator('#systemAdminUsersTab').click();
+  await page.locator('#systemAdminUserBusinessId').selectOption('1');
+  const businessOneAdmin = page.locator('#systemAdminUsersBody tr').filter({ hasText: 'browseradmin' });
+  await expect(businessOneAdmin).toBeVisible();
+  await expect(businessOneAdmin.locator('td').last()).toContainText('Cuenta protegida');
+  await page.locator('#systemAdminBusinessesTab').click();
+
   const businessName = 'Negocio de auditoría ' + randomBytes(4).toString('hex');
   await page.locator('#systemAdminBusinessName').fill(businessName);
   await page.locator('#systemAdminBusinessPlan').selectOption('CONECTADO_BASICO');

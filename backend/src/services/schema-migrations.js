@@ -24,7 +24,8 @@ const MIGRATIONS = [
   { version: '017', file: '017_connected_standard_plan.sql', requires: ['006'], checks: migration017 },
   { version: '018', file: '018_shared_login_rate_limits.sql', requires: ['017'], checks: migration018 },
   { version: '019', file: '019_local_perpetual_licenses.sql', requires: ['018'], checks: migration019 },
-  { version: '020', file: '020_local_license_business_identity.sql', requires: ['019'], checks: migration020 }
+  { version: '020', file: '020_local_license_business_identity.sql', requires: ['019'], checks: migration020 },
+  { version: '021', file: '021_business_product_categories.sql', requires: ['020'], checks: migration021 }
 ];
 
 const BASE_TABLES = [
@@ -344,6 +345,14 @@ async function migration020(db, database) {
     businessHashIndex('local_license_installations', 'idx_local_license_installations_business_id_hash')
   ]);
   return [...columns, ...indexes];
+}
+
+async function migration021(db, database) {
+  const table = await tableExists(db, database, 'product_categories');
+  const columns = await columnsExist(db, database, 'product_categories', ['id', 'business_id', 'name', 'normalized_name', 'created_at', 'updated_at']);
+  const unique = await scalar(db, 'SELECT COUNT(*) AS n FROM information_schema.statistics WHERE table_schema=? AND table_name=\'product_categories\' AND index_name=\'uq_product_categories_business_name\' AND non_unique=0 AND ((seq_in_index=1 AND column_name=\'business_id\') OR (seq_in_index=2 AND column_name=\'normalized_name\'))', [database]);
+  const foreignKey = await constraintExists(db, database, 'product_categories', 'fk_product_categories_business', 'FOREIGN KEY');
+  return [table, columns, Number(unique.n) === 2, foreignKey];
 }
 
 async function migrationState(migration, db, database) {

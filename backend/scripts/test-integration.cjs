@@ -18,6 +18,7 @@ const integrationFiles = [
   'tests/integration/auth.test.cjs',
   'tests/integration/local-licenses.test.cjs',
   'tests/integration/inventory.test.cjs',
+  'tests/integration/product-categories.test.cjs',
   'tests/integration/system-admin-inventory-migration.test.cjs',
   'tests/integration/system-admin-sales-migration.test.cjs',
   'tests/integration/system-admin-purchases-migration.test.cjs',
@@ -48,9 +49,10 @@ async function seedSystemAdminFixture(connection) {
   const [user] = await connection.query('INSERT INTO users (business_id,username,full_name,password_hash,role) VALUES (?,?,?,?,?)', [business.insertId, 'migration005_fixture', 'Migration fixture', 'not-a-login-hash', 'ADMIN']);
   const [supplier] = await connection.query('INSERT INTO suppliers (business_id,name) VALUES (?,?)', [business.insertId, 'Migration 005 supplier']);
   await connection.query("INSERT INTO supplier_payments (business_id,user_id,supplier_id,amount,payment_method,status) VALUES (?,?,?,'3.17','CARD','POSTED')", [business.insertId, user.insertId, supplier.insertId]);
+  return String(business.insertId);
 }
 
-async function prepareDatabase(connection, config, { empty = false, throughVersion = null } = {}) {
+async function prepareDatabase(connection, config, { empty = false, throughVersion = null, seedLegacyProductCategory = false } = {}) {
   const name = databaseName(config);
   let created = false;
   let isolated;
@@ -64,7 +66,10 @@ async function prepareDatabase(connection, config, { empty = false, throughVersi
     const initialPlan = await planNewInstall(isolated, name);
     if (initialPlan.baseTables < 1 || initialPlan.migrations.length !== MIGRATIONS.length) throw new Error('El plan inicial de migraciones está incompleto');
     await installBaseSchema(isolated, name);
-    if (!empty) await seedSystemAdminFixture(isolated);
+    if (!empty) {
+      const fixtureBusinessId = await seedSystemAdminFixture(isolated);
+      if (seedLegacyProductCategory) await isolated.execute('INSERT INTO products (business_id, barcode, name, category) VALUES (?, ?, ?, ?)', [fixtureBusinessId, 'CAT-MIG-021', 'Categoría previa a la migración', 'Panadería Norte']);
+    }
     await migrate(isolated, name, 'apply', throughVersion ? { throughVersion } : undefined);
     return name;
   } catch (error) {
@@ -77,7 +82,7 @@ async function prepareDatabase(connection, config, { empty = false, throughVersi
 }
 
 async function runFile(connection, config, file, { throughVersion = null } = {}) {
-  const name = await prepareDatabase(connection, config, { empty: ['auth.test.cjs', 'business-deletion.test.cjs', 'business-plans.test.cjs'].includes(basename(file)), throughVersion });
+  const name = await prepareDatabase(connection, config, { empty: ['auth.test.cjs', 'business-deletion.test.cjs', 'business-plans.test.cjs'].includes(basename(file)), throughVersion, seedLegacyProductCategory: file === 'tests/integration/product-categories.test.cjs' });
   console.log('Integración aislada: ' + file + ' [' + name + ']');
   try {
     const child = spawn(process.execPath, ['--test', '--test-concurrency=1', file], {
@@ -116,6 +121,7 @@ function selectedIntegrationFiles(args) {
     ['--cash-support-only', ['tests/integration/cash-support-history.test.cjs']],
     ['--reports-only', ['tests/integration/reports.test.cjs']],
     ['--sales-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/sales.test.cjs']],
+    ['--product-categories-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/product-categories.test.cjs']],
     ['--business-deletion-only', ['tests/integration/business-deletion.test.cjs']]
   ];
   let selected = integrationFiles;

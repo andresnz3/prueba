@@ -77,8 +77,12 @@
     window.PosRuntime.setProducts(rows);
   }
   async function loadOnce(view, currentScope, navigation) {
-    const result = await window.PosConnected.inventoryOperation((api, business) => all(offset => api.products(view === 'salesView', offset), business, navigation));
+    const [result, categories] = await Promise.all([
+      window.PosConnected.inventoryOperation((api, business) => all(offset => api.products(view === 'salesView', offset), business, navigation)),
+      view === 'inventoryView' ? productCategories() : Promise.resolve(null)
+    ]);
     if (!navigationIsCurrent(navigation) || currentScope !== loadScopeKey()) return false;
+    if (categories) await window.PosRuntime.refreshProductCategoryOptions(el('prodCategory').value, categories);
     rows = result; window.PosRuntime.setProducts(rows);
     if (view !== 'inventoryView') closePanels();
     return true;
@@ -98,6 +102,19 @@
     })().finally(() => { if (loadFlights.get(key) === flight) loadFlights.delete(key); });
     loadFlights.set(key, flight);
     return flight.promise;
+  }
+  async function productCategories() {
+    return window.PosConnected.inventoryOperation(async (api, business) => {
+      const categories = await api.productCategories();
+      if (categories.some(category => category.businessId !== business)) throw new window.PosApiError('INVALID_SESSION', 401);
+      return categories;
+    });
+  }
+  async function createProductCategory(name) {
+    return window.PosConnected.inventoryOperation(async (api, business) => ensureBusiness(await api.createProductCategory(name), business));
+  }
+  async function renameProductCategory(id, name) {
+    return window.PosConnected.inventoryOperation(async (api, business) => ensureBusiness(await api.renameProductCategory(id, name), business));
   }
   async function fail(failure) {
     if (failure.code === 'STALE_REQUEST') return;
@@ -128,7 +145,7 @@
   async function detail(id) {
     return window.PosConnected.inventoryOperation(async (api, business) => ensureBusiness(await api.product(id), business));
   }
-  async function edit(id) { return run(async () => { resetPhoto(); editing = await detail(id); imageInput.value = ''; publish(editing); window.PosRuntime.openProductEditor(editing); }); }
+  async function edit(id) { return run(async () => { resetPhoto(); editing = await detail(id); await window.PosRuntime.refreshProductCategoryOptions(editing.category); imageInput.value = ''; publish(editing); window.PosRuntime.openProductEditor(editing); }); }
   function checkWrite() { if (uncertain) throw new window.PosApiError('RETRY_OPERATION'); }
   async function save() {
     if (!window.PosValidation.validate(el('productForm'), true)) return;
@@ -213,7 +230,8 @@
   function openPurchaseProduct() {
     el('productForm').reset(); resetPhoto(); editing = null; el('prodId').value = ''; el('prodStock').value = '0'; el('prodStock').disabled = true; imageInput.disabled = true;
     el('prodMinStock').value = '5'; el('prodMargenRetail').value = '10'; el('prodMargenWholesale').value = '10'; el('prodStatus').value = 'true';
-    el('productModal').dataset.purchaseContext = 'true'; el('productModal').classList.remove('hidden'); el('prodBarcode').focus();
+    el('productModal').dataset.purchaseContext = 'true';
+    window.PosRuntime.refreshProductCategoryOptions().then(() => { el('productModal').classList.remove('hidden'); el('prodBarcode').focus(); }).catch(failure => fail(failure));
   }
-  window.PosInventory = Object.freeze({ selectImage, load, refresh, save, edit, toggle, openAdjustment, adjust, kardex, closePanels, openPurchaseProduct });
+  window.PosInventory = Object.freeze({ selectImage, load, refresh, save, edit, toggle, openAdjustment, adjust, kardex, closePanels, openPurchaseProduct, productCategories, createProductCategory, renameProductCategory });
 })();
