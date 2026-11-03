@@ -280,7 +280,7 @@
     #effectiveBusinessId() { return this.#support?.businessId ?? this.#ownerIdentity?.businessId ?? null; }
     #requireSystemAdmin() {
       const current = this.#ownerIdentity;
-      if (!current || current.username !== 'andres' || current.role !== 'ADMIN' || current.businessId !== '1') throw new ApiError('SYSTEM_ADMIN_REQUIRED', 403);
+      if (!current || current.role !== 'ADMIN' || String(current.businessId) !== '1') throw new ApiError('SYSTEM_ADMIN_REQUIRED', 403);
     }
     #acceptSession(value) {
       this.#csrf = value.csrfToken;

@@ -39,6 +39,100 @@ test('usuario normal no ve el panel ni puede eliminar negocios por el API', asyn
   await expect(page.locator('#salesView')).toBeVisible();
 });
 
+test('un segundo ADMIN del Negocio 1 accede al panel y sus operaciones conservan su identidad de auditoría', async ({ page }) => {
+  await open(page);
+  const unauthenticated = await page.evaluate(async () => {
+    const requests = [
+      fetch(window.POS_API_BASE_URL + '/admin/businesses', { credentials: 'include' }),
+      fetch(window.POS_API_BASE_URL + '/admin/businesses', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+      fetch(window.POS_API_BASE_URL + '/system-admin/local-licenses', { credentials: 'include' }),
+      fetch(window.POS_API_BASE_URL + '/system-admin/local-licenses', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    ];
+    return Promise.all(requests.map(async response => (await response).status));
+  });
+  expect(unauthenticated).toEqual([401, 401, 401, 401]);
+  await login(page, 'browseradmin');
+  const identity = await page.evaluate(() => new window.PosApiClient(window.POS_API_BASE_URL).me());
+  expect(identity.user.businessId).toBe('1');
+  expect(identity.user.role).toBe('ADMIN');
+  expect(identity.user.username).toBe('browseradmin');
+  await expect(page.locator('#navSystemAdminBtn')).toBeVisible();
+  const directApi = await page.evaluate(async () => {
+    const response = await fetch(window.POS_API_BASE_URL + '/admin/businesses', { credentials: 'include' });
+    const body = await response.json();
+    const api = new window.PosApiClient(window.POS_API_BASE_URL);
+    await api.me();
+    const businesses = await api.adminBusinesses();
+    return { status: response.status, code: body.error?.code ?? null, clientBusinessCount: businesses.length };
+  });
+  expect(directApi.status).toBe(200);
+  expect(directApi.code).toBeNull();
+  expect(directApi.clientBusinessCount).toBeGreaterThan(0);
+  await page.locator('#navSystemAdminBtn').click();
+  await expect(page.locator('#systemAdminView')).toBeVisible();
+
+  const businessName = 'Negocio de auditoría ' + randomBytes(4).toString('hex');
+  await page.locator('#systemAdminBusinessName').fill(businessName);
+  await page.locator('#systemAdminBusinessPlan').selectOption('CONECTADO_BASICO');
+  await page.locator('#systemAdminBusinessForm button[type=submit]').click();
+  const row = page.locator('#systemAdminBusinessesBody tr').filter({ hasText: businessName });
+  await expect(row).toBeVisible();
+  const createdBusinessId = await row.getAttribute('data-business-id');
+
+  const database = process.env.POS_INTEGRATION_DATABASE, config = readConfig();
+  if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === config.database.database) throw new Error('Temporary admin-audit database required');
+  const pool = createDatabasePool({ ...config.database, database });
+  try {
+    const [adminRows] = await pool.execute('SELECT id FROM users WHERE business_id=1 AND username=? AND role=\'ADMIN\'', ['browseradmin']);
+    const [events] = await pool.execute("SELECT user_id,business_id FROM audit_logs WHERE business_id=1 AND action='CREATE_BUSINESS' AND entity_id=?", [createdBusinessId]);
+    expect(adminRows).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    expect(String(events[0].user_id)).toBe(String(adminRows[0].id));
+    expect(String(events[0].business_id)).toBe('1');
+  } finally { await pool.end(); }
+});
+
+test('ADMIN de otro negocio no ve el panel ni puede invocar directamente sus API', async ({ page }) => {
+  await open(page);
+  await login(page, 'otheradmin');
+  await expect(page.locator('#navSystemAdminBtn')).toBeHidden();
+  await page.goto('/?mode=connected&view=systemAdminView');
+  await expect(page.locator('#app')).toBeVisible();
+  await expect(page.locator('#navSystemAdminBtn')).toBeHidden();
+  const result = await page.evaluate(async () => {
+    await window.PosConnected.navigate('systemAdminView');
+    window.renderPosView('systemAdminView');
+    const admin = await fetch(window.POS_API_BASE_URL + '/admin/businesses', { credentials: 'include' });
+    const licenses = await fetch(window.POS_API_BASE_URL + '/system-admin/local-licenses', { credentials: 'include' });
+    return { adminStatus: admin.status, licenseStatus: licenses.status, panelVisible: !document.getElementById('systemAdminView').classList.contains('hidden') };
+  });
+  expect(result).toEqual({ adminStatus: 403, licenseStatus: 403, panelVisible: false });
+});
+
+test('VENDEDOR de otro negocio no ve el panel ni puede invocar directamente sus API', async ({ page }) => {
+  await open(page);
+  await login(page, 'otherseller');
+  await expect(page.locator('#navSystemAdminBtn')).toBeHidden();
+  const result = await page.evaluate(async () => {
+    const base = window.POS_API_BASE_URL;
+    const csrf = await fetch(base + '/auth/csrf', { credentials: 'include' }).then(response => response.json());
+    const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.csrfToken };
+    const requests = [
+      fetch(base + '/admin/businesses', { credentials: 'include' }),
+      fetch(base + '/system-admin/local-licenses', { credentials: 'include' }),
+      fetch(base + '/system-admin/local-licenses', { method: 'POST', credentials: 'include', headers, body: JSON.stringify({ customerName: 'No emitir' }) }),
+      fetch(base + '/system-admin/local-licenses/9001/transfer', { method: 'POST', credentials: 'include', headers, body: '{}' }),
+      fetch(base + '/system-admin/local-licenses/9001/revoke', { method: 'POST', credentials: 'include', headers, body: JSON.stringify({ reason: 'Intento no autorizado de prueba' }) })
+    ];
+    return Promise.all(requests.map(async request => {
+      const response = await request;
+      const body = await response.json();
+      return { status: response.status, code: body.error?.code ?? null };
+    }));
+  });
+  expect(result).toEqual(Array.from({ length: 5 }, () => ({ status: 403, code: 'SYSTEM_ADMIN_REQUIRED' })));
+});
+
 test('andres confirma la eliminación con usuarios y configuración y el servidor protege el negocio 1', async ({ page }) => {
   await open(page); await login(page, 'andres');
   await page.locator('#navSystemAdminBtn').click(); await expect(page.locator('#systemAdminView')).toBeVisible();

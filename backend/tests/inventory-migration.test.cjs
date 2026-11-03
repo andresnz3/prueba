@@ -126,7 +126,7 @@ test('inventory migration creates only initial movements, audits, and safely ski
 test('inventory migration requires system admin, a matching basic import, active target, and schema migration', async () => {
   const { repo, state } = fakeRepo();
   const service = createSystemAdminService(repo);
-  await assert.rejects(service.previewInventoryMigration({ ...admin, username: 'other' }, '2', packageValue([product()])), error => error.publicStatus === 403);
+  await assert.rejects(service.previewInventoryMigration({ ...admin, username: 'tenant-admin', business_id: '2' }, '2', packageValue([product()])), error => error.publicStatus === 403);
   await assert.rejects(service.migrateInventory(admin, 'invalid', packageValue([product()])), error => error.publicCode === 'INVALID_INPUT');
   await assert.rejects(service.migrateInventory(admin, '2', { ...packageValue([product()]), data: { ...packageValue([product()]).data, inventoryMovements: null } }), error => error.publicCode === 'MIGRATION_PACKAGE_INVALID');
 

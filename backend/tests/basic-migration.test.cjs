@@ -85,7 +85,7 @@ test('basic import package validates its envelope and maps only the basic stores
 test('basic import requires system administrator authorization and explicit system-business confirmation', async () => {
   const { repo } = fakeRepo();
   const service = createSystemAdminService(repo);
-  await assert.rejects(service.migrateBasic({ ...admin, username: 'other' }, '2', basicPackage(), false), error => error.publicStatus === 403);
+  await assert.rejects(service.migrateBasic({ ...admin, username: 'tenant-admin', business_id: '2' }, '2', basicPackage(), false), error => error.publicStatus === 403);
   await assert.rejects(service.migrateBasic(admin, '1', basicPackage(), false), error => error.publicCode === 'MIGRATION_SYSTEM_BUSINESS_CONFIRMATION_REQUIRED');
   const systemRepo = fakeRepo({ target: { id: '1', name: 'Sistema', status: 'ACTIVE' } });
   const result = await createSystemAdminService(systemRepo.repo).migrateBasic(admin, '1', basicPackage(), true);

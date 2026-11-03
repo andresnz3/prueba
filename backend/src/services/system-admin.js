@@ -12,9 +12,8 @@ const { createSystemAdminCreditMigration } = require('./system-admin-credit-migr
 const { createSystemAdminMigrationArchive } = require('./system-admin-migration-archive');
 const { randomUUID, createHash } = require('node:crypto');
 const { PLAN_CATALOG, CONNECTED_PLAN_CODES, planByCode, businessPlan, businessUserCounts, assertWithinPlan, assertUserAddition, capacityView } = require('./business-plans');
-
-const isSystemAdmin = auth => auth?.username === 'andres' && auth.role === 'ADMIN' && String(auth.business_id) === '1';
-const requireSystemAdmin = auth => { if (!isSystemAdmin(auth)) throw httpError(403, 'SYSTEM_ADMIN_REQUIRED'); };
+const { isSystemAdmin, requireSystemAdmin } = require('./system-admin-access');
+const { seedDefaultProductCategories } = require('./product-category-values');
 const businessRecord = row => ({ id: String(row.id), name: row.name, status: row.status, migrationState: row.migration_state || 'NOT_REQUIRED', createdAt: row.created_at, userCount: Number(row.user_count || 0) });
 const migrationProtectionTables = ['migration_import_batches', 'migration_source_records', 'business_migration_controls'];
 const migrationTargetRequiredTables = [
@@ -27,7 +26,7 @@ const migrationTargetRequiredTables = [
 ];
 const preservedMigrationTargetTables = new Set([
   'users', 'sessions', 'session_authorizations', 'business_settings', 'audit_logs',
-  'business_subscriptions', 'business_subscription_payments'
+  'business_subscriptions', 'business_subscription_payments', 'product_categories'
 ]);
 const migrationTargetAreas = Object.freeze({
   products: 'Productos e inventario', clients: 'Clientes', suppliers: 'Proveedores',
@@ -47,7 +46,7 @@ const businessDeletionLabels = Object.freeze({
   cash_sessions: 'Sesiones de caja', cash_movements: 'Movimientos de caja',
   inventory_movements: 'Movimientos de inventario', customer_payments: 'Abonos de clientes',
   supplier_payments: 'Pagos a proveedores', expenses: 'Gastos', audit_logs: 'Auditoría del negocio',
-  business_settings: 'Configuración del negocio', document_sequences: 'Comprobantes',
+  business_settings: 'Configuración del negocio', product_categories: 'Categorías de productos', document_sequences: 'Comprobantes',
   pos_operations: 'Operaciones del POS', sale_orders: 'Órdenes pendientes',
   sale_order_items: 'Detalles de órdenes', business_subscriptions: 'Planes del negocio',
   business_subscription_payments: 'Pagos del plan', migration_sales_references: 'Referencias de ventas migradas',
@@ -494,6 +493,7 @@ function createSystemAdminService(repo, options = {}) {
     return repo.transaction(async db => {
       await assertPlanCodeSupported(db, plan);
       const result = await repo.rows(db, 'INSERT INTO businesses (name, status) VALUES (?, \'ACTIVE\')', [name]);
+      await seedDefaultProductCategories(db, result.insertId);
       await repo.rows(db, 'INSERT INTO business_subscriptions (business_id, plan_code, next_due_date, updated_at) VALUES (?, ?, NULL, UTC_TIMESTAMP(3))', [result.insertId, plan.code]);
       const [created] = await repo.rows(db, 'SELECT id, name, status, created_at, 0 AS user_count FROM businesses WHERE id = ?', [String(result.insertId)]);
       await repo.audit(db, auth, 'CREATE_BUSINESS', 'businesses', result.insertId, { planCode: plan.code });
@@ -511,6 +511,7 @@ function createSystemAdminService(repo, options = {}) {
       await assertMigrationProtectionSchema(db);
       const result = await repo.rows(db, 'INSERT INTO businesses (name, status) VALUES (?, \'INACTIVE\')', [name]);
       const businessId = String(result.insertId);
+      await seedDefaultProductCategories(db, businessId);
       await repo.rows(db, 'INSERT INTO business_subscriptions (business_id, plan_code, next_due_date, updated_at) VALUES (?, ?, NULL, UTC_TIMESTAMP(3))', [businessId, plan.code]);
       await repo.rows(db, 'INSERT INTO business_migration_controls (business_id,state,actor_business_id,actor_user_id,created_at) VALUES (?,\'PENDING\',?,?,UTC_TIMESTAMP(3))', [businessId, String(auth.business_id), String(auth.user_id)]);
       await repo.audit(db, auth, 'CREATE_MIGRATION_TARGET', 'businesses', businessId, { name, status: 'INACTIVE', migrationState: 'PENDING', planCode: plan.code });

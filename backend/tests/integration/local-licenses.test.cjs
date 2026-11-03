@@ -8,6 +8,7 @@ const { readConfig } = require('../../src/config/environment');
 const { createDatabasePool } = require('../../src/config/database');
 const { createAuthRepository } = require('../../src/repositories/auth');
 const { createLocalLicenseService, codeNormalized, localBusinessDigest } = require('../../src/services/local-licenses');
+const { isSystemAdmin } = require('../../src/services/system-admin-access');
 const { localLicenseRoutes } = require('../../src/routes/local-license');
 const { errorHandler } = require('../../src/middleware/errors');
 
@@ -66,9 +67,16 @@ test('license issuance, one-install activation, signed status, transfer and revo
   t.after(() => pool.end());
   const repo = createAuthRepository(pool, { absoluteSeconds: 28800 });
   const signer = makeConfig();
-  const serviceA = createLocalLicenseService(repo, signer, auth => auth?.isAdmin === true);
-  const serviceB = createLocalLicenseService(repo, signer, auth => auth?.isAdmin === true);
+  const serviceA = createLocalLicenseService(repo, signer, isSystemAdmin);
+  const serviceB = createLocalLicenseService(repo, signer, isSystemAdmin);
   await expectPublicError(serviceA.admin.generate({ isAdmin: false }, { customerName: 'Falso' }), 'SYSTEM_ADMIN_REQUIRED');
+
+  const secondAdminUsername = 'license-audit-admin-' + randomBytes(6).toString('hex');
+  const [secondAdminInsert] = await pool.execute(
+    'INSERT INTO users (business_id,username,full_name,password_hash,role) VALUES (?,?,?,?,?)',
+    ['1', secondAdminUsername, 'Administrador de prueba', 'test-fixture-only', 'ADMIN']
+  );
+  const secondAdmin = { user_id: String(secondAdminInsert.insertId), username: secondAdminUsername, role: 'ADMIN', business_id: '1' };
 
   const issued = await serviceA.admin.generate(authAdmin, { customerName: 'Cliente ficticio', customerReference: 'TEST-19' });
   assert.match(issued.code, /^POSL-(?:[A-F0-9]{4}-){11}[A-F0-9]{4}$/);
@@ -96,7 +104,7 @@ test('license issuance, one-install activation, signed status, transfer and revo
   const signedStatusPayload = verifyEnvelope(status.signedStatus, signer.privateKey);
   assert.equal(signedStatusPayload.status, 'ACTIVE');
 
-  const transfer = await serviceA.admin.transfer(authAdmin, issued.license.id);
+  const transfer = await serviceA.admin.transfer(secondAdmin, issued.license.id);
   assert.deepEqual([transfer.status, transfer.transferCount], ['PENDING', 1]);
   assert.equal((await signedStatus(serviceB, issued.license.id, first, 'test-ip-status-2')).status, 'TRANSFERRED');
   const reactivated = await signedActivation(serviceB, issued.code, second, 'test-ip-activation-3');
@@ -105,12 +113,18 @@ test('license issuance, one-install activation, signed status, transfer and revo
   assert.equal(revoked.status, 'REVOKED');
   assert.equal((await signedStatus(serviceB, issued.license.id, second, 'test-ip-status-3')).status, 'REVOKED');
 
-  const [events] = await pool.execute('SELECT event_type,actor_username,reason,created_at FROM local_license_events WHERE license_id=? ORDER BY id', [issued.license.id]);
+  const [events] = await pool.execute('SELECT event_type,actor_user_id,actor_username,reason,created_at FROM local_license_events WHERE license_id=? ORDER BY id', [issued.license.id]);
   assert.deepEqual(events.map(row => row.event_type), ['ISSUED', 'ACTIVATED', 'TRANSFERRED', 'ACTIVATED', 'REVOKED']);
-  assert.ok(events.filter(row => row.actor_username).every(row => row.actor_username === 'andres'));
+  const issuedEvent = events.find(row => row.event_type === 'ISSUED');
   const transferEvent = events.find(row => row.event_type === 'TRANSFERRED');
+  const revokedEvent = events.find(row => row.event_type === 'REVOKED');
+  assert.equal(String(issuedEvent.actor_user_id), authAdmin.user_id);
+  assert.equal(issuedEvent.actor_username, authAdmin.username);
+  assert.equal(String(transferEvent.actor_user_id), secondAdmin.user_id);
+  assert.equal(transferEvent.actor_username, secondAdmin.username);
+  assert.equal(String(revokedEvent.actor_user_id), authAdmin.user_id);
+  assert.equal(revokedEvent.actor_username, authAdmin.username);
   assert.equal(transferEvent.reason, null);
-  assert.equal(transferEvent.actor_username, 'andres');
   assert.ok(transferEvent.created_at instanceof Date || Number.isFinite(new Date(transferEvent.created_at).getTime()));
 });
 
