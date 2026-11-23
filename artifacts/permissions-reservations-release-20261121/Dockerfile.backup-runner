@@ -1,0 +1,6 @@
+# Build only for the maintenance backup helper, never as an application image.
+# Pin DOCKER_CLI_BASE to a verified docker:cli digest before building.
+ARG DOCKER_CLI_BASE=docker:cli
+FROM ${DOCKER_CLI_BASE}
+RUN apk add --no-cache nodejs
+ENTRYPOINT ["node"]

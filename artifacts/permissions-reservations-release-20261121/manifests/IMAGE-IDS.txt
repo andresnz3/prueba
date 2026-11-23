@@ -1,0 +1,15 @@
+SoftVenta combined release: user permissions + inventory reservations
+Frontend tag: sv-softventa-frontend:permisos-reservas-20261121-c4a98ed1
+Frontend image ID: sha256:f599b0995c00086ffb0393d020f1e51d180e8f69cab728d8588a80dd427b4288
+Frontend approved base ID: sha256:291e7b83a9ed99ccb735764de20a1ad1f2bf6c93b4b64ee8cc763009755832e8
+Backend tag: sv-softventa-backend:permisos-reservas-20261121-c4a98ed1
+Backend image ID: sha256:8858869b8d884bdd1a8397de93d07666055c6afaf5f5fde3e97d689b6ed2c819
+Backend approved base ID: sha256:c357b5a1e36d4e7f3bbac299ecae0b903007ac391572010dad91e575b40dfa65
+MySQL QA image used for validation only: sha256:76f0358884cb92d9a086d24e5671c38048d3fef40f2588703d73eb55392d6b69
+Docker image archive: images/softventa-permissions-reservations-images.tar.gz
+Docker image archive bytes: 127961416
+Docker image archive SHA-256: d8b8a4f13ed906a0b031aeff2d0c6b788eaaf9c245a01f33440397786123190f
+Migration 024 SQL SHA-256: 16d34641e3f03e5eca47c2f6a20ee248a6c781bfa1842ebd9455f172b9ab7e73
+Migration 025 SQL SHA-256: 9ef10f924a17b6a29d14da8353e40f59d0d61847b8a542cecff0499e51a284b0
+Migration 023: intentionally excluded
+These image IDs were checked locally after docker load. No production image or service was modified.

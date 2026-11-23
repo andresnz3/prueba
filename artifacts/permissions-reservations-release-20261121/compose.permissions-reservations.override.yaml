@@ -1,0 +1,9 @@
+services:
+  backend:
+    image: sv-softventa-backend:permisos-reservas-20261121-c4a98ed1
+
+  frontend:
+    image: sv-softventa-frontend:permisos-reservas-20261121-c4a98ed1
+
+  migrate:
+    image: sv-softventa-backend:permisos-reservas-20261121-c4a98ed1

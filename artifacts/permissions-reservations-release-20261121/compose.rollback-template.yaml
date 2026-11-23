@@ -1,0 +1,11 @@
+# Use only after the rollback safety gates in DEPLOYMENT-README.md pass.
+# Values belong in a temporary non-secret rollback-images.env file on the server.
+services:
+  backend:
+    image: ${POS_ROLLBACK_BACKEND_IMAGE:?Set the captured old backend rollback tag}
+
+  frontend:
+    image: ${POS_ROLLBACK_FRONTEND_IMAGE:?Set the captured old frontend rollback tag}
+
+  migrate:
+    image: ${POS_ROLLBACK_BACKEND_IMAGE:?Set the captured old backend rollback tag}
