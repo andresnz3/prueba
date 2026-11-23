@@ -20,7 +20,7 @@ function createUsersService(repo) {
     return repo.tenant(auth, async (db, current) => {
       requireAdmin(current);
       const plan = await businessPlan(repo, db, current.business_id, { lock: true });
-      assertUserAddition(plan, await businessUserCounts(repo, db, current.business_id), { role: input.role, businessId: current.business_id, username: input.username });
+      assertUserAddition(plan, await businessUserCounts(repo, db, current.business_id), { role: input.role, businessId: current.business_id });
       let result;
       try { result = await repo.rows(db, 'INSERT INTO users (business_id, username, full_name, password_hash, role, active) VALUES (?, ?, ?, ?, ?, TRUE)', [current.business_id, input.username, input.fullName, hash, input.role]); }
       catch (error) { if (error.code === 'ER_DUP_ENTRY') throw httpError(409, 'USERNAME_EXISTS'); throw error; }

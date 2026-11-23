@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /inicio/
+Disallow: /api/
+Disallow: /offline.html
+
+Sitemap: https://softventaweb.com/sitemap.xml

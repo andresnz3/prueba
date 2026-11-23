@@ -21,4 +21,9 @@ async function seedDefaultProductCategories(db, businessId) {
   }
 }
 
-module.exports = { DEFAULT_PRODUCT_CATEGORIES, normalizeProductCategory, productCategoryName, seedDefaultProductCategories };
+async function ensureProductCategory(repo, db, businessId, value) {
+  const { normalizedName } = productCategoryName(value);
+  await repo.rows(db, 'INSERT IGNORE INTO product_categories (business_id, name, normalized_name) VALUES (?, ?, ?)', [String(businessId), value.trim(), normalizedName]);
+}
+
+module.exports = { DEFAULT_PRODUCT_CATEGORIES, normalizeProductCategory, productCategoryName, seedDefaultProductCategories, ensureProductCategory };

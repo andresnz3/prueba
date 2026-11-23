@@ -3,14 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>POS Distribuidora - PRO</title>
-    <meta name="theme-color" content="#2563eb">
+    <title>SoftVentaWeb</title>
+    <meta name="description" content="Controlá tus ventas, inventario y caja desde cualquier lugar">
+    <meta property="og:site_name" content="SoftVentaWeb">
+    <meta property="og:title" content="SoftVentaWeb | Sistema POS para negocios">
+    <meta property="og:description" content="Controlá tus ventas, inventario y caja desde cualquier lugar">
+    <meta property="og:url" content="https://softventaweb.com/">
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="canonical" href="https://softventaweb.com/">
+    <meta name="application-name" content="SoftVentaWeb">
+    <meta name="theme-color" content="#0753ae">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-title" content="POS Distribuidora">
+    <meta name="apple-mobile-web-app-title" content="SoftVentaWeb">
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="icon" href="/assets/pwa/pos-icon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="/assets/pwa/pos-icon-192.png">
+    <link rel="icon" href="/assets/pwa/favicon-16.png" type="image/png" sizes="16x16">
+    <link rel="icon" href="/assets/pwa/favicon-32.png" type="image/png" sizes="32x32">
+    <link rel="icon" href="/assets/pwa/favicon-48.png" type="image/png" sizes="48x48">
+    <link rel="shortcut icon" href="/assets/pwa/favicon-32.png" type="image/png" sizes="32x32">
+    <link rel="icon" href="/assets/pwa/pos-icon.svg" type="image/svg+xml" sizes="any">
+    <link rel="apple-touch-icon" href="/assets/pwa/pos-icon-192.png" sizes="192x192" type="image/png">
     <link rel="stylesheet" href="styles.css">
     <script src="vendor/html5-qrcode/html5-qrcode.min.js"></script>
     <script src="vendor/dexie/dexie.min.js"></script>
@@ -21,8 +33,7 @@
 
     <div id="loginScreen" class="login-screen">
         <div class="login-card">
-            <div class="login-logo"><div class="logo-icon">POS</div></div>
-            <h1>POS Distribuidora</h1>
+            <h1 class="login-logo"><img src="/assets/pwa/softventaweb-logo.webp" alt="SoftVentaWeb" width="220" height="56" fetchpriority="high"></h1>
             <p class="login-subtitle">Inicia sesión para continuar</p>
             <div class="form-group"><label for="authMode">Modalidad</label><select id="authMode"><option value="local">Modo local</option><option value="connected">Modo conectado</option></select></div>
             <p id="modeDescription" class="login-subtitle">Datos y acceso locales en este navegador.</p>
@@ -69,7 +80,7 @@
     <div id="connectedNavigationStatus" class="connected-navigation-status hidden" role="status" aria-live="polite" aria-atomic="true"></div>
     <div id="app" class="app hidden">
         <header class="topbar">
-            <div class="brand"><div class="brand-icon">D</div><div><h2 id="brandNameDisplay">POS Distribuidora</h2><span id="roleBadge">Usuario</span></div></div>
+            <div class="brand"><div class="brand-icon"><img src="/assets/pwa/pos-icon-192.png" alt="" aria-hidden="true" width="36" height="36"></div><div><h2 id="brandNameDisplay">SoftVentaWeb</h2><span id="roleBadge">Usuario</span></div></div>
             <nav class="nav-tabs">
                 <button id="navSystemAdminBtn" class="nav-btn hidden" type="button"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 12h4"></path><path d="M10 8h4"></path><path d="M10 16h4"></path><path d="M18 21V5a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16"></path><path d="M2 21h20"></path><path d="M6 21v-3"></path><path d="M18 21v-3"></path></svg>Administración</button>
                 <button id="navSalesBtn" class="nav-btn active">🛒 Venta</button>
@@ -473,7 +484,7 @@
                         <section class="migration-source-card" aria-labelledby="migrationSourceTitle">
                             <h3 id="migrationSourceTitle">Origen declarado en el archivo</h3>
                             <dl class="migration-source-meta">
-                                <div><dt>Negocio local</dt><dd id="migrationLocalBusinessName">POS DISTRIBUIDORA</dd></div>
+                                <div><dt>Negocio local</dt><dd id="migrationLocalBusinessName">SoftVentaWeb</dd></div>
                                 <div><dt>Datos revisados</dt><dd>Paquete JSON</dd></div>
                                 <div><dt>Identificación del origen</dt><dd id="migrationLocalBusinessId">No declarada en el archivo</dd></div>
                             </dl>
@@ -515,8 +526,8 @@
                         <div class="page-heading"><div><h1>Punto de Venta</h1></div><div class="sale-number"><span id="currentSaleNumberLabel">Próxima factura #</span><strong id="currentSaleNumber">000001</strong></div></div>
                         <section class="buyer-section">
                             <div class="form-group" style="margin-bottom: 10px;">
-                                <label for="saleDetailInput" style="font-size: 1rem; color: #000;">Detalle de la venta / Nombre del Cliente (Opcional):</label>
-                                <input type="text" id="saleDetailInput" placeholder="Escriba aquí el nombre, número de mesa o detalle..." style="font-size: 1.1rem; background-color: #fff; color: #000;">
+                                <label for="saleDetailInput" style="font-size: 1rem; color: #000;">Nombre del cliente o detalle del pedido (opcional):</label>
+                                <input type="text" id="saleDetailInput" placeholder="Nombre del cliente, mesa o referencia..." style="font-size: 1.1rem; background-color: #fff; color: #000;">
                             </div>
                             <div class="buyer-price-control">
                                 <span class="buyer-price-label">Tipo de precio</span>
@@ -691,6 +702,10 @@
                         <p class="period-filter-note">El período filtra ventas y sus indicadores por método de pago. Ventas de hoy conserva el acumulado de hoy.</p>
                         <div class="period-filter-controls"><div class="period-filter-fields"><label>Desde<input type="date" data-period-from aria-label="Fecha inicial del historial"></label><label>Hasta<input type="date" data-period-until aria-label="Fecha final del historial"></label></div><div class="period-filter-presets" role="group" aria-label="Períodos del historial"><button type="button" class="btn btn-secondary" data-period-preset="today">Hoy</button><button type="button" class="btn btn-secondary" data-period-preset="week">Esta Semana</button><button type="button" class="btn btn-secondary" data-period-preset="month">Este Mes</button><button type="button" class="btn btn-secondary" data-period-preset="all">Todo</button></div></div><p class="period-filter-label" data-period-label aria-live="polite"></p><p class="period-filter-message hidden" data-period-message role="status" aria-live="polite"></p>
                     </section>
+                    <div class="form-group" style="max-width: 420px; margin-bottom: 12px;">
+                        <label for="historyInvoiceSearch">Buscar facturas por número, detalle o nombre del cliente</label>
+                        <input id="historyInvoiceSearch" type="search" maxlength="100" autocomplete="off" placeholder="Número, detalle o nombre del cliente">
+                    </div>
                     <p id="connectedHistoryStatus" class="connected-report-note hidden" role="status" aria-live="polite"></p>
                     <div class="summary-cards" style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 20px;">
                         <div class="summary-card" style="flex: 1; min-width: 150px; border-left: 4px solid #0066cc;"><span>Ventas del Día</span><h3 id="summaryTodaySales" style="color: #0066cc;">C$0.00</h3></div>
@@ -784,6 +799,7 @@
                         <h3 style="margin:18px 0 10px;">Ventas y cobros por usuario</h3>
                         <div class="history-table-container"><table class="history-table"><thead><tr><th>Usuario</th><th>Ventas</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Crédito</th><th>Cobros</th><th>Total vendido</th></tr></thead><tbody id="cajaVentasUsuarioBody"></tbody></table></div>
                         <h3 style="margin:18px 0 10px;">Operaciones para revisión (sesión actual)</h3>
+                        <div class="form-group" style="max-width:420px;margin-bottom:12px;"><label for="cashOrderSearch">Buscar pedidos por nombre o número</label><input id="cashOrderSearch" type="search" maxlength="100" autocomplete="off" placeholder="Nombre del cliente o pedido #"></div>
                         <div class="history-table-container"><table class="history-table"><thead><tr><th>Fecha / Hora</th><th>Operación / Factura</th><th>Usuario</th><th>Método</th><th>Monto</th><th>Estado</th><th>Acción</th></tr></thead><tbody id="cajaOperacionesBody"></tbody></table></div>
                         <section id="cajaPendientesHistoricosSection" class="buyer-section hidden" aria-live="polite">
                             <h3 style="margin:18px 0 10px;">Pendientes de sesiones anteriores</h3>
@@ -1575,7 +1591,7 @@
             <div class="modal-actions"><button type="button" class="btn btn-secondary close-modal-btn">Cerrar</button></div>
         </div>
     </div>
-    <script src="app.js"></script>
+<script src="app.js"></script>
     <script src="connected-inventory.js"></script>
     <script src="connected-sales.js"></script>
     <script src="connected-clients.js"></script>
@@ -1591,5 +1607,5 @@
     <script src="connected-auth.js"></script>
     <script src="icons.js"></script>
     <script src="pwa.js"></script>
-</body>
+    </body>
 </html>

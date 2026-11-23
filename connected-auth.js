@@ -22,6 +22,38 @@
   const assertGeneration = value => { if (generation !== value) throw new window.PosApiError('STALE_REQUEST'); };
   let expiryTimer, grantTimer, busy = false, passwordUserId = null, userPage = 0;
   function message(id, text) { el(id).textContent = window.PosMessages.text(text, 'No se pudo completar la solicitud. Inténtalo nuevamente.'); el(id).classList.remove('hidden'); }
+  function historySessionDiagnostic(stage, failure = null) {
+    let enabled = false;
+    try { enabled = new URLSearchParams(window.location.search).get('diag') === 'history'; } catch { /* Diagnostics stay disabled for an invalid URL. */ }
+    if (!enabled) return;
+    let runtimeBusinessId = null;
+    try { runtimeBusinessId = window.PosRuntime?.salesInput?.().businessId || null; } catch { /* Keep diagnostics free of user data when runtime state is unavailable. */ }
+    const stack = typeof failure?.stack === 'string' ? failure.stack : '';
+    const location = stack.split(/\r?\n/).map(frame => {
+      const match = /(?:^|[/\\])((?:connected-sales|connected-auth|api-client|app)\.js)(?:\?[^:\s)]*)?:(\d+):\d+/.exec(frame);
+      return match ? match[1] + ':' + match[2] : null;
+    }).find(Boolean) || null;
+    const record = {
+      area: 'history-session', stage,
+      ownerBusinessId: ownerBusinessId || null,
+      effectiveBusinessId: effectiveBusinessId() || null,
+      runtimeBusinessId,
+      businessContextMatches: Boolean(effectiveBusinessId() && effectiveBusinessId() === runtimeBusinessId),
+      role: identity?.role || null,
+      supportSession: Boolean(supportContext),
+      supportBusinessId: supportContext?.businessId || null,
+      supportExpired: supportContext ? Date.parse(supportContext.expiresAt) <= Date.now() : null,
+      sessionVerifiedSecondsAgo: lastSessionVerifiedAt ? Math.floor((Date.now() - lastSessionVerifiedAt) / 1000) : null
+    };
+    if (failure) {
+      record.errorCode = /^[A-Z][A-Z0-9_]{0,63}$/.test(failure.code || '') ? failure.code : failure.message === 'Negocio incorrecto' ? 'BUSINESS_SCOPE_MISMATCH' : 'JAVASCRIPT_EXCEPTION';
+      record.status = Number.isInteger(failure.status) && failure.status >= 100 && failure.status <= 599 ? failure.status : null;
+      record.errorName = /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(failure.name || '') ? failure.name : 'Error';
+      record.location = location;
+    }
+    const method = failure ? 'warn' : 'info';
+    console[method]('[SoftVentaWeb diagnostic] ' + JSON.stringify(record));
+  }
   function clearPasswords() { for (const id of ['loginPassword', 'gestorPassword', 'newUserPassword', 'changedUserPassword']) el(id).value = ''; }
   const isSystemAdmin = () => Boolean(identity && identity.role === 'ADMIN' && String(identity.businessId) === '1');
   const effectiveBusinessId = () => supportContext?.businessId || ownerBusinessId;
@@ -215,6 +247,7 @@
       else showModuleLoadError(context, 'No se pudieron cargar los datos de ' + navigationLabel(view) + '. Revisa la conexión y vuelve a intentarlo.');
     }).catch(failure => {
       if (!isNavigationCurrent(context)) return;
+      if (context.view === 'historyView') historySessionDiagnostic('history-load-failed', failure);
       if (failure.code === 'INVALID_SESSION') { error(failure); return; }
       if (failure.code === 'MODULE_FORBIDDEN' && identity?.role === 'VENDEDOR') {
         clearModuleLoadState(moduleLoadStates.get(view)); grant = null; activeView = 'salesView'; pendingView = view;
@@ -886,6 +919,7 @@
     const pending = moduleLoadStates.get(view);
     if (view === activeView && pending && !pending.overlay.classList.contains('is-error')) return;
     const requestId = ++navigationSequence, previous = activeView, version = generation;
+    if (view === 'historyView') historySessionDiagnostic('history-navigation-start');
     pendingNavigationRequestId = requestId; pendingNavigationTarget = view; busy = true;
     el('app').setAttribute('aria-busy', 'true'); setNavigationStatus(view); maskActiveModuleForAuthorization();
     for (const state of [...moduleLoadStates.values()]) clearModuleLoadState(state);
@@ -896,9 +930,11 @@
       const authorized = await api.enter(views[view]);
       if (requestId !== navigationSequence || version !== generation) return;
       acceptVerifiedSession(authorized, version);
+      if (view === 'historyView') historySessionDiagnostic('history-authorized');
       beginAuthorizedNavigation(view, version, requestId);
     } catch (failure) {
       if (requestId !== navigationSequence || version !== generation) return;
+      if (view === 'historyView') historySessionDiagnostic('history-authorization-failed', failure);
       if (failure.code === 'STALE_REQUEST') return;
       grant = null; clearTimeout(grantTimer);
       if (failure.code === 'MODULE_FORBIDDEN') {

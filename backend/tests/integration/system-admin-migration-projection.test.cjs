@@ -26,7 +26,7 @@ async function fixture() {
     source: { mode: 'local', scope: { idSource: 'config', localBusinessId: sourceId, idsFound: 1, legacyRecords: 0, excludedRecords: 0, missingStores: [] } },
     business: { name: 'Proyección operativa prueba', localBusinessId: sourceId },
     data: {
-      products: [{ id: 'product-local-1', business_id: sourceId, name: 'Café', barcode: 'CAF-01', category: 'Abarrotes', cost: '12.25', marginRetail: '25.0000', marginWholesale: '10.0000', retailPrice: '15.31', wholesalePrice: '13.48', stock: '4.500', minStock: '1.000', taxRate: '0.0000', active: true, image }],
+      products: [{ id: 'product-local-1', business_id: sourceId, name: 'Café', barcode: 'CAF-01', category: 'Categoría histórica', cost: '12.25', marginRetail: '25.0000', marginWholesale: '10.0000', retailPrice: '15.31', wholesalePrice: '13.48', stock: '4.500', minStock: '1.000', taxRate: '0.0000', active: true, image }],
       clients: [{ id: 'client-local-1', business_id: sourceId, name: 'Cliente Uno', phone: '5551111', creditLimit: '250.00', openingBalance: '0.00', active: true }],
       suppliers: [{ id: 'supplier-local-1', business_id: sourceId, name: 'Proveedor Uno', contact: 'Ventas', phone: '5552222', active: true }],
       sales: [{ id: 'sale-local-1', business_id: sourceId, clienteId: 'client-local-1', items: [{ productId: 'product-local-1', quantity: '1.000', price: '15.31' }], total: '15.31', status: 'COMPLETED', date: '2024-04-05T12:00:00.000Z' }],
@@ -39,7 +39,7 @@ async function fixture() {
       saleOrders: [{ id: 'order-local-1', business_id: sourceId, items: [{ productId: 'product-local-1', quantity: '1.000' }], status: 'PENDING', createdAt: '2024-04-05T10:00:00.000Z' }],
       syncQueue: [],
       configuration: { name: 'Proyección operativa prueba', localBusinessId: sourceId, legalName: 'Comercial Prueba S.A.', ruc: 'J0310000000000', phone: '5553333', address: 'Managua', currency: 'C$', invoicePrefix: 'V-', minStock: '2.000', header: 'Gracias por su compra', footer: 'Vuelva pronto', logo: image },
-      categories: ['Abarrotes']
+      categories: ['Categoría histórica']
     }
   };
   return { value, image };
@@ -73,11 +73,13 @@ test('admin projection makes approved catalog and commercial settings operationa
   assert.equal(first.migrationState, 'PENDING');
   assert.equal(first.reconciliation.totals.existingProducts, 1);
   const [products] = await pool.execute('SELECT id,name,barcode,category,cost,retail_price,wholesale_price,stock,image,active,deleted FROM products WHERE business_id=?', [target]);
+  const [productCategories] = await pool.execute('SELECT name,normalized_name AS normalizedName FROM product_categories WHERE business_id=?', [target]);
   const [clients] = await pool.execute('SELECT id,name,credit_limit,opening_balance FROM clients WHERE business_id=?', [target]);
   const [suppliers] = await pool.execute('SELECT id,name FROM suppliers WHERE business_id=?', [target]);
   const [settings] = await pool.execute('SELECT business_name,legal_name,ruc,phone,address,currency,logo,ticket_header,ticket_footer FROM business_settings WHERE business_id=?', [target]);
   assert.equal(products.length, 1);
-  assert.deepEqual([products[0].name,products[0].barcode,products[0].category,String(products[0].cost),String(products[0].retail_price),String(products[0].wholesale_price),String(products[0].stock),Boolean(products[0].active),Boolean(products[0].deleted)], ['Café','CAF-01','Abarrotes','12.25','15.31','13.48','4.500',true,false]);
+  assert.deepEqual([products[0].name,products[0].barcode,products[0].category,String(products[0].cost),String(products[0].retail_price),String(products[0].wholesale_price),String(products[0].stock),Boolean(products[0].active),Boolean(products[0].deleted)], ['Café','CAF-01','Categoría histórica','12.25','15.31','13.48','4.500',true,false]);
+  assert.deepEqual(productCategories.map(row => [row.name,row.normalizedName]), [['Categoría histórica','categoria historica']]);
   assert.equal(clients.length, 1);
   assert.deepEqual([clients[0].name,String(clients[0].credit_limit),String(clients[0].opening_balance)], ['Cliente Uno','250.00','0.00']);
   assert.deepEqual(suppliers.map(row => row.name), ['Proveedor Uno']);

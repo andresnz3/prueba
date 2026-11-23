@@ -21,7 +21,10 @@ const html = readFileSync(path.join(root, 'index.html'), 'utf8');
 const css = readFileSync(path.join(root, 'styles.css'), 'utf8');
 const assetReferences = [
   ...[...html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi)].map(match => match[1]),
-  ...[...html.matchAll(/<link\b[^>]*\bhref=["']([^"']+)["']/gi)].map(match => match[1]),
+  ...[...html.matchAll(/<link\b[^>]*>/gi)]
+    .filter(match => !/\brel=["']canonical["']/i.test(match[0]))
+    .map(match => match[0].match(/\bhref=["']([^"']+)["']/i)?.[1])
+    .filter(Boolean),
   ...[...css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)].map(match => match[1]),
   ...[...css.matchAll(/@import\s+(?:url\()?\s*["']([^"']+)["']/gi)].map(match => match[1])
 ];

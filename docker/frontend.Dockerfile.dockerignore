@@ -32,6 +32,10 @@
 !scripts/
 !scripts/build-static.cjs
 !scripts/check-vendored-assets.cjs
+!inicio/
+!inicio/**
+!robots.txt
+!sitemap.xml
 !vendor/
 !vendor/**
 !assets/

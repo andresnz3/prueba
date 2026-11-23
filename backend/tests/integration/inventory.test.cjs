@@ -8,6 +8,7 @@ const { createDatabasePool } = require('../../src/config/database');
 const { createAuthRepository, rows } = require('../../src/repositories/auth');
 const { createAuthService } = require('../../src/services/auth');
 const { createUsersService } = require('../../src/services/users');
+const { seedDefaultProductCategories } = require('../../src/services/product-category-values');
 const { hashPassword } = require('../../src/services/passwords');
 const { createApp } = require('../../src/app');
 const database = process.env.POS_INTEGRATION_DATABASE;
@@ -31,6 +32,8 @@ test('Integracion MySQL productos e inventario', async t => {
   const pool = createDatabasePool({ ...config.database, database, connectionLimit: 20 }); t.after(() => pool.end());
   const business = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Inventory A'])).insertId);
   const businessB = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Inventory B'])).insertId);
+  await seedDefaultProductCategories(pool, business);
+  await seedDefaultProductCategories(pool, businessB);
   const hash = await hashPassword(password);
   for (const [tenant, username, role] of [[business, 'invadmin', 'ADMIN'], [business, 'invseller', 'VENDEDOR'], [businessB, 'invadmin_b', 'ADMIN']]) await rows(pool, 'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)', [tenant, username, username, hash, role]);
   const repo = createAuthRepository(pool, authConfig), auth = createAuthService(repo, authConfig);

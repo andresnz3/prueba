@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 const { httpError } = require('../middleware/errors');
 const { packageForImport, normalizeName } = require('./basic-migration-values');
 const { decimal } = require('./inventory-values');
+const { ensureProductCategory } = require('./product-category-values');
 const { normalize: normalizeImage } = require('./product-images');
 
 const TABLES = Object.freeze({ products: 'products', clients: 'clients', suppliers: 'suppliers', configuration: 'business_settings' });
@@ -284,6 +285,7 @@ function createSystemAdminMigrationProjection({ repo, requireSystemAdmin, imageS
           const result = await repo.rows(db,
             'INSERT INTO products (business_id,barcode,name,category,cost,retail_margin,wholesale_margin,retail_price,wholesale_price,stock,min_stock,tax_rate,image,active,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             [businessId,barcode,product.name,product.category,product.cost,product.marginRetail,product.marginWholesale,product.retailPrice,product.wholesalePrice,product.stock,product.minStock,product.taxRate,image,product.active,product.deleted]);
+          await ensureProductCategory(repo, db, businessId, product.category);
           await mapRecord(db,businessId,batchId,row,'products',result.insertId);
           created.products++;
           await repo.rows(db, 'INSERT INTO audit_logs (business_id,user_id,action,entity,entity_id,details,created_at) VALUES (?,NULL,?,?,?,?,UTC_TIMESTAMP(3))',

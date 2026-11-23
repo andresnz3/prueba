@@ -34,8 +34,8 @@ function cart(data) {
 const quoteFields = ['items', 'priceType', 'paymentMethod', 'discountPercent', 'clientId'];
 function quote(body) { return cart(v.body(body, quoteFields, ['items', 'priceType', 'paymentMethod', 'discountPercent'])); }
 function sale(body) {
-  const fields = [...quoteFields, 'operationKey', 'quoteToken', 'cashReceived', 'detail'];
-  const data = v.body(body, fields, fields.filter(field => field !== 'clientId'));
+  const fields = [...quoteFields, 'operationKey', 'quoteToken', 'cashReceived', 'detail', 'customerName'];
+  const data = v.body(body, fields, fields.filter(field => !['clientId', 'customerName'].includes(field)));
   const result = { ...cart(data), operationKey: operationKey(data.operationKey) };
   if (typeof data.quoteToken !== 'string' || !/^[a-f0-9]{64}$/.test(data.quoteToken)) fail('QUOTE_CHANGED', 'quoteToken');
   result.quoteToken = data.quoteToken;
@@ -43,15 +43,21 @@ function sale(body) {
   if (result.paymentMethod !== 'CASH' && data.cashReceived !== null) fail('CASH_INVALID', 'cashReceived');
   if (typeof data.detail !== 'string' || data.detail.length > 500 || [...data.detail].some(character => character.charCodeAt(0) <= 31)) fail('DETAIL_INVALID', 'detail');
   result.detail = data.detail.trim();
+  result.customerName = customerName(data.customerName);
   return result;
 }
+function customerName(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string' || value.length > 160 || [...value].some(character => character.charCodeAt(0) < 32)) fail('CUSTOMER_NAME_INVALID', 'customerName');
+  return value.trim();
+}
 function order(body) {
-  const fields = ['items', 'priceType', 'discountPercent', 'detail', 'operationKey', 'clientId'];
-  const data = v.body(body, fields, fields.filter(field => field !== 'clientId'));
+  const fields = ['items', 'priceType', 'discountPercent', 'detail', 'operationKey', 'clientId', 'customerName'];
+  const data = v.body(body, fields, fields.filter(field => !['clientId', 'customerName'].includes(field)));
   const items = cart({ ...data, paymentMethod: 'CASH' });
   if (typeof data.detail !== 'string' || data.detail.length > 500 || [...data.detail].some(character => character.charCodeAt(0) <= 31)) fail('DETAIL_INVALID', 'detail');
   const clientId = data.clientId === undefined || data.clientId === null ? null : v.id(data.clientId);
-  return { ...items, clientId, detail: data.detail.trim(), operationKey: operationKey(data.operationKey) };
+  return { ...items, clientId, detail: data.detail.trim(), customerName: customerName(data.customerName), operationKey: operationKey(data.operationKey) };
 }
 function orderQuote(body) {
   const data = v.body(body, ['paymentMethod']);

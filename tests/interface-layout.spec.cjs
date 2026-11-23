@@ -10,18 +10,19 @@ const modules = [
   ['navReportesBtn', 'reportesView'], ['navDashboardBtn', 'dashboardView'], ['navConfigBtn', 'configView']
 ];
 
-test('login stays compact on desktop, tablet, and mobile with empty and visible validation', async ({ page }) => {
+test('login with legacy license notice fits desktop, tablet, and mobile without page overflow', async ({ page }) => {
   for (const { width, height } of [{ width: 1440, height: 900 }, { width: 768, height: 1024 }, { width: 390, height: 844 }]) {
     await page.setViewportSize({ width, height });
     await page.goto('/');
     await expect(page.locator('#loginScreen')).toBeVisible();
+    await expect(page.locator('#localLicenseLegacyPrompt')).toBeVisible();
     const emptyState = await page.evaluate(() => ({
       cardHeight: document.querySelector('.login-card').getBoundingClientRect().height,
       hiddenErrorDisplay: getComputedStyle(document.getElementById('loginError')).display,
       feedbackHeights: [...document.querySelectorAll('#loginForm .field-feedback')].map(slot => slot.getBoundingClientRect().height),
       documentOverflow: document.documentElement.scrollHeight > innerHeight
     }));
-    expect(emptyState.cardHeight).toBeLessThan(460);
+    expect(emptyState.cardHeight).toBeLessThan(height - 32);
     expect(emptyState.hiddenErrorDisplay).toBe('none');
     expect(emptyState.feedbackHeights).toEqual([0, 0]);
     expect(emptyState.documentOverflow).toBe(false);

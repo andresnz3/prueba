@@ -44,7 +44,9 @@ test('Integración MySQL fase 5.6: proveedores, compras conectadas y CxP', async
   assert.equal(sellerPurchases.status, 403); assert.equal(sellerPurchases.data.error.code, 'MODULE_FORBIDDEN');
   const sellerSupplierWrite = await seller.request('/suppliers', 'POST', { name: 'No autorizado', contact: 'Vendedor', phone: '5550000', ruc: null, address: 'Managua' });
   assert.equal(sellerSupplierWrite.status, 403); assert.equal(sellerSupplierWrite.data.error.code, 'MODULE_FORBIDDEN');
-  const productResponse = await admin.request('/products', 'POST', { barcode: 'P-' + randomUUID(), name: 'Procurement product', category: 'General', cost: '5.00', marginRetail: '20.0000', marginWholesale: '10.0000', retailPrice: '7.00', wholesalePrice: '6.00', stock: '3.000', minStock: '1.000', taxRate: '0.0000', image: null, active: true });
+  const category = await admin.request('/product-categories', 'POST', { name: 'Correcciones' });
+  assert.equal(category.status, 201, JSON.stringify(category.data));
+  const productResponse = await admin.request('/products', 'POST', { barcode: 'P-' + randomUUID(), name: 'Procurement product', category: 'Correcciones', cost: '5.00', marginRetail: '20.0000', marginWholesale: '10.0000', retailPrice: '7.00', wholesalePrice: '6.00', stock: '3.000', minStock: '1.000', taxRate: '0.0000', image: null, active: true });
   assert.equal(productResponse.status, 201, JSON.stringify(productResponse.data));
   const product = productResponse.data.product;
   const supplierResponse = await admin.request('/purchases/suppliers', 'POST', { name: 'Proveedor ' + randomUUID().slice(0, 8), contact: 'Contacto', phone: '5551000', ruc: null, address: 'Managua' });

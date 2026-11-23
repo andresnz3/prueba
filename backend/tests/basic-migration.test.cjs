@@ -18,8 +18,8 @@ const basicPackage = (overrides = {}) => ({
   ...overrides
 });
 
-function fakeRepo({ target = { id: '2', name: 'Destino', status: 'ACTIVE' }, products = [], clients = [], suppliers = [], failOnSupplier = false } = {}) {
-  const state = { target, products: [...products], clients: [...clients], suppliers: [...suppliers], audits: [] };
+function fakeRepo({ target = { id: '2', name: 'Destino', status: 'ACTIVE' }, products = [], clients = [], suppliers = [], categories = [], failOnSupplier = false } = {}) {
+  const state = { target, products: [...products], clients: [...clients], suppliers: [...suppliers], categories: [...categories], audits: [] };
   const repo = {
     pool: {},
     async transaction(work) {
@@ -44,6 +44,10 @@ function fakeRepo({ target = { id: '2', name: 'Destino', status: 'ACTIVE' }, pro
         }
         state.products.push({ business_id: values[0], barcode, name, category, cost, marginRetail, marginWholesale, retailPrice, wholesalePrice, stock, minStock, taxRate, active });
         return { insertId: String(state.products.length) };
+      }
+      if (sql.startsWith('INSERT IGNORE INTO product_categories')) {
+        if (!state.categories.some(item => item.business_id === values[0] && item.normalized_name === values[2])) state.categories.push({ business_id: values[0], name: values[1], normalized_name: values[2] });
+        return { insertId: String(state.categories.length) };
       }
       if (sql.startsWith('INSERT INTO clients')) {
         state.clients.push({ business_id: values[0], name: values[1] });
@@ -120,6 +124,7 @@ test('basic import skips normalized duplicates and audits only the selected targ
   assert.deepEqual(result.skipped, { products: 2, clients: 1, suppliers: 1 });
   assert.equal(state.products.at(-1).business_id, '2');
   assert.equal(state.products.at(-1).barcode, 'NEW');
+  assert.deepEqual(state.categories, [{ business_id: '2', name: 'Alimentos', normalized_name: 'alimentos' }]);
   assert.equal(state.clients.at(-1).business_id, '2');
   assert.equal(state.suppliers.at(-1).business_id, '2');
   assert.equal(state.audits.length, 1);
@@ -148,6 +153,7 @@ test('basic import rolls back its inserts and audit when any insert fails', asyn
   const service = createSystemAdminService(repo);
   await assert.rejects(service.migrateBasic(admin, '2', basicPackage(), false), /supplier insert failed/);
   assert.equal(state.products.length, 0);
+  assert.equal(state.categories.length, 0);
   assert.equal(state.clients.length, 0);
   assert.equal(state.suppliers.length, 0);
   assert.equal(state.audits.length, 0);

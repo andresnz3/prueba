@@ -6,6 +6,7 @@ const http = require('node:http');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const { readFrontendCsp } = require('../tests/helpers/security-headers.cjs');
 
 async function createOwnerFixture(storageState, origin) {
   const { chromium } = require('@playwright/test');
@@ -31,11 +32,13 @@ async function createOwnerFixture(storageState, origin) {
 const port = Number(process.env.POS_LOCAL_TEST_PORT) || 5501;
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('POS_LOCAL_TEST_PORT must be an unprivileged TCP port');
 const publicRoot = path.resolve(__dirname, '..', 'dist');
+const sameOriginApiConfig = fs.readFileSync(path.resolve(__dirname, '..', 'docker/frontend/api-config.js'));
 const mimeTypes = new Map([
   ['.css', 'text/css; charset=utf-8'], ['.html', 'text/html; charset=utf-8'],
   ['.ico', 'image/x-icon'], ['.jpeg', 'image/jpeg'], ['.jpg', 'image/jpeg'],
   ['.js', 'text/javascript; charset=utf-8'], ['.json', 'application/json; charset=utf-8'],
-  ['.png', 'image/png'], ['.svg', 'image/svg+xml; charset=utf-8'], ['.webp', 'image/webp'], ['.woff2', 'font/woff2'],
+  ['.png', 'image/png'], ['.svg', 'image/svg+xml; charset=utf-8'], ['.txt', 'text/plain; charset=utf-8'],
+  ['.webp', 'image/webp'], ['.woff2', 'font/woff2'], ['.xml', 'application/xml; charset=utf-8'],
   ['.webmanifest', 'application/manifest+json; charset=utf-8']
 ]);
 
@@ -54,16 +57,35 @@ function createPublicServer() {
       response.writeHead(404).end();
       return;
     }
-    fs.stat(filename, (error, stats) => {
-      if (error || !stats.isFile()) { response.writeHead(404).end(); return; }
+    if (relative === 'api-config.js') {
       response.writeHead(200, {
-        'Content-Type': mimeTypes.get(path.extname(filename).toLowerCase()) || 'application/octet-stream',
-        'Content-Length': stats.size,
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Content-Length': sameOriginApiConfig.length,
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff'
       });
-      if (request.method === 'HEAD') response.end();
-      else fs.createReadStream(filename).pipe(response);
+      response.end(sameOriginApiConfig);
+      return;
+    }
+    fs.stat(filename, (error, stats) => {
+      if (error) { response.writeHead(404).end(); return; }
+      const servedFilename = stats.isDirectory() ? path.join(filename, 'index.html') : filename;
+      if (servedFilename !== publicRoot && !servedFilename.startsWith(publicRoot + path.sep)) {
+        response.writeHead(404).end();
+        return;
+      }
+      fs.stat(servedFilename, (fileError, fileStats) => {
+        if (fileError || !fileStats.isFile()) { response.writeHead(404).end(); return; }
+        response.writeHead(200, {
+          'Content-Type': mimeTypes.get(path.extname(servedFilename).toLowerCase()) || 'application/octet-stream',
+          'Content-Length': fileStats.size,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+          ...(path.extname(servedFilename).toLowerCase() === '.html' ? { 'Content-Security-Policy': readFrontendCsp() } : {})
+        });
+        if (request.method === 'HEAD') response.end();
+        else fs.createReadStream(servedFilename).pipe(response);
+      });
     });
   });
 }

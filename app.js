@@ -31,6 +31,7 @@ return db;
 let localDB = connectedMode ? null : createPosDatabase('POS_OfflineDB');
 
 let products = [], clients = [], suppliers = [], purchasesHistory = [], salesHistory = [], cart = [];
+let historySearchIds = null;
 let cajaActual = null, cajaHistorial = [], gastosHistory = [], abonosHistory = [], auditHistory = [];
 let buyerType = "retail", paymentMethod = "cash", currentUser = null;
 let unlockedModuleId = null;
@@ -1737,7 +1738,9 @@ async function registrarVenta(total, pago, vuelto) {
     if (blockPendingConnected()) return;
     try {
         if (cajaActual?.estado !== "abierta") { showAlert(MSG_SIN_CAJA); return; }
-        const sale = await window.PosLocalFlow.record(window.PosLocalFlow.cartInput(), { paymentMethod, received: pago, expectedTotal: total });
+        const input = window.PosLocalFlow.cartInput();
+        const sale = await window.PosLocalFlow.record(input, { paymentMethod, received: pago, expectedTotal: total });
+        window.PosRuntime.clearSaleDetail(input.detail);
         await initApp(); actualizarTablaInventario(); actualizarCatalogo(); renderDashboard(); renderCajaView();
         ticketEsVentaNueva = true;
         generarVisualizacionTicket(sale, pago, vuelto, false);
@@ -1874,6 +1877,10 @@ function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
     const resumenDescuento = descuentoTicket > 0
         ? '<div class="invoice-summary-row"><span>Subtotal</span><strong>' + sysConfig.currency + subtotalFinal.toFixed(2) + '</strong></div><div class="invoice-summary-row"><span>Descuento' + (sale.descuentoPct ? ' (' + sale.descuentoPct + '%)' : '') + '</span><strong>-' + sysConfig.currency + descuentoTicket.toFixed(2) + '</strong></div>'
         : "";
+    const rawSaleDetail = [sale.detalleCliente, sale.detail, sale.detalle, sale.customerName, sale.clienteNombre]
+        .find(value => typeof value === 'string' && value.trim() && value.trim() !== '-');
+    const saleDetail = typeof rawSaleDetail === 'string' ? rawSaleDetail.trim() : '';
+    const saleDetailHtml = saleDetail ? '<div class="invoice-field"><span class="invoice-field-label">Nombre o detalle indicado</span><strong>' + escapeHtml(saleDetail) + '</strong></div>' : '';
     const tkCont = document.getElementById("ticketContent");
     if (tkCont) {
         tkCont.innerHTML = '<div id="imprimibleTicket" class="invoice-view invoice-view--sale">' +
@@ -1884,7 +1891,7 @@ function generarVisualizacionTicket(sale, pago, vuelto, esCopia) {
             '<div class="invoice-card"><div class="invoice-grid">' +
                 '<div class="invoice-field"><span class="invoice-field-label">Factura</span><strong>' + invoiceDisplayNumber + '</strong>' + historicalOriginNote + '</div>' +
                 '<div class="invoice-field"><span class="invoice-field-label">Fecha y hora</span><strong>' + sale.fecha + '</strong></div>' +
-                '<div class="invoice-field"><span class="invoice-field-label">Cajero</span><strong>' + escapeHtml(sale.vendedor) + '</strong></div>' +
+                '<div class="invoice-field"><span class="invoice-field-label">Cajero</span><strong>' + escapeHtml(sale.vendedor) + '</strong></div>' + saleDetailHtml +
             '</div></div>' +
             '<section class="invoice-card"><h4 class="invoice-section-title">Detalle de venta</h4><div class="invoice-items">' + prods + '</div></section>' +
             '<section class="invoice-total-box">' + resumenDescuento +
@@ -2013,11 +2020,18 @@ window.confirmarAnularVenta = async function() {
 function actualizarTablaHistorial() {
     const tbody = document.getElementById("historyTableBody"); if (!tbody) return; tbody.innerHTML = "";
     const periodRange = window.PosPeriodFilters?.range("history") || { from: "", until: "" };
+    const searchQuery = (document.getElementById('historyInvoiceSearch')?.value || '').trim().toLocaleLowerCase();
+    const matchesSearch = sale => {
+        if (connectedMode && historySearchIds !== null && !historySearchIds.has(String(sale.id))) return false;
+        if (!searchQuery) return true;
+        return [sale.numeroVisual, sale.numero, sale.detalle, sale.detalleCliente, sale.detail, sale.cliente, sale.clientName]
+            .some(value => String(value ?? '').toLocaleLowerCase().includes(searchQuery));
+    };
     let tV = 0, periodV = 0, cV = 0, cardV = 0, transferV = 0, crV = 0, tG = 0; const productSalesCounter = {};
     purchasesHistory.forEach(p => { if (!p.anulada && window.PosPeriodFilters?.matches(p.fechaTS || p.id || p.fecha, periodRange)) tG += Number(p.total) || 0; });
     gastosHistory.forEach(g => { if (!g.anulado && window.PosPeriodFilters?.matches(g.fechaTS || g.id || g.fecha, periodRange)) tG += Number(g.monto) || 0; });
     if (salesHistory.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center">No hay ventas registradas.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center">${searchQuery ? 'No hay facturas que coincidan con la búsqueda.' : 'No hay ventas registradas.'}</td></tr>`;
     } else {
         [...salesHistory].reverse().forEach(v => {
             if (!v.anulada) {
@@ -2032,10 +2046,13 @@ function actualizarTablaHistorial() {
                     if (v.items) v.items.forEach(i => { productSalesCounter[i.name] = (productSalesCounter[i.name] || 0) + i.cantidad; });
                 }
             }
+            if (!matchesSearch(v)) return;
             const medioPago = mediosPagoVenta[obtenerMedioPagoVenta(v)] || "Efectivo";
             const estadoPago = v.anulada ? "ANULADA" : v.estadoCaja === "pendiente" ? "PENDIENTE DE CONFIRMACIÓN" : v.estadoCaja === "confirmado" ? "CONFIRMADO" : "";
             const pagoHtml = v.metodo === "Crédito" ? '<span style="color:#d32f2f; font-weight:bold;">CRÉDITO</span><br><small style="color:#666;">Vence: ' + escapeHtml(v.vencimiento) + " · " + (obtenerSaldoFactura("cliente", v) > 0 ? "Pendiente" : "Pagada") + '</small>' : v.conectado ? '<span style="color:' + (v.anulada ? "#777" : v.estadoCaja === "pendiente" ? "#b45309" : "#166534") + '; font-weight:bold;">' + escapeHtml(medioPago.toUpperCase()) + '</span><br><small>' + estadoPago + '</small>' : '<span style="color:#28a745; font-weight:bold;">' + escapeHtml(medioPago.toUpperCase()) + '</span>';
-            const detalleFormat = v.anulada ? `<strong>${escapeHtml(v.detalle)}</strong><br><span style="color:#d32f2f; font-size:10px; font-weight:bold;">❌ ANULADA</span>` : `<strong>${escapeHtml(v.detalle)}</strong> (${escapeHtml(v.tarifa)})`;
+            const historyCustomer = v.clienteNombre || v.detalleCliente || v.clientName || '';
+            const customerHtml = historyCustomer && historyCustomer !== v.detalle ? `<br><small>Cliente: ${escapeHtml(historyCustomer)}</small>` : '';
+            const detalleFormat = v.anulada ? `<strong>${escapeHtml(v.detalle)}</strong>${customerHtml}<br><span style="color:#d32f2f; font-size:10px; font-weight:bold;">❌ ANULADA</span>` : `<strong>${escapeHtml(v.detalle)}</strong>${customerHtml} (${escapeHtml(v.tarifa)})`;
             const totalFormat = v.anulada ? `<del>${sysConfig.currency}${r2(v.total).toFixed(2)}</del>` : `${sysConfig.currency}${r2(v.total).toFixed(2)}`;
             const actionBtns = v.historicaConectada || v.anulada ? `<button class="btn btn-sm btn-info" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button>` : `<button class="btn btn-sm btn-info" onclick="window.reimprimirTicket('${v.id}')">Ver Factura</button> <button class="btn btn-sm btn-danger" onclick="window.abrirAnularVenta('${v.id}')">Anular</button>`;
             const tr = document.createElement("tr");
@@ -2048,6 +2065,7 @@ function actualizarTablaHistorial() {
             tr.innerHTML = `<td>${invoiceCell}</td><td>${escapeHtml(v.fecha)}</td><td>${escapeHtml(v.vendedor)}</td><td>${detalleFormat}</td><td>${pagoHtml}</td><td style="font-weight:bold;">${totalFormat}</td><td>${actionBtns}</td>`;
             tbody.appendChild(tr);
         });
+        if (!tbody.children.length) tbody.innerHTML = `<tr><td colspan="7" class="text-center">No hay facturas que coincidan con la búsqueda.</td></tr>`;
     }
     const setTotal = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = `${sysConfig.currency}${r2(value).toFixed(2)}`; };
     if (!connectedMode) {
@@ -2065,6 +2083,11 @@ function actualizarTablaHistorial() {
     }
     window.PosPeriodFilters?.filterTable("historyTableBody", periodRange);
 }
+
+document.getElementById('historyInvoiceSearch')?.addEventListener('input', () => {
+    if (connectedMode) window.PosSales?.searchHistory();
+    else actualizarTablaHistorial();
+});
 
 function actualizarTablaAuditoria() { const tbody = document.getElementById("auditTableBody"); if(!tbody) return; if (auditHistory.length === 0) { tbody.innerHTML = `<tr><td colspan="5" class="text-center">Sin registros de auditoría.</td></tr>`; } else { tbody.innerHTML = [...auditHistory].reverse().map(a => `<tr data-table-date="${tableDate(a.fechaTS || a.id || a.fecha)}"><td>${a.fecha}</td><td><strong>${escapeHtml(a.usuario)}</strong></td><td>${escapeHtml(a.modulo)}</td><td>${escapeHtml(a.accion)}</td><td style="white-space: pre-line; font-size: 0.9em;">${escapeHtml(a.detalle)}</td></tr>`).join(""); } }
 
@@ -3580,8 +3603,11 @@ window.generarExcelDashboard = function() {
 };
 // Puente de estado del POS: no concede permisos en la API.
 window.PosRuntime = Object.freeze({
-    salesInput() { return { businessId: connectedMode ? CONNECTED_EFFECTIVE_BUSINESS_ID : DEFAULT_BUSINESS_ID, userId: currentUser?.id, role: currentUser?.role, items: cart.map(item => ({ productId: String(item.id), quantity: String(item.cantidad) })), priceType: buyerType === 'retail' ? 'RETAIL' : 'WHOLESALE', paymentMethod: paymentMethod.toUpperCase(), clientId: paymentMethod === 'credit' ? (document.getElementById('creditClientSelect')?.value || null) : null, discountPercent: document.querySelector('input[name="descApplies"][value="si"]')?.checked ? document.getElementById('descuentoPct').value : '0', detail: document.getElementById('saleDetailInput').value.trim() }; },
-    setSales(values) { if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto'); salesHistory = values; actualizarTablaHistorial(); },
+    salesInput() { const name = document.getElementById('saleDetailInput').value.trim(); return { businessId: connectedMode ? CONNECTED_EFFECTIVE_BUSINESS_ID : DEFAULT_BUSINESS_ID, userId: currentUser?.id, role: currentUser?.role, items: cart.map(item => ({ productId: String(item.id), quantity: String(item.cantidad) })), priceType: buyerType === 'retail' ? 'RETAIL' : 'WHOLESALE', paymentMethod: paymentMethod.toUpperCase(), clientId: paymentMethod === 'credit' ? (document.getElementById('creditClientSelect')?.value || null) : null, discountPercent: document.querySelector('input[name="descApplies"][value="si"]')?.checked ? document.getElementById('descuentoPct').value : '0', detail: name, customerName: name }; },
+    clearSaleDetail(value) { const input = document.getElementById('saleDetailInput'); if (input && input.value.trim() === String(value ?? '').trim()) input.value = ''; },
+    setSales(values) { if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto'); salesHistory = values; historySearchIds = null; actualizarTablaHistorial(); },
+    setSalesSearchResults(values) { if (!connectedMode || !Array.isArray(values) || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto'); const cache = new Map(salesHistory.map(value => [String(value.id), value])); values.forEach(value => cache.set(String(value.id), value)); salesHistory = [...cache.values()]; historySearchIds = new Set(values.map(value => String(value.id))); actualizarTablaHistorial(); },
+    clearSalesSearchResults() { if (!connectedMode) throw new Error('Modo conectado requerido'); historySearchIds = null; actualizarTablaHistorial(); },
     publishSale(value) { if (!connectedMode || value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID) throw new Error('Negocio incorrecto'); const index = salesHistory.findIndex(sale => sale.id === value.id); if (index < 0) salesHistory.push(value); else salesHistory[index] = value; actualizarTablaHistorial(); },
     setCash(values) { if (!connectedMode || values.some(value => value.businessId !== CONNECTED_EFFECTIVE_BUSINESS_ID)) throw new Error('Negocio incorrecto'); cajaHistorial = values; cajaActual = values.find(value => value.estado === 'abierta') || null; },
     setUser(user) { currentUser = user ? { ...user, displayName: user.fullName } : null; updateProductCategoryAdminVisibility(); },

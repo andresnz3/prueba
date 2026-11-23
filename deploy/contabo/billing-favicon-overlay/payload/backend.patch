@@ -1,0 +1,9 @@
+diff --git a/backend/src/routes/sales.js b/backend/src/routes/sales.js
+index active..active 100644
+--- a/backend/src/routes/sales.js
++++ b/backend/src/routes/sales.js
+
+diff --git a/backend/src/services/sales.js b/backend/src/services/sales.js
+index active..active 100644
+--- a/backend/src/services/sales.js
++++ b/backend/src/services/sales.js

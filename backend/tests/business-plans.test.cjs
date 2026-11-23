@@ -13,9 +13,12 @@ test('catalog preserves local and connected seat limits', () => {
   ]);
 });
 
-test('counts active seats and admins while excluding only the system administrator', async () => {
-  const repo = { rows: async () => [{ activeUsers: '3', inactiveUsers: '1', activeAdmins: '1' }] };
-  assert.deepEqual(await businessUserCounts(repo, {}, '1'), { activeUsers: 3, inactiveUsers: 1, activeAdmins: 1 });
+test('quota counts preserve the legacy business-1 administrator exception separately from panel access', async () => {
+  let query = '';
+  const repo = { rows: async (_db, sql, params) => { query = sql; assert.deepEqual(params, ['1']); return [{ activeUsers: '2', inactiveUsers: '1', activeAdmins: '1' }]; } };
+  assert.deepEqual(await businessUserCounts(repo, {}, '1'), { activeUsers: 2, inactiveUsers: 1, activeAdmins: 1 });
+  assert.match(query, /business_id = 1 AND username = 'andres' AND role = 'ADMIN'/);
+  assert.doesNotMatch(query, /MIN\s*\(/i);
 });
 
 test('active users consume seats, inactive users do not, and a business has at most one active admin', () => {
@@ -34,9 +37,16 @@ test('reactivation and role promotion are checked against the resulting active r
   assert.doesNotThrow(() => assertUserActivation(standard, { activeUsers: 4, activeAdmins: 1 }, inactiveSeller, 'VENDEDOR', true));
 });
 
-test('system admin does not consume a seat and legacy businesses remain unassigned until chosen', () => {
+test('the pre-existing commercial exception remains limited to the named business-1 administrator', () => {
   const plan = planByCode.get('CONECTADO_BASICO');
-  assert.doesNotThrow(() => assertUserAddition(plan, { activeUsers: 3, activeAdmins: 1 }, { role: 'ADMIN', businessId: '1', username: 'andres' }));
+  const full = { activeUsers: 3, activeAdmins: 1 };
+  assert.doesNotThrow(() => assertUserAddition(plan, full, { role: 'ADMIN', businessId: '1', username: 'andres' }));
+  assert.throws(() => assertUserAddition(plan, full, { role: 'ADMIN', businessId: '1', username: 'secondary' }), error => error.publicCode === 'BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED');
+  assert.throws(() => assertUserAddition(plan, { activeUsers: 3, activeAdmins: 0 }, { role: 'ADMIN', businessId: '2', username: 'andres' }), error => error.publicCode === 'BUSINESS_PLAN_USER_LIMIT_EXCEEDED');
+  const legacyAdmin = { id: '7', business_id: '1', username: 'andres', role: 'ADMIN', active: true };
+  const secondary = { id: '8', business_id: '1', username: 'secondary', role: 'ADMIN', active: false };
+  assert.doesNotThrow(() => assertUserActivation(plan, full, legacyAdmin, 'ADMIN', true));
+  assert.throws(() => assertUserActivation(plan, full, secondary, 'ADMIN', true), error => error.publicCode === 'BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED');
   assert.deepEqual(capacityView(null, { activeUsers: 2, inactiveUsers: 1, activeAdmins: 1 }), {
     planCode: null, planName: 'Sin asignar', activeUsers: 2, inactiveUsers: 1, activeAdmins: 1, maximumUsers: null, availableUsers: null
   });

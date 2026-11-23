@@ -1,0 +1,33 @@
+{
+  "name": "proyecto-1",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint .",
+    "check:encoding": "node scripts/check-text-encoding.cjs",
+    "check:vendor": "node scripts/check-vendored-assets.cjs",
+    "test:local-browser": "node scripts/run-local-playwright.cjs",
+    "test:docker:frontend": "node scripts/test-docker-frontend.cjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andresnz3/prueba.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/andresnz3/prueba/issues"
+  },
+  "homepage": "https://github.com/andresnz3/prueba#readme",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0",
+    "http-server": "^14.1.1"
+  }
+}

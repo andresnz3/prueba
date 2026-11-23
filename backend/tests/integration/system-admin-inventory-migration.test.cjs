@@ -36,6 +36,8 @@ test('MySQL registra inventario inicial desde un paquete despues de la migracion
   await t.test('fase basica crea el producto y habilita el preview', async () => {
     const imported = await service.migrateBasic(admin, targetBusiness, sourcePackage, false);
     assert.deepEqual(imported.created, { products: 1, clients: 0, suppliers: 0 });
+    const [category] = await rows(pool, 'SELECT name, normalized_name FROM product_categories WHERE business_id = ? AND normalized_name = ?', [targetBusiness, 'abarrotes']);
+    assert.deepEqual(category, { name: 'Abarrotes', normalized_name: 'abarrotes' });
     const preview = await service.previewInventoryMigration(admin, targetBusiness, sourcePackage);
     assert.equal(preview.eligible, true);
     assert.equal(preview.products.productsWithStock, 1);

@@ -109,3 +109,11 @@ Crea `business_migration_controls`, ligada al negocio, al administrador que inic
 ### Migracion 014: operaciones historicas locales
 
 Adiciona marcas historicas y nombres de responsables/estados originales en Caja, gastos, pagos a proveedores, inventario, ventas, compras y ordenes. Crea `migration_supplier_payment_references` para conservar la relacion de abonos locales con pagos MySQL y hacer seguros los reintentos. Los valores por omision dejan los registros actuales como operativos y la migracion no crea movimientos ni altera saldos. El importador administrativo la requiere para consultar operaciones historicas desde los modulos normales; solo se aplica automaticamente en las bases temporales del ejecutor. No se ha aplicado a `pos_multitenant`.
+
+## Migracion 021: categorias de productos por negocio
+
+Crea `product_categories` aislada por `business_id`, con nombres únicos normalizados por negocio. Conserva las categorías predeterminadas y registra las categorías que ya aparecen en productos existentes; no cambia nombres de negocios ni datos comerciales. La API permite crear o renombrar categorías a administradores autenticados del negocio correspondiente; los productos de ese negocio que usan una categoría renombrada se actualizan dentro de la misma transacción y quedan auditados. No hay eliminación de categorías para conservar referencias e historial. Las instalaciones nuevas y los negocios creados por el backend reciben las cuatro categorías predeterminadas. Requiere 020 y preparar esta migración no la aplica a ninguna base principal.
+
+### Migración 023: nombres de clientes en ventas y pedidos
+
+Agrega `customer_name` a `sales` y `sale_orders`, y rellena el nombre actual de clientes registrados cuando existe una referencia válida a `clients`. Los pedidos nuevos guardan el nombre indicado y lo transfieren a la venta al cobrar; las ventas a crédito conservan el nombre del cliente registrado. Los pedidos y ventas anteriores sin cliente quedan con nombre nulo y siguen siendo consultables. Requiere la estructura de crédito 004. La migración está preparada en código y no se aplica a producción.

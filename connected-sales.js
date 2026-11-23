@@ -4,7 +4,7 @@
   if (!connectedMode) return;
   const el = id => document.getElementById(id);
   const financialKinds = ['PURCHASE', 'EDIT_PURCHASE', 'CANCEL_PURCHASE', 'EXPENSE', 'CANCEL_EXPENSE', 'SUPPLIER_PAYMENT', 'CUSTOMER_PAYMENT_VOID', 'SUPPLIER_PAYMENT_VOID', 'CASH_MANUAL'];
-  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, displayedCashSessions = [], salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0, historyLoadFlight = null;
+  let busy = false, quote = null, quoteInput = null, activeScope = null, currentCash = null, displayedCashSessions = [], salesFlow = 'DIRECT', activeOrderId = null, nextInvoiceNumber = null, pendingOrderDetails = new Map(), historySales = [], historySummaryRequest = 0, historyLoadFlight = null, historySearchRequest = 0, historySearchTimer = null;
   const state = () => window.PosRuntime.salesInput();
   const scope = () => { const s = state(); return 'posOperation_' + encodeURIComponent(window.POS_API_BASE_URL) + '_' + s.businessId + '_' + s.userId; };
   function pending() {
@@ -20,11 +20,34 @@
   function showPending() { if (pending()) notice('Hay una operación cuyo resultado debe comprobarse antes de volver a cobrar. Requiere conexión.'); else notice(); }
   function api(action) { return window.PosConnected.inventoryOperation(action); }
   const navigationIsCurrent = navigation => !navigation || window.PosConnected.isNavigationCurrent(navigation);
-  async function pages(method, navigation) {
+  const historyErrorStages = new WeakMap();
+  function historyDiagnosticsEnabled() {
+    try { return new URLSearchParams(window.location.search).get('diag') === 'history'; }
+    catch { return false; }
+  }
+  function historyDiagnostic(stage, error) {
+    if (!historyDiagnosticsEnabled()) return;
+    const code = /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code || '') ? error.code : error?.message === 'Negocio incorrecto' ? 'BUSINESS_SCOPE_MISMATCH' : 'JAVASCRIPT_EXCEPTION';
+    const status = Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599 ? error.status : null;
+    const errorName = /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(error?.name || '') ? error.name : 'Error';
+    const stack = typeof error?.stack === 'string' ? error.stack : '';
+    const location = stack.split(/\r?\n/).map(frame => {
+      const match = /(?:^|[/\\])((?:connected-sales|connected-auth|api-client|app)\.js)(?:\?[^:\s)]*)?:(\d+):\d+/.exec(frame);
+      return match ? match[1] + ':' + match[2] : null;
+    }).find(Boolean) || null;
+    console.warn('[SoftVentaWeb diagnostic] ' + JSON.stringify({ area: 'history', stage, code, status, errorName, location }));
+  }
+  function diagnoseHistoryRequest(stage, request) {
+    return Promise.resolve(request).catch(error => {
+      if (error && (typeof error === 'object' || typeof error === 'function')) historyErrorStages.set(error, stage);
+      throw error;
+    });
+  }
+  async function pages(method, navigation, query = '') {
     return api(async (client, business) => {
       const list = []; let maxId = null;
       for (let offset = 0; ; offset += 100) {
-        const values = await client[method](offset, maxId);
+        const values = await client[method](offset, maxId, query);
         if (!navigationIsCurrent(navigation)) return list;
         if (!maxId && values.length) maxId = values[0].id;
         if (values.some(value => value.businessId !== business)) throw new window.PosApiError('INVALID_RESPONSE');
@@ -34,9 +57,13 @@
   }
   function mappedSale(sale) {
     const credit = sale.paymentMethod === 'CREDIT';
+    const rawDetail = typeof sale.detail === 'string' ? sale.detail : '';
+    const historyMarker = sale.isHistorical && rawDetail.startsWith('Factura local:') ? rawDetail.indexOf(' · ') : -1;
+    let customerDetail = rawDetail;
+    if (sale.isHistorical && rawDetail.startsWith('Factura local:')) customerDetail = historyMarker < 0 ? '' : rawDetail.slice(historyMarker + 3);
     const originalInvoice = sale.originalInvoiceNumber === null || sale.originalInvoiceNumber === undefined ? '' : String(sale.originalInvoiceNumber).trim();
     const displayInvoice = /^\d+$/.test(originalInvoice) ? originalInvoice.padStart(6, '0') : originalInvoice;
-    return { id: sale.id, businessId: sale.businessId, numero: sale.invoiceNumber, numeroVisual: sale.isHistorical ? displayInvoice || null : String(sale.invoiceNumber).padStart(6, '0'), historicaConectada: sale.isHistorical === true, origenHistorico: sale.isHistorical ? (sale.sourceBusinessName || (sale.sourceBusinessKey ? 'Origen ' + sale.sourceBusinessKey.slice(0, 8) : 'Origen sin identificar')) : null, sourceBusinessKey: sale.sourceBusinessKey || null, sourceSaleId: sale.sourceSaleId || null, vendedor: sale.seller, fecha: new Date(sale.createdAt).toLocaleString(), fechaTS: Date.parse(sale.createdAt), detalle: sale.detail || '-', metodo: credit ? 'Crédito' : 'Contado', medioPago: sale.paymentMethod.toLowerCase(), cliente: credit ? sale.clientName : '-', clienteId: sale.clientId, vencimiento: sale.dueAt ? new Date(sale.dueAt).toLocaleDateString() : null, vencimientoTS: sale.dueAt ? Date.parse(sale.dueAt) : null, saldoPendiente: credit && sale.status === 'COMPLETED' ? Number(sale.total) : 0, tarifa: sale.priceType === 'RETAIL' ? 'Menudeo' : 'Mayoreo', subtotal: Number(sale.subtotal), descuentoPct: Number(sale.discountPercent), descuentoMonto: Number(sale.discount), total: Number(sale.total), anulada: sale.status === 'CANCELLED', motivoAnulacion: sale.cancelReason, conectado: true, estadoCaja: sale.cashStatus === 'PENDING' ? 'pendiente' : sale.cashStatus === 'CONFIRMED' ? 'confirmado' : 'no_aplica', cajaSessionId: sale.cashSessionId, items: sale.items.map(item => ({ id: item.productId, name: item.name, barcode: item.barcode, cantidad: Number(item.quantity), connectedSubtotal: Number(item.subtotal), retailPrice: Number(item.unitPrice), wholesalePrice: Number(item.unitPrice) })) };
+    return { id: sale.id, businessId: sale.businessId, numero: sale.invoiceNumber, numeroVisual: sale.isHistorical ? displayInvoice || null : String(sale.invoiceNumber).padStart(6, '0'), historicaConectada: sale.isHistorical === true, origenHistorico: sale.isHistorical ? (sale.sourceBusinessName || (sale.sourceBusinessKey ? 'Origen ' + sale.sourceBusinessKey.slice(0, 8) : 'Origen sin identificar')) : null, sourceBusinessKey: sale.sourceBusinessKey || null, sourceSaleId: sale.sourceSaleId || null, vendedor: sale.seller, fecha: new Date(sale.createdAt).toLocaleString(), fechaTS: Date.parse(sale.createdAt), detalle: sale.detail || '-', detalleCliente: customerDetail, clienteNombre: sale.customerName || sale.clientName || '', metodo: credit ? 'Crédito' : 'Contado', medioPago: sale.paymentMethod.toLowerCase(), cliente: credit ? sale.clientName : (sale.customerName || '-'), clienteId: sale.clientId, vencimiento: sale.dueAt ? new Date(sale.dueAt).toLocaleDateString() : null, vencimientoTS: sale.dueAt ? Date.parse(sale.dueAt) : null, saldoPendiente: credit && sale.status === 'COMPLETED' ? Number(sale.total) : 0, tarifa: sale.priceType === 'RETAIL' ? 'Menudeo' : 'Mayoreo', subtotal: Number(sale.subtotal), descuentoPct: Number(sale.discountPercent), descuentoMonto: Number(sale.discount), total: Number(sale.total), anulada: sale.status === 'CANCELLED', motivoAnulacion: sale.cancelReason, conectado: true, estadoCaja: sale.cashStatus === 'PENDING' ? 'pendiente' : sale.cashStatus === 'CONFIRMED' ? 'confirmado' : 'no_aplica', cajaSessionId: sale.cashSessionId, items: sale.items.map(item => ({ id: item.productId, name: item.name, barcode: item.barcode, cantidad: Number(item.quantity), connectedSubtotal: Number(item.subtotal), retailPrice: Number(item.unitPrice), wholesalePrice: Number(item.unitPrice) })) };
   }
   const historyMoney = value => 'C$' + Number(value || 0).toFixed(2);
   function historyBound(day, exclusive = false) {
@@ -51,6 +78,29 @@
     if (!status) return;
     status.textContent = message;
     status.classList.toggle('hidden', !message);
+  }
+  function historySearchQuery() { return (el('historyInvoiceSearch')?.value || '').trim().slice(0, 100); }
+  async function applyHistorySearch(query = historySearchQuery(), navigation) {
+    const request = ++historySearchRequest;
+    if (!query) { window.PosRuntime.clearSalesSearchResults(); setHistoryStatus(''); return true; }
+    try {
+      const matches = await pages('sales', navigation, query);
+      if (!navigationIsCurrent(navigation) || request !== historySearchRequest || query !== historySearchQuery()) return false;
+      window.PosRuntime.setSalesSearchResults(matches.map(mappedSale).reverse());
+      setHistoryStatus('');
+      return true;
+    } catch (error) {
+      if (!navigationIsCurrent(navigation) || request !== historySearchRequest) return false;
+      historyDiagnostic('sales-search', error);
+      setHistoryStatus(window.PosMessages.fromError(error, 'No se pudieron buscar las facturas. Inténtalo de nuevo.'));
+      if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
+      return false;
+    }
+  }
+  function searchHistory() {
+    clearTimeout(historySearchTimer);
+    const query = historySearchQuery();
+    historySearchTimer = setTimeout(() => { void applyHistorySearch(query); }, 180);
   }
   function renderHistoryList(id, entries, emptyText, renderEntry) {
     const list = el(id);
@@ -71,7 +121,7 @@
   async function refreshHistorySummary(sales = historySales, reportRequest = null, navigation) {
     const request = ++historySummaryRequest;
     const range = window.PosPeriodFilters?.range('history') || { from: '', until: '' };
-    if (range.error) { setHistoryStatus(range.error); return false; }
+    if (range.error) { setHistoryStatus(range.error); return true; }
     setHistoryStatus('Actualizando indicadores conectados…');
     try {
       const summaryResult = await (reportRequest || api(client => client.connectedReport(historyBound(range.from), historyBound(range.until, true))));
@@ -103,41 +153,58 @@
     } catch (error) {
       if (!navigationIsCurrent(navigation)) return false;
       if (request !== historySummaryRequest) return false;
+      historyDiagnostic('connected-report', error);
       for (const id of ['summaryTodaySales', 'summaryTotalSales', 'summaryCashSales', 'summaryCardSales', 'summaryTransferSales', 'summaryCreditSales', 'summaryTotalExpenses']) { const node = el(id); if (node) node.textContent = '—'; }
       renderHistoryList('lowStockList', [], 'No disponible sin autorización de Reportes.', value => value);
       renderHistoryList('topSellingList', [], 'No disponible sin autorización de Reportes.', value => value);
       setHistoryStatus(error.code === 'MODULE_FORBIDDEN' ? 'Los indicadores requieren autorización para Reportes. El historial de ventas sigue disponible.' : window.PosMessages.fromError(error, 'No se pudieron cargar los indicadores. Actualiza la pantalla e inténtalo de nuevo.'));
       if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
-      return error.code === 'MODULE_FORBIDDEN';
+      return error.code !== 'INVALID_SESSION';
     }
   }
   async function loadHistoryOnce(navigation) {
-    const range = window.PosPeriodFilters?.range('history') || { from: '', until: '' };
-    const reportRequest = range.error ? null : api(client => client.connectedReport(historyBound(range.from), historyBound(range.until, true)))
-      .then(report => ({ report }), failure => ({ failure }));
-    const [salesPage, historicalOrders] = await Promise.all([pages('sales', navigation), api(client => client.historicalOrders())]);
-    if (!navigationIsCurrent(navigation)) return false;
-    const rows = salesPage.map(mappedSale).reverse();
-    historySales = rows;
-    window.PosRuntime.setSales(rows);
-    const historicalOrdersBody = el('historicalOrdersTableBody');
-    if (historicalOrdersBody) {
-      if (!historicalOrders.length) fillEmpty(historicalOrdersBody, 6, 'Sin órdenes históricas.');
-      else {
-        historicalOrdersBody.replaceChildren();
-        for (const order of historicalOrders) {
-          const row = document.createElement('tr');
-          const items = order.items.map(item => item.name + ' × ' + Number(item.quantity) + (item.priceSnapshotAvailable && item.estimatedSubtotal !== null ? ' · C$' + item.estimatedSubtotal : ' · Precio histórico no disponible')).join('; ');
-          const status = order.status === 'CANCELLED' ? 'Anulada' : order.status === 'COMPLETED' ? 'Completada' : 'Pendiente';
-          for (const value of [order.id, new Date(order.createdAt).toLocaleString(), status, order.seller || 'No identificado', items, historyMoney(order.estimatedTotal)]) {
-            const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+    let stage = 'history-range';
+    try {
+      const range = window.PosPeriodFilters?.range('history') || { from: '', until: '' };
+      const reportRequest = range.error ? null : api(client => client.connectedReport(historyBound(range.from), historyBound(range.until, true)))
+        .then(report => ({ report }), failure => ({ failure }));
+      const [salesPage, historicalOrders] = await Promise.all([
+        diagnoseHistoryRequest('sales-list', pages('sales', navigation)),
+        diagnoseHistoryRequest('historical-orders', api(client => client.historicalOrders()))
+      ]);
+      if (!navigationIsCurrent(navigation)) return false;
+      stage = 'map-sales';
+      const rows = salesPage.map(mappedSale).reverse();
+      historySales = rows;
+      stage = 'publish-sales';
+      window.PosRuntime.setSales(rows);
+      clearTimeout(historySearchTimer);
+      if (historySearchQuery()) await applyHistorySearch(historySearchQuery(), navigation);
+      else window.PosRuntime.clearSalesSearchResults();
+      stage = 'render-historical-orders';
+      const historicalOrdersBody = el('historicalOrdersTableBody');
+      if (historicalOrdersBody) {
+        if (!historicalOrders.length) fillEmpty(historicalOrdersBody, 6, 'Sin órdenes históricas.');
+        else {
+          historicalOrdersBody.replaceChildren();
+          for (const order of historicalOrders) {
+            const row = document.createElement('tr');
+            const items = order.items.map(item => item.name + ' × ' + Number(item.quantity) + (item.priceSnapshotAvailable && item.estimatedSubtotal !== null ? ' · C$' + item.estimatedSubtotal : ' · Precio histórico no disponible')).join('; ');
+            const status = order.status === 'CANCELLED' ? 'Anulada' : order.status === 'COMPLETED' ? 'Completada' : 'Pendiente';
+            for (const value of [order.id, new Date(order.createdAt).toLocaleString(), status, order.seller || 'No identificado', items, historyMoney(order.estimatedTotal)]) {
+              const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+            }
+            historicalOrdersBody.append(row);
           }
-          historicalOrdersBody.append(row);
         }
       }
+      stage = 'connected-report';
+      const summaryLoaded = await refreshHistorySummary(rows, reportRequest, navigation);
+      return summaryLoaded !== false;
+    } catch (error) {
+      historyDiagnostic(historyErrorStages.get(error) || stage, error);
+      throw error;
     }
-    const summaryLoaded = await refreshHistorySummary(rows, reportRequest, navigation);
-    return summaryLoaded !== false;
   }
   let historyLoadNavigationId = null;
   async function loadHistory({ refresh = false, navigation } = {}) {
@@ -215,6 +282,7 @@
       const sale = mappedSale(result.sale);
       window.PosRuntime.publishSale(sale);
       if (result.kind === 'SALE') {
+        clearConfirmedSaleDetail(result.sale.detail);
         window.PosRuntime.clearCart(); el('connectedCheckoutModal').classList.add('hidden'); quote = quoteInput = null; activeOrderId = null;
         generarVisualizacionTicket(sale, Number(result.sale.cashReceived || result.sale.total), Number(result.sale.changeAmount || 0), recovered);
       } else {
@@ -239,6 +307,39 @@
     if (result.cash) showAlert(result.kind === 'OPEN_CASH' ? 'Caja abierta.' : 'Caja cerrada.');
     if (result.sale || result.payment || result.supplierPayment || result.cash || result.order) document.dispatchEvent(new Event('connected:report-data-changed'));
   }
+  function clearConfirmedSaleDetail(detail) {
+    const input = el('saleDetailInput'), expected = String(detail ?? '').trim();
+    if (!input || input.value.trim() !== expected) return;
+    try {
+      if (typeof window.PosRuntime?.clearSaleDetail === 'function') {
+        window.PosRuntime.clearSaleDetail(detail);
+        if (input.value.trim() !== expected) return;
+      }
+    } catch { /* The server has confirmed the sale; use the same-value fallback below. */ }
+    if (input.value.trim() === expected) input.value = '';
+  }
+  const isConfirmedSale = result => result?.kind === 'SALE' && result.sale?.status === 'COMPLETED';
+  function lockConfirmedSaleCheckout() {
+    activeOrderId = null; quote = quoteInput = null;
+    el('connectedCheckoutModal')?.classList.add('hidden');
+  }
+  async function completeCommittedResult(result, recovered = false) {
+    const confirmedSale = isConfirmedSale(result);
+    if (confirmedSale) lockConfirmedSaleCheckout();
+    try { await completed(result, recovered); }
+    catch {
+      if (confirmedSale) {
+        lockConfirmedSaleCheckout();
+        clearConfirmedSaleDetail(result.sale.detail);
+        try { window.PosRuntime.clearCart(); } catch { /* The server result remains authoritative. */ }
+        await Promise.allSettled([load('cajaView'), loadHistory({ refresh: true })]);
+        document.dispatchEvent(new Event('connected:report-data-changed'));
+        showAlert('Cobro confirmado para la factura #' + result.sale.invoiceNumber + '. No se pudo actualizar el comprobante; consulta el Historial. No vuelvas a cobrar esta orden.');
+        return;
+      }
+      showAlert('El servidor confirmó la operación, pero la pantalla no terminó de actualizarse. Comprueba su estado antes de volver a intentarlo.');
+    }
+  }
   // These explicit schema rejections roll back the transaction and never commit money.
   const uncertain = error => !['SUPPLIER_PAYMENT_MIGRATION_REQUIRED', 'PROCUREMENT_MIGRATION_REQUIRED', 'SALES_MIGRATION_REQUIRED'].includes(error.code) && (error.status >= 500 || ['NETWORK_ERROR', 'INVALID_RESPONSE', 'STALE_REQUEST', 'INVALID_SESSION'].includes(error.code));
   async function perform(kind, data, action) {
@@ -254,22 +355,40 @@
     try { localStorage.setItem(storage, JSON.stringify(marker)); } catch { busy = false; showAlert('No se pudo guardar la referencia del cobro. Habilita el almacenamiento del navegador antes de cobrar. No se envió la operación.'); return; }
     showPending();
     try {
-      const result = await api(client => action(client, data));
-      localStorage.removeItem(storage); notice(); await completed(result);
-    } catch (error) {
-      if (!uncertain(error)) localStorage.removeItem(storage);
-      if (error.code === 'STALE_REQUEST') return;
-      if (uncertain(error)) {
-        for (const id of ['connectedCheckoutModal','anularVentaModal','cierreCajaModal','purchaseModal','paymentInvoiceModal','statementModal','cancelConnectedPurchaseModal']) el(id).classList.add('hidden');
-        notice('Resultado desconocido. Comprueba esta operación antes de intentar cobrar nuevamente; podría estar confirmada.');
+      let result;
+      try { result = await api(client => action(client, data)); }
+      catch (error) {
+        if (!uncertain(error)) { try { localStorage.removeItem(storage); } catch { /* Keep the operation blocked if storage cannot be updated. */ } }
+        if (error.code === 'STALE_REQUEST') return;
+        if (kind === 'ORDER_CHARGE' && error.code === 'ORDER_NOT_PENDING') {
+          activeOrderId = null; quote = quoteInput = null;
+          el('connectedCheckoutModal').classList.add('hidden');
+          const refreshResults = await Promise.allSettled([load('cajaView'), loadHistory({ refresh: true })]);
+          const refreshed = refreshResults.every(value => value.status === 'fulfilled');
+          showAlert(refreshed
+            ? 'La orden ya no está pendiente. Caja e Historial se actualizaron; verifica si quedó cobrada o cancelada antes de continuar.'
+            : 'La orden ya no está pendiente y no se pudo completar la actualización de Caja e Historial. Verifica su estado antes de intentar otro cobro.');
+          showPending();
+          return;
+        }
+        if (uncertain(error)) {
+          for (const id of ['connectedCheckoutModal','anularVentaModal','cierreCajaModal','purchaseModal','paymentInvoiceModal','statementModal','cancelConnectedPurchaseModal']) el(id).classList.add('hidden');
+          notice('Resultado desconocido. Comprueba esta operación antes de intentar cobrar nuevamente; podría estar confirmada.');
+        }
+        if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
+        else {
+          const safeMessage = window.PosMessages.fromError(error, 'No se pudo completar la operación. Revisa su estado antes de volver a intentarlo.');
+          if (['CASH_INVALID', 'CASH_INSUFFICIENT'].includes(error.code)) window.PosValidation.field('connectedCashReceived', safeMessage);
+          showAlert(safeMessage + (uncertain(error) ? ' Comprueba el estado de la operación antes de cobrar nuevamente.' : ''));
+        }
+        showPending();
+        return;
       }
-      if (error.code === 'INVALID_SESSION') window.PosConnected.handleError(error);
-      else {
-        const safeMessage = window.PosMessages.fromError(error, 'No se pudo completar la operación. Revisa su estado antes de volver a intentarlo.');
-        if (['CASH_INVALID', 'CASH_INSUFFICIENT'].includes(error.code)) window.PosValidation.field('connectedCashReceived', safeMessage);
-        showAlert(safeMessage + (uncertain(error) ? ' Comprueba el estado de la operación antes de cobrar nuevamente.' : ''));
-      }
-      showPending();
+      if (isConfirmedSale(result)) lockConfirmedSaleCheckout();
+      let markerRemoved = false;
+      try { localStorage.removeItem(storage); markerRemoved = true; } catch { /* Keep the idempotency key available for recovery. */ }
+      if (markerRemoved) notice(); else showPending();
+      await completeCommittedResult(result);
     } finally { busy = false; }
   }
   async function recover() {
@@ -279,12 +398,17 @@
     try {
       // Locking resolver commits a tombstone if absent, rejecting any delayed request.
       const result = await api(client => financialKinds.includes(marker.kind) ? client.resolveFinancialOperation(marker.key, marker.kind) : client.resolveOperation(marker.key));
-      localStorage.removeItem(storage); notice(); await completed(result, true);
+      let markerRemoved = false;
+      try { localStorage.removeItem(storage); markerRemoved = true; } catch { /* Preserve the key for another safe reconciliation. */ }
+      if (markerRemoved) notice(); else showPending();
+      await completeCommittedResult(result, true);
     } catch (error) { window.PosConnected.handleError(error); showPending(); }
     finally { busy = false; }
   }
-  function cartData() {
-    const input = state();
+  function cartData(input = state()) {
+    return { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, paymentMethod: input.paymentMethod, clientId: input.clientId, detail: input.detail, customerName: input.customerName };
+  }
+  function quoteData(input) {
     return { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, paymentMethod: input.paymentMethod, clientId: input.clientId };
   }
   function renderCheckoutItems(items) {
@@ -317,22 +441,22 @@
     if (input.paymentMethod === 'CREDIT' && !input.clientId) { showAlert('Selecciona un cliente para vender a crédito'); return; }
     if (document.querySelector('input[name="descApplies"][value="si"]').checked && !window.PosValidation.validate(el('descuentoBox'), true)) return;
     if (salesFlow === 'CENTRALIZED') {
-      await perform('PREPARE_ORDER', { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, detail: input.detail, clientId: input.clientId }, (client, data) => client.prepareOrder(data));
+      await perform('PREPARE_ORDER', { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, detail: input.detail, customerName: input.customerName, clientId: input.clientId }, (client, data) => client.prepareOrder(data));
       return;
     }
     activeOrderId = null; busy = true;
     try {
-      quoteInput = cartData(); quote = await api(client => client.quoteSale(quoteInput));
+      quoteInput = cartData(input); quote = await api(client => client.quoteSale(quoteData(quoteInput)));
       el('connectedCheckoutTotal').textContent = 'C$' + quote.total;
       const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : quote.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Crédito';
       el('connectedCheckoutPaymentMethod').textContent = method;
-       el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · No genera movimiento de efectivo.' : 'Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
+       el('connectedCheckoutDetail').textContent = (quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · No genera movimiento de efectivo.' : ((input.customerName ? 'Cliente: ' + input.customerName + ' · ' : '') + 'Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount));
       renderCheckoutItems(quote.items);
 
       el('connectedOrderMethodGroup').classList.add('hidden'); el('connectedPriceChangeMessage').classList.add('hidden');
       el('connectedCashGroup').classList.toggle('hidden', quote.paymentMethod !== 'CASH'); el('connectedCashReceived').value = ''; updateCashChangePreview(); window.PosValidation.clear(el('connectedCheckoutModal'));
       if (quote.paymentMethod === 'CARD' || quote.paymentMethod === 'TRANSFER') {
-        const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: null, detail: input.detail };
+        const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: null };
         busy = false; await perform('SALE', data, (client, saleInput) => client.createSale(saleInput)); return;
       }
       el('connectedCheckoutTitle').textContent = quote.paymentMethod === 'CREDIT' ? 'Confirmar venta a crédito' : 'Cobro en Efectivo';
@@ -352,7 +476,7 @@
       return;
     }
     if (!quote || !quoteInput || busy) return;
-    const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: quote.paymentMethod === 'CASH' ? el('connectedCashReceived').value : null, detail: state().detail };
+    const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: quote.paymentMethod === 'CASH' ? el('connectedCashReceived').value : null };
     if (quote.paymentMethod === 'CASH' && (!/^\d+(?:\.\d{1,2})?$/.test(data.cashReceived) || Number(data.cashReceived) < Number(quote.total))) { window.PosValidation.field('connectedCashReceived', 'Ingresa efectivo suficiente, con hasta dos decimales'); return; }
     await perform('SALE', data, (client, input) => client.createSale(input));
   }
@@ -388,7 +512,8 @@
       el('connectedCheckoutTotal').textContent = 'C$' + quote.total;
       const method = quote.paymentMethod === 'CASH' ? 'Efectivo' : quote.paymentMethod === 'CARD' ? 'Tarjeta' : quote.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Crédito';
       el('connectedCheckoutPaymentMethod').textContent = method;
-       el('connectedCheckoutDetail').textContent = quote.paymentMethod === 'CREDIT' ? 'Cliente: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · Sin ingreso de efectivo.' : 'Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount;
+      const order = pendingOrderDetails.get(String(activeOrderId));
+      el('connectedCheckoutDetail').textContent = 'Orden #' + activeOrderId + (order?.customerName ? ' · Cliente: ' + order.customerName : '') + ' · ' + (quote.paymentMethod === 'CREDIT' ? 'Cliente registrado: ' + quote.clientName + ' · Vence: ' + new Date(quote.dueAt).toLocaleDateString() + ' · Sin ingreso de efectivo.' : 'Subtotal C$' + quote.subtotal + ' · Descuento C$' + quote.discount);
       const difference = Number(quote.priceDelta), priceMessage = el('connectedPriceChangeMessage');
       priceMessage.textContent = quote.priceChanged ? 'El precio cambió desde que se preparó la orden: estimado C$' + quote.estimatedTotal + '; precio vigente C$' + quote.total + ' (' + (difference > 0 ? '+' : '') + 'C$' + quote.priceDelta + '). Confirma este precio vigente para continuar.' : 'Precio vigente comprobado. Total estimado al preparar: C$' + quote.estimatedTotal + '.';
       priceMessage.classList.remove('hidden'); el('connectedOrderMethodGroup').classList.remove('hidden');
@@ -466,7 +591,7 @@
     }
     pendingOrderDetails = new Map([...overview.pendingOrders, ...(overview.pendingHistoricalOrders || [])].map(order => [order.id, order]));
     const paymentRows = payments => payments.map(payment => ({ kind: 'payment', id: payment.id, date: payment.createdAt, reference: payment.kind === 'SUPPLIER_PAYMENT' ? 'Pago a proveedor · ' + (payment.supplierName || 'Proveedor') + (payment.invoiceNumber ? ' · Factura ' + payment.invoiceNumber : '') : (payment.kind === 'CUSTOMER_PAYMENT' ? 'Abono factura #' : 'Factura #') + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta pendiente' : 'Transferencia pendiente', amount: payment.amount }));
-    const orderRows = orders => orders.map(order => ({ kind: 'order', id: order.id, date: order.createdAt, reference: 'Orden pendiente' + (order.clientName ? ' · ' + order.clientName : ''), user: order.seller, method: order.clientId ? 'Crédito' : 'Por cobrar', amount: order.estimatedTotal }));
+    const orderRows = orders => orders.map(order => ({ kind: 'order', id: order.id, date: order.createdAt, reference: 'Pedido #' + order.id + ' · ' + (order.customerName || order.clientName || 'Cliente sin nombre') + ' · ' + order.items.map(item => item.name + ' × ' + Number(item.quantity)).join(', '), user: order.seller, method: order.clientId ? 'Crédito' : 'Por cobrar', amount: order.estimatedTotal, search: [order.id, order.customerName, order.clientName, ...order.items.map(item => item.name)].join(' ').toLocaleLowerCase() }));
     const saleRows = sales => (sales || []).map(sale => ({ kind: 'sale', id: sale.id, date: sale.createdAt, reference: 'Factura #' + (sale.isHistorical ? (sale.originalInvoiceNumber || 'original no disponible') : sale.invoiceNumber), user: sale.seller, method: sale.paymentMethod === 'CARD' ? 'Tarjeta' : sale.paymentMethod === 'TRANSFER' ? 'Transferencia' : sale.paymentMethod === 'CREDIT' ? 'Crédito' : 'Efectivo', amount: sale.amount, isHistorical: sale.isHistorical === true }));
     const collectionRows = payments => (payments || []).map(payment => ({ kind: 'collection', id: payment.id, date: payment.createdAt, reference: 'Abono factura #' + payment.invoiceNumber, user: payment.seller, method: payment.paymentMethod === 'CARD' ? 'Tarjeta' : payment.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Efectivo', amount: payment.amount }));
     const renderOperationRows = (body, payments, orders, historical = false, additionalRows = []) => {
@@ -478,6 +603,7 @@
       body.replaceChildren();
       for (const item of rows) {
          const row = document.createElement('tr'); row.dataset.priority = item.kind === 'payment' || item.kind === 'order' ? '0' : '1';
+        if (item.kind === 'order') row.dataset.orderSearch = item.search;
         row.dataset.tableDate = window.PosTables.dateKey(item.date);
         for (const value of [new Date(item.date).toLocaleString(), item.reference, item.user, item.method, money(item.amount), item.kind === 'payment' ? 'Pendiente de confirmación' : (historical ? 'Pendiente histórico · sin factura' : 'Orden pendiente · sin factura ni descuento de inventario')]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
         if (item.kind === 'sale') row.cells[5].textContent = item.isHistorical ? 'Histórica · solo consulta' : 'Venta registrada';
@@ -494,6 +620,7 @@
     renderOperationRows(el('cajaOperacionesBody'), overview.pendingPayments, overview.pendingOrders, false, [...saleRows(overview.operationSales), ...collectionRows(overview.operationCollections)]);
     const historicalPayments = hasOpenSession ? (overview.pendingHistoricalPayments || []) : [], historicalOrders = hasOpenSession ? (overview.pendingHistoricalOrders || []) : [];
     renderOperationRows(el('cajaPendientesHistoricosBody'), historicalPayments, historicalOrders, true);
+    filterCashOrders();
     el('cajaPendientesHistoricosSection')?.classList.toggle('hidden', !hasOpenSession || (historicalPayments.length === 0 && historicalOrders.length === 0));
     const movementsBody = el('cajaMovimientosBody');
     if (!overview.movements.length) fillEmpty(movementsBody, 7, 'Sin movimientos registrados.');
@@ -513,6 +640,12 @@
          if (movement.status === 'PENDING' && ['CARD', 'TRANSFER'].includes(movement.paymentMethod)) { const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-sm btn-success'; button.textContent = 'Confirmar recibido'; button.dataset.action = 'confirm-payment'; button.dataset.id = movement.id; actionGroup.append(button); }
          actionCell.append(actionGroup); row.append(actionCell); movementsBody.append(row);
       }
+    }
+  }
+  function filterCashOrders() {
+    const query = (el('cashOrderSearch')?.value || '').trim().toLocaleLowerCase();
+    for (const id of ['cajaOperacionesBody', 'cajaPendientesHistoricosBody']) {
+      for (const row of el(id)?.querySelectorAll('tr[data-order-search]') || []) row.hidden = Boolean(query) && !row.dataset.orderSearch.includes(query);
     }
   }
   function mappedCash(value) {
@@ -614,10 +747,11 @@
     if (action === 'order-detail') {
       const order = pendingOrderDetails.get(id); if (!order) return;
       const detail = order.items.map(item => item.name + ' × ' + Number(item.quantity) + (item.priceSnapshotAvailable && item.estimatedSubtotal !== null ? ' · C$' + item.estimatedSubtotal : ' · Precio histórico no disponible')).join('\n');
-      showAlert('Orden #' + order.id + ' · ' + order.seller + '\n' + detail + '\nEstimado al preparar: C$' + order.estimatedTotal + '. Precio y stock se volverán a validar al cobrar.');
+      showAlert('Pedido #' + order.id + ' · Cliente: ' + (order.customerName || order.clientName || 'Sin nombre') + ' · ' + order.seller + '\n' + detail + '\nEstimado al preparar: C$' + order.estimatedTotal + '. Precio y stock se volverán a validar al cobrar.');
     }
   };
   for (const id of ['cajaOperacionesBody', 'cajaPendientesHistoricosBody']) el(id)?.addEventListener('click', handleOperationAction);
+  el('cashOrderSearch')?.addEventListener('input', filterCashOrders);
   el('cajaMovimientosBody').addEventListener('click', event => { const button = event.target.closest('button[data-action="confirm-payment"]'); if (button) confirmPayment(button.dataset.id); });
   el('saveConnectedSalesFlow').addEventListener('click', async () => {
     const button = el('saveConnectedSalesFlow'); button.disabled = true;
@@ -644,5 +778,5 @@
     if (!reason || reason.length > 500) { window.PosValidation.field('cajaMovimientoConcepto', 'Ingresa el motivo, hasta 500 caracteres.'); return; }
     return perform('CASH_MANUAL', { direction, amount, reason }, (client, input) => client.manualCashMovement(input));
   }
-  window.PosSales = Object.freeze({ manualCash, reversePayment, checkout, confirm, cancel, openCash, closeCash, closeDialog, load, renderCash, viewInvoice, performFinancial: perform, payReceivable: (id, data) => perform('CUSTOMER_PAYMENT', data, (client, input) => client.payReceivable(id, input)) });
+  window.PosSales = Object.freeze({ manualCash, reversePayment, checkout, confirm, cancel, openCash, closeCash, closeDialog, load, searchHistory, renderCash, viewInvoice, performFinancial: perform, payReceivable: (id, data) => perform('CUSTOMER_PAYMENT', data, (client, input) => client.payReceivable(id, input)) });
 })();

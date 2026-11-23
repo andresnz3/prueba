@@ -45,12 +45,13 @@ async function crearProductoDesdeUI(page, barcode, name, stock = "10") {
   await page.locator("#customAlertModal .close-modal-btn").click();
 }
 
-async function agregarVenta(page, barcode, metodoPago) {
+async function agregarVenta(page, barcode, metodoPago, detail = '') {
   await page.locator("#navSalesBtn").click();
   await page.locator("#barcodeInput").fill(barcode);
   await page.locator("#addBarcodeBtn").click();
   await expect(page.locator("#cartItems")).not.toContainText("Carrito vacío");
   await page.locator(`input[name="paymentMethod"][value="${metodoPago}"]`).check();
+  if (detail) await page.locator('#saleDetailInput').fill(detail);
   await page.locator("#processSaleBtn").click();
 }
 
@@ -74,15 +75,49 @@ test("Historial carga las ventas vacías, resúmenes y auditoría de sesión", a
   await expect(page.locator("#topSellingList")).toBeVisible();
 });
 
+test('Una venta local fallida conserva el nombre o detalle escrito', async ({ page }) => {
+  await iniciarSesion(page);
+  const barcode = 'HISTORY-FAIL-' + Date.now();
+  await crearProductoDesdeUI(page, barcode, 'Producto venta fallida', '8');
+  await openCash(page);
+  await page.locator('#navSalesBtn').click();
+  await page.locator('#barcodeInput').fill(barcode);
+  await page.locator('#addBarcodeBtn').click();
+  await page.locator('input[name="paymentMethod"][value="card"]').check();
+  await page.locator('#saleDetailInput').fill('Conservar en error');
+  await page.evaluate(async value => {
+    const product = await localDB.products.where('barcode').equals(value).first();
+    await localDB.products.update(product.id, { stock: 0 });
+  }, barcode);
+  await page.locator('#processSaleBtn').click();
+  await expect(page.locator('#customAlertMessage')).toContainText('Stock insuficiente');
+  await expect(page.locator('#saleDetailInput')).toHaveValue('Conservar en error');
+});
+
+test('La venta local sin detalle funciona y no imprime un nombre ficticio', async ({ page }) => {
+  await iniciarSesion(page);
+  const barcode = 'HISTORY-NO-DETAIL-' + Date.now();
+  await crearProductoDesdeUI(page, barcode, 'Producto sin detalle', '8');
+  await openCash(page);
+  await agregarVenta(page, barcode, 'card');
+  await expect(page.locator('#ticketModal')).toBeVisible();
+  await expect(page.locator('#ticketContent')).toContainText('Producto sin detalle');
+  await expect(page.locator('#ticketContent')).not.toContainText('Nombre o detalle indicado');
+  const saved = await page.evaluate(() => salesHistory.at(-1));
+  expect(saved.detalleCliente).toBe('');
+});
+
 test("Historial muestra ventas, detalles, auditoría y anulaciones sin duplicar registros", async ({ page }) => {
   await iniciarSesion(page);
   await crearProductoDesdeUI(page, "HISTORY-SALE-001", "Producto de Historial", "8");
   await openCash(page);
 
-  await agregarVenta(page, "HISTORY-SALE-001", "card");
+  await agregarVenta(page, "HISTORY-SALE-001", "card", "Carlos Martínez");
   await expect(page.locator("#ticketModal")).toBeVisible();
   await expect(page.locator("#ticketContent")).toContainText("Producto de Historial");
+  await expect(page.locator("#ticketContent")).toContainText("Carlos Martínez");
   await expect(page.locator("#ticketContent")).toContainText("C$15.00");
+  await expect(page.locator('#saleDetailInput')).toHaveValue('');
   await page.locator("#newSaleBtn").click();
 
   await abrirHistorial(page);
@@ -112,7 +147,18 @@ test("Historial muestra ventas, detalles, auditoría y anulaciones sin duplicar 
   await expect(page.locator("#ticketModal")).toBeVisible();
   await expect(page.locator("#ticketContent")).toContainText("COPIA DE FACTURA");
   await expect(page.locator("#ticketContent")).toContainText("Producto de Historial");
+  await expect(page.locator("#ticketContent")).toContainText("Carlos Martínez");
   await page.locator("#newSaleBtn").click();
+
+  const search = page.locator('#historyInvoiceSearch');
+  await search.fill('carlos');
+  await expect(page.locator('#historyTableBody tr')).toHaveCount(1);
+  await search.fill('Carlos Martínez');
+  await expect(page.locator('#historyTableBody tr')).toHaveCount(1);
+  await search.fill('1');
+  await expect(page.locator('#historyTableBody tr')).toHaveCount(1);
+  await search.fill('');
+  await expect(page.locator('#historyTableBody tr')).toHaveCount(1);
 
   await page.reload();
   await iniciarSesion(page);

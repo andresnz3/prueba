@@ -11,6 +11,7 @@ const { createDatabasePool } = require('../../src/config/database');
 const { createAuthRepository, rows } = require('../../src/repositories/auth');
 const { createAuthService } = require('../../src/services/auth');
 const { createUsersService } = require('../../src/services/users');
+const { seedDefaultProductCategories } = require('../../src/services/product-category-values');
 const { hashPassword } = require('../../src/services/passwords');
 const { createApp } = require('../../src/app');
 const { photo, imageDirectory, removeImages } = require('../helpers/image-fixtures.cjs');
@@ -35,6 +36,7 @@ test('Integracion MySQL y almacenamiento privado de fotografias',async t=>{
   const config={...readConfig(),jsonLimit:16384,images:{root,quota:256*1024*1024}},authConfig=readAuthConfig({CSRF_SECRET:randomBytes(32).toString('hex'),AUTH_RATE_MAX:'100'});
   const pool=createDatabasePool({...config.database,database});t.after(()=>pool.end());
   const business=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Images A'])).insertId),otherBusiness=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Images B'])).insertId);
+  await seedDefaultProductCategories(pool,business);await seedDefaultProductCategories(pool,otherBusiness);
   const hash=await hashPassword(password);
   for(const [owner,name,role]of[[business,'imgadmin','ADMIN'],[business,'imgseller','VENDEDOR'],[otherBusiness,'imgadmin_b','ADMIN']])await rows(pool,'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)',[owner,name,name,hash,role]);
   const repo=createAuthRepository(pool,authConfig),authentication={repo,config:authConfig,auth:createAuthService(repo,authConfig),users:createUsersService(repo)};

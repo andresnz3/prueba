@@ -90,13 +90,21 @@ test('autorizar una transferencia no requiere una explicación y conserva el con
   await expect(page.locator('#systemAdminLicenseRevokeBtn')).toBeDisabled();
 });
 
-test('otro administrador de negocio no puede consultar licencias centrales', async ({ page }) => {
-  await login(page, 'browseradmin');
+test('ADMIN de otro negocio no puede consultar ni operar licencias centrales por API', async ({ page }) => {
+  await login(page, 'otheradmin');
   await expect(page.locator('#systemAdminActiveLocalBusinessesCount')).toBeHidden();
   const result = await page.evaluate(async url => {
-    const response = await fetch(url + '/system-admin/local-licenses', { credentials: 'include', cache: 'no-store' });
-    return { status: response.status, body: await response.json() };
+    const csrf = await fetch(url + '/auth/csrf', { credentials: 'include' }).then(response => response.json());
+    const requests = [
+      fetch(url + '/system-admin/local-licenses', { credentials: 'include', cache: 'no-store' }),
+      fetch(url + '/system-admin/local-licenses', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.csrfToken }, body: JSON.stringify({ customerName: 'No emitir' }) }),
+      fetch(url + '/system-admin/local-licenses/9001/transfer', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.csrfToken }, body: '{}' }),
+      fetch(url + '/system-admin/local-licenses/9001/revoke', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.csrfToken }, body: JSON.stringify({ reason: 'Revocación ficticia no autorizada' }) })
+    ];
+    return Promise.all(requests.map(async request => {
+      const response = await request, body = await response.json();
+      return { status: response.status, code: body.error?.code ?? null };
+    }));
   }, apiBase);
-  expect(result.status).toBe(403);
-  expect(result.body.error.code).toBe('SYSTEM_ADMIN_REQUIRED');
+  expect(result).toEqual(Array.from({ length: 4 }, () => ({ status: 403, code: 'SYSTEM_ADMIN_REQUIRED' })));
 });

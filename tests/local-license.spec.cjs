@@ -78,7 +78,7 @@ async function installLicenseApi(page, { status = 'ACTIVE' } = {}) {
       catch { requests.push({ path: new URL(request.url()).pathname, method: request.method(), body: null }); }
     }
   });
-  await page.route('http://127.0.0.1:3000/api/local-license/**', async route => {
+  await page.route(`${origin}/api/local-license/**`, async route => {
     const request = route.request();
     const headers = corsHeaders(origin);
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers });

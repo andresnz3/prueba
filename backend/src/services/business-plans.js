@@ -66,8 +66,8 @@ function assertUserAddition(plan, counts, { role, active = true, businessId, use
 }
 
 function assertUserActivation(plan, counts, user, nextRole, nextActive) {
-  const isSystemAdmin = String(user.business_id) === '1' && user.username === 'andres' && user.role === 'ADMIN';
-  if (isSystemAdmin) return;
+  const legacyQuotaExemption = String(user.business_id) === '1' && user.username === 'andres' && user.role === 'ADMIN';
+  if (legacyQuotaExemption) return;
   const seatIncrease = !user.active && nextActive;
   const adminIncrease = nextActive && nextRole === 'ADMIN' && (!user.active || user.role !== 'ADMIN');
   if (!seatIncrease && !adminIncrease) return;

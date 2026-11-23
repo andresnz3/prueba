@@ -14,6 +14,7 @@ const { hashPassword } = require('../src/services/passwords');
 const { seedDefaultProductCategories } = require('../src/services/product-category-values');
 const fixturePassword = 'Browser-fixture-password-123!';
 const { imageDirectory, removeImages } = require('../tests/helpers/image-fixtures.cjs');
+const { readFrontendCsp } = require('../../tests/helpers/security-headers.cjs');
 async function listen(server) { await new Promise((ok, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', ok); }); return 'http://127.0.0.1:' + server.address().port; }
 async function close(server) { if (server) await new Promise(resolveClose => { server.close(resolveClose); server.closeAllConnections(); }); }
 async function runBrowserTests({ config, database, playwrightArgs = [] }) {
@@ -45,6 +46,12 @@ async function runBrowserTests({ config, database, playwrightArgs = [] }) {
       if (!file.startsWith(resolve(root, 'dist') + require('node:path').sep)) { res.writeHead(404); res.end(); return; }
       const types = { js: 'application/javascript; charset=utf-8', html: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8', woff2: 'font/woff2' };
       res.setHeader('Content-Type', types[name.split('.').pop()] || 'application/octet-stream');
+      if (name.toLowerCase().endsWith('.html')) {
+        const apiOrigin = new URL(apiUrl).origin;
+        if (new URL(apiUrl).hostname !== '127.0.0.1') throw new Error('La API de navegador debe permanecer en loopback');
+        const testPolicy = readFrontendCsp().replace("connect-src 'self';", `connect-src 'self' ${apiOrigin};`);
+        res.setHeader('Content-Security-Policy', testPolicy);
+      }
       try { res.end(readFileSync(file)); } catch { res.writeHead(404); res.end(); }
     });
     const origin = await listen(web);

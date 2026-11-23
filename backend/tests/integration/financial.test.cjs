@@ -8,6 +8,7 @@ const { createDatabasePool } = require('../../src/config/database');
 const { createAuthRepository, rows } = require('../../src/repositories/auth');
 const { createAuthService } = require('../../src/services/auth');
 const { createUsersService } = require('../../src/services/users');
+const { seedDefaultProductCategories } = require('../../src/services/product-category-values');
 const { hashPassword } = require('../../src/services/passwords');
 const { createApp } = require('../../src/app');
 const database = process.env.POS_INTEGRATION_DATABASE;
@@ -18,6 +19,7 @@ test('financial operations use only the isolated database', async t => {
   const pool = createDatabasePool({ ...config.database, database, connectionLimit: 10 }); t.after(() => pool.end());
   const repo = createAuthRepository(pool, authConfig), auth = createAuthService(repo, authConfig);
   const business = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Financial fixture'])).insertId);
+  await seedDefaultProductCategories(pool, business);
   const password = 'Financial-test-password-123!', hash = await hashPassword(password), prefix = randomBytes(5).toString('hex');
   for (const [name, role] of [['admin', 'ADMIN'], ['second', 'ADMIN'], ['seller', 'VENDEDOR']]) await rows(pool, 'INSERT INTO users (business_id,username,full_name,password_hash,role) VALUES (?,?,?,?,?)', [business, prefix + name, name, hash, role]);
   const otherBusiness = String((await rows(pool, 'INSERT INTO businesses (name) VALUES (?)', ['Financial isolated business'])).insertId);
@@ -38,7 +40,7 @@ test('financial operations use only the isolated database', async t => {
   const admin = await client('admin'), second = await client('second'), seller = await client('seller'), other = await client('other');
   const cash = (await admin('/cash/sessions', 'POST', { operationKey: randomUUID(), openingAmount: '100.00' })).data.cash;
   const supplier = (await admin('/suppliers', 'POST', { name: 'Financial supplier ' + prefix, contact: 'Test', phone: '555', address: null, ruc: null })).data.supplier;
-  const product = (await admin('/products', 'POST', { barcode: prefix, name: 'Financial product', category: 'General', cost: '2', retailPrice: '5', wholesalePrice: '4', marginRetail: '0', marginWholesale: '0', stock: '10', minStock: '0', taxRate: '0', image: null, active: true })).data.product;
+  const product = (await admin('/products', 'POST', { barcode: prefix, name: 'Financial product', category: 'Abarrotes', cost: '2', retailPrice: '5', wholesalePrice: '4', marginRetail: '0', marginWholesale: '0', stock: '10', minStock: '0', taxRate: '0', image: null, active: true })).data.product;
   const resolve = (key, kind, who = admin) => who('/financial/operations/' + key + '/resolve', 'POST', { kind });
   const purchaseInput = () => ({ operationKey: randomUUID(), supplierId: supplier.id, supplierInvoiceNumber: null, purchaseType: 'CREDIT', dueDays: 30, items: [{ productId: product.id, quantity: '1.000', unitCost: '2.00' }] });
   let purchase, supplierPayment;

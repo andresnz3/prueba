@@ -39,7 +39,7 @@ test('ventas: idempotencia valida UUID v4 y preserva canonizacion', () => {
   assert.equal(values.operationKey(randomUUID()).length,36);
   assert.throws(()=>values.operationKey('repeat'),{publicCode:'OPERATION_KEY_INVALID'});
   const data=values.sale({...cart(),operationKey:randomUUID(),quoteToken:'a'.repeat(64),cashReceived:'20',detail:' Venta '});
-  assert.equal(data.cashReceived,'20.00'); assert.equal(data.items[0].quantity,'1.125'); assert.equal(data.detail,'Venta');
+  assert.equal(data.cashReceived,'20.00'); assert.equal(data.items[0].quantity,'1.125'); assert.equal(data.detail,'Venta'); assert.equal(data.customerName,'');
 });
 test('caja: importes, razon y controles tienen validaciones propias', () => {
   assert.throws(()=>values.cash({operationKey:randomUUID(),openingAmount:'-1'}),{publicCode:'CASH_INVALID'});
@@ -49,7 +49,8 @@ test('caja: importes, razon y controles tienen validaciones propias', () => {
 });
 test('caja central: pedidos, flujo y confirmacion tienen cuerpos estrictos', () => {
   const order = values.order({ items: cart().items, priceType: 'RETAIL', discountPercent: '10', detail: ' Pedido ', operationKey: randomUUID() });
-  assert.equal(order.detail, 'Pedido'); assert.equal(order.items[0].productId, '1');
+  assert.equal(order.detail, 'Pedido'); assert.equal(order.items[0].productId, '1'); assert.equal(order.customerName, '');
+  assert.equal(values.order({ items: cart().items, priceType: 'RETAIL', discountPercent: '0', detail: '', customerName: '  Ana  ', operationKey: randomUUID() }).customerName, 'Ana');
   assert.equal(values.orderQuote({ paymentMethod: 'CARD' }).paymentMethod, 'CARD');
   assert.equal(values.orderCharge({ operationKey: randomUUID(), quoteToken: 'a'.repeat(64), paymentMethod: 'TRANSFER', cashReceived: null }).cashReceived, null);
   assert.equal(values.salesFlow({ salesFlow: 'CENTRALIZED' }), 'CENTRALIZED');

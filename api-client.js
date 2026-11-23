@@ -204,6 +204,7 @@
     BARCODE_EXISTS: 'Ese c\u00f3digo de barras ya existe en este negocio.',
     PRODUCT_CONFLICT: 'El producto cambi\u00f3 en otra sesi\u00f3n. Actualiza el inventario y abre la edici\u00f3n nuevamente.',
     PRODUCT_NOT_FOUND: 'Producto no encontrado en este negocio.',
+    PRODUCT_CATEGORY_NOT_FOUND: 'Selecciona una categoría existente de este negocio.',
     INSUFFICIENT_STOCK: 'No hay existencias suficientes para esa salida.',
     STOCK_LIMIT: 'Las existencias superan el l\u00edmite permitido.',
     PRODUCT_ARCHIVED: 'El producto est\u00e1 archivado; su historial se conserva.',
@@ -235,6 +236,14 @@
       super(containsTechnicalMessage(message) ? 'No se pudo completar la solicitud. Contacta al administrador si el problema continúa.' : message);
       this.code = code; this.status = status; this.userFacing = true;
     }
+  }
+  const historyDiagnosticEndpoints = new Set(['/auth/me', '/auth/logout', '/admin/support-session/end', '/auth/modules/history/enter', '/reports/connected', '/sales', '/sales/orders/history']);
+  function historyApiDiagnostic(path, method, status, code, stage = 'request-failed') {
+    let enabled = false;
+    try { enabled = new URLSearchParams(globalThis.location?.search || '').get('diag') === 'history'; } catch { /* Diagnostics stay disabled for an invalid URL. */ }
+    const endpoint = String(path || '').split('?')[0];
+    if (!enabled || !historyDiagnosticEndpoints.has(endpoint)) return;
+    console[stage === 'response' ? 'info' : 'warn']('[SoftVentaWeb diagnostic] ' + JSON.stringify({ area: 'history-api', stage, method, endpoint, status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null, errorCode: /^[A-Z][A-Z0-9_]{0,63}$/.test(code || '') ? code : null }));
   }
   function user(value) {
     if (!value || typeof value.id !== 'string' || typeof value.businessId !== 'string' || !/^[1-9]\d{0,19}$/.test(value.id) || !/^[1-9]\d{0,19}$/.test(value.businessId) || !['ADMIN', 'VENDEDOR'].includes(value.role) || typeof value.username !== 'string' || typeof value.fullName !== 'string' || value.active !== true) throw new ApiError('INVALID_RESPONSE');
@@ -305,14 +314,15 @@
         response = await fetch(this.baseUrl + path, { method, credentials: 'include', cache: 'no-store', redirect: 'error', signal: controller.signal,
           headers: method === 'GET' ? {} : { 'Content-Type': contentType, 'X-CSRF-Token': this.#csrf || '' },
           body: method === 'GET' ? undefined : (contentType === 'application/json' ? JSON.stringify(body ?? {}) : body) });
-      } catch { throw new ApiError('NETWORK_ERROR'); } finally { clearTimeout(timer); }
+      } catch { historyApiDiagnostic(path, method, null, 'NETWORK_ERROR'); throw new ApiError('NETWORK_ERROR'); } finally { clearTimeout(timer); }
       let data;
       if (response.status !== 204) {
-        try { data = await response.json(); } catch { throw new ApiError('INVALID_RESPONSE', response.status); }
+        try { data = await response.json(); } catch { historyApiDiagnostic(path, method, response.status, 'INVALID_RESPONSE'); throw new ApiError('INVALID_RESPONSE', response.status); }
       }
       if (!response.ok) {
         const receivedCode = data?.error?.code;
         const code = typeof receivedCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(receivedCode) ? receivedCode : 'INTERNAL_ERROR';
+        historyApiDiagnostic(path, method, response.status, code);
         const error = new ApiError(code, response.status);
         const serverMessage = data?.error?.message;
         const businessDeleteCodes = ['BUSINESS_NOT_FOUND', 'BUSINESS_DELETE_PROTECTED', 'BUSINESS_DELETE_BLOCKED', 'BUSINESS_DELETE_SCHEMA_UNSUPPORTED', 'BUSINESS_DELETE_PREVIEW_REQUIRED', 'BUSINESS_DELETE_PREVIEW_STALE', 'BUSINESS_DELETE_CONFIRMATION_REQUIRED'];
@@ -334,6 +344,7 @@
         if (error.code === 'TOO_MANY_ATTEMPTS') { error.retryAfter = Number(response.headers.get('Retry-After')) || 60; error.message = 'Demasiados intentos. Intenta nuevamente en ' + error.retryAfter + ' segundos.'; }
         throw error;
       }
+      historyApiDiagnostic(path, method, response.status, null, 'response');
       return data;
     }
     async csrf() {
@@ -362,6 +373,7 @@
         const validInvoiceNumber = /^(?:\d{6,20}|MIG-(?:[A-Za-z0-9_-]{1,18}-)?[a-f0-9]{28})$/.test(sale.invoiceNumber || '');
         if (!/^[1-9]\d*$/.test(sale.id || '') || !validInvoiceNumber || !['COMPLETED', 'CANCELLED'].includes(sale.status) || !['CASH', 'CARD', 'TRANSFER', 'CREDIT'].includes(sale.paymentMethod) || !['NOT_APPLICABLE', 'PENDING', 'CONFIRMED'].includes(sale.cashStatus) || !Array.isArray(sale.items) || !Number.isFinite(Date.parse(sale.createdAt)) || !['subtotal','discount','total','tax'].every(field => /^\d+\.\d{2}$/.test(sale[field]))) throw new ApiError('INVALID_RESPONSE');
       }
+      if (value.sale && value.order && (value.kind !== 'SALE' || value.sale.status !== 'COMPLETED' || value.order.businessId !== this.#effectiveBusinessId() || !/^[1-9]\d*$/.test(value.order.id || '') || value.order.status !== 'COMPLETED' || value.order.saleId !== value.sale.id)) throw new ApiError('INVALID_RESPONSE');
       if (value.payment) { const payment = value.payment; if (!/^[1-9]\d*$/.test(payment.id || '') || !/^[1-9]\d*$/.test(payment.saleId || '') || !/^[1-9]\d*$/.test(payment.clientId || '') || payment.businessId !== this.#effectiveBusinessId() || !/^\d+\.\d{2}$/.test(payment.amount || '') || !['CASH','CARD','TRANSFER'].includes(payment.paymentMethod) || !['PENDING','POSTED'].includes(payment.status)) throw new ApiError('INVALID_RESPONSE'); }
       return value;
     }
@@ -389,7 +401,7 @@
     async cancelSale(id,data) { return this.#salesResult(await this.#write('/sales/'+encodeURIComponent(id)+'/cancel','POST',data)); }
     async operation(key) { return this.#salesResult(await this.#request('/operations/'+encodeURIComponent(key))); }
     async resolveOperation(key) { return this.#salesResult(await this.#write('/operations/'+encodeURIComponent(key)+'/resolve','POST',{})); }
-    async sales(offset=0,maxId=null) { const value=await this.#request('/sales?limit=100&offset='+offset+(maxId ? '&maxId='+encodeURIComponent(maxId) : '')); if(!Array.isArray(value?.sales)) throw new ApiError('INVALID_RESPONSE'); return value.sales.map(sale=>this.#salesResult({sale}).sale); }
+    async sales(offset=0,maxId=null,q='') { const value=await this.#request('/sales?limit=100&offset='+offset+(maxId ? '&maxId='+encodeURIComponent(maxId) : '')+(q ? '&q='+encodeURIComponent(q) : '')); if(!Array.isArray(value?.sales)) throw new ApiError('INVALID_RESPONSE'); return value.sales.map(sale=>this.#salesResult({sale}).sale); }
     async historicalOrders(offset=0) { const value=await this.#request('/sales/orders/history?limit=100&offset='+offset); if(!Array.isArray(value?.orders)||value.orders.some(order=>order.businessId!==this.#effectiveBusinessId()||!order.isHistorical||!['PENDING','COMPLETED','CANCELLED'].includes(order.status)||!Array.isArray(order.items))) throw new ApiError('INVALID_RESPONSE'); return value.orders; }
     async sale(id) { const value = this.#salesResult(await this.#request('/sales/' + encodeURIComponent(id))); return value.sale; }
     async currentCash(full=false) { const value=await this.#request('/cash/current'+(full?'?full=true':'')); if(!value || !Object.prototype.hasOwnProperty.call(value, 'cash')) throw new ApiError('CASH_RESPONSE_INVALID'); if(value.cash===null) return null; return this.#cashRecord(value.cash); }
@@ -443,7 +455,7 @@
     }
     async prepareOrder(data) { return this.#salesResult(await this.#write('/sales/orders','POST',data)); }
     async quoteOrder(id,paymentMethod) { const value=await this.#write('/cash/orders/'+encodeURIComponent(id)+'/quote','POST',{paymentMethod}); if(!value?.quote||value.quote.businessId!==this.#effectiveBusinessId()||value.quote.orderId!==String(id)||!/^[a-f0-9]{64}$/.test(value.quote.quoteToken)||!/^\d+\.\d{2}$/.test(value.quote.total)||!/^\d+\.\d{2}$/.test(value.quote.estimatedTotal)) throw new ApiError('INVALID_RESPONSE'); return value.quote; }
-    async chargeOrder(id,data) { return this.#salesResult(await this.#write('/cash/orders/'+encodeURIComponent(id)+'/charge','POST',data)); }
+    async chargeOrder(id,data) { const value=this.#salesResult(await this.#write('/cash/orders/'+encodeURIComponent(id)+'/charge','POST',data)); if(value?.kind!=='SALE'||value.sale?.status!=='COMPLETED'||value.order?.id!==String(id)) throw new ApiError('INVALID_RESPONSE'); return value; }
     async cancelOrder(id,data) { return this.#salesResult(await this.#write('/cash/orders/'+encodeURIComponent(id)+'/cancel','POST',data)); }
     async uploadImage(file) {
       const value = await this.#write('/product-images','POST',file,file.type);

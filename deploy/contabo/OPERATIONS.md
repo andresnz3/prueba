@@ -1,100 +1,152 @@
 # Operación del POS conectado en Contabo
 
-Este procedimiento está preparado para una instalación futura. No implica que exista un VPS, dominio o despliegue activo. Sustituya `vX.Y.Z` por una etiqueta revisada y aprobada; no despliegue una rama de trabajo sin publicar y revisar.
+## Estado real verificado
 
-## Topología prevista
+Instantánea operativa del 31 de octubre de 2026; confirmar los valores antes de cada cambio:
 
-- DNS del dominio hacia el VPS; Caddy en el host termina HTTPS y reenvía a Nginx en `127.0.0.1:8080`.
-- Compose publica solo ese puerto de loopback. MySQL permanece en la red interna de Compose, sin `ports`; el backend solo expone `3000` dentro de Docker.
-- Use siempre el proyecto `pos-production`. Sus volúmenes quedan separados de `pos-docker-local` como `pos-production_mysql_data` y `pos-production_product_images`.
-- Configure `CORS_ORIGINS=https://<dominio-real>` y `TRUST_PROXY_HOPS=2` solo cuando el flujo real sea Caddy → Nginx → backend.
+- VPS `31.220.84.51`, Ubuntu 24.04.5 LTS; proyecto en `/opt/pos/app`, Compose project `pos-production`.
+- POS conectado con frontend RC6, backend RC5 y MySQL. Base configurada: `pos_contabo_prod_20261029`; migraciones 001–020 aplicadas.
+- Volúmenes persistentes del proyecto: `pos-production_mysql_data` y `pos-production_product_images`; conservar ambos durante cambios de aplicación.
+- El acceso actual es privado por túnel SSH. En Windows, abrir el túnel con `ssh -N -L 18080:127.0.0.1:8080 posadmin@31.220.84.51` y usar `http://127.0.0.1:18080` en el navegador. No sustituir esta vía durante la activación pública.
+- Docker Compose enlaza el frontend solo a `127.0.0.1:8080`. MySQL no declara `ports`; el backend solo declara `expose: 3000` dentro de Docker. La red de base de datos es interna.
+- La lectura de sockets en el VPS encontró SSH en 22 y el frontend en loopback 8080; no encontró listeners en 80, 443, 3000 ni 3306. Caddy no está instalado ni activo. La consulta directa de `docker ps` requiere sudo y no se ejecutó; la topología de puertos se verificó en Compose.
+- La última auditoría informó que UFW permite 22, 80 y 443. No se modificó. Aunque 80/443 no tenían un listener en esta revisión, esos permisos permitirían tráfico al instalar y activar un servicio.
+- El dominio aún no está comprado. Caddy, HTTPS público, respaldos automáticos externos y Restic están pendientes por decisión del propietario. Se conservan los respaldos existentes.
 
-## Requisitos y secretos
+No es una instalación futura: no repetir la instalación inicial, la importación del esquema ni el alta del primer negocio. No ejecutar `down -v`, `prune` ni inicializadores contra esta base.
 
-Use Ubuntu Server 24.04 LTS, Docker Engine y el complemento oficial Docker Compose. Cree `/etc/pos/production.env` fuera del checkout, propietario `root`, modo `600`; nunca copie el `.env` de Windows ni imprima `docker compose config` sin `--quiet`. El archivo de ejemplo del repositorio no contiene credenciales utilizables.
+## Topología y límites de exposición
 
-Configure contraseñas distintas para MySQL root y la cuenta de aplicación, un `CSRF_SECRET` aleatorio y las variables de licencias solo con el material de producción protegido. No guarde claves privadas en Git ni en el frontend. Antes de configurar el dominio, defina DNS A/AAAA, nombre canónico y el acceso administrativo SSH.
+Flujo público previsto: navegador → Caddy en el host (80/443) → Nginx del frontend en `127.0.0.1:8080` → backend Express en la red Docker. MySQL permanece únicamente en la red interna de Compose. Caddy no debe publicar ni redirigir directamente a 3000 o 3306.
 
-## Primera instalación
+El acceso de recuperación seguirá siendo el túnel SSH hacia `127.0.0.1:8080`; no requiere Caddy. Mantener el enlace del frontend enlazado a loopback y no reemplazarlo por `0.0.0.0`. La cuenta SSH usa claves; conservar una sesión de recuperación abierta durante cualquier cambio de SSH o firewall.
 
-Desde el checkout de una etiqueta aprobada:
+La inspección en vivo de puertos Docker requiere privilegios. Antes de publicar el dominio, desde una sesión SSH segura, confirmar también `sudo docker ps --format '{{.Names}}|{{.Ports}}'` y `sudo ss -lntp`; el resultado debe mostrar el puerto 8080 solo en loopback, sin 3000 ni 3306 publicados.
 
-```bash
-docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml config --quiet
-docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml build backend frontend migrate
-docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml up -d --wait mysql
-docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml --profile tools run --rm migrate --plan --target pos_production --confirm-target pos_production --install-base-schema
-```
+## Orígenes, cookies y proxies
 
-Revise que el plan sea una instalación vacía y liste las migraciones 001–020 como pendientes. Solo con aprobación operativa aplique el mismo comando cambiando `--plan` por `--apply`. No use `--install-base-schema` al actualizar una base existente. Después, inicialice el negocio y administrador de esa instalación con el inicializador oficial; introduzca la contraseña directamente en su prompt interactivo.
+- `CORS_ORIGINS` acepta una lista separada por comas de orígenes exactos, sin rutas ni `/` final. Al habilitar el dominio, incluir tanto `https://<dominio>` como `http://127.0.0.1:18080` para conservar el acceso de recuperación. No usar `*`. Actualmente el acceso privado se configura mediante los archivos privados del stack de prueba; antes del cambio, trasladar los dos orígenes al archivo de entorno de producción y validar Compose sin imprimir la configuración.
+- En producción, el backend marca las cookies como `Secure`, `HttpOnly`, `SameSite=Lax` y `Path=/`, y usa el prefijo `__Host-` sin atributo `Domain`. Mantener este comportamiento. La aplicación es del mismo origen detrás de Caddy; no cambiar a `SameSite=None` para hacer funcionar CORS.
+- El Compose de producción configura `TRUST_PROXY_HOPS=2`, correcto para la ruta pública exacta Caddy → Nginx → Express. No agregar CDN, proxy adicional ni una ruta pública directa a Nginx sin revisar el conteo y probar encabezados falsificados. Express advierte que un conteo de saltos incorrecto o rutas de distinta longitud puede hacer confiables encabezados enviados por clientes. Caddy sobrescribe/normaliza los encabezados `X-Forwarded-*` por defecto; conservar ese comportamiento.
+- El túnel SSH no es un proxy HTTP adicional y no se cuenta como salto en Express.
 
-## Dominio, TLS y firewall
+## Activación futura del dominio y HTTPS
 
-Configure DNS al VPS y Caddy en el host con una regla equivalente a:
+No ejecutar esta sección hasta comprar el dominio, elegir el nombre final y autorizar la publicación. No hay que reinstalar el POS ni migrar la base para conectar el dominio.
+
+1. Crear un registro DNS `A` para el hostname elegido hacia `31.220.84.51`. Crear `AAAA` únicamente si el VPS tiene IPv6 funcional y reglas IPv6 verificadas; de lo contrario, no publicar un `AAAA` incorrecto. Desde Windows verificar con `Resolve-DnsName <dominio> -Type A` y, si corresponde, `Resolve-DnsName <dominio> -Type AAAA`.
+2. Confirmar desde el VPS que 80/443 están libres y revisar el estado efectivo de UFW/IPv6. La última auditoría ya reportó reglas UFW para 80/443; no agregar reglas duplicadas. Si cambiaron, detenerse y aprobar el cambio de firewall por separado. Docker puede gestionar reglas de publicación fuera del recorrido simple de UFW; mantener el binding de loopback y revisar `DOCKER-USER`.
+3. Actualizar `CORS_ORIGINS` en la configuración privada efectiva a `https://<dominio>,http://127.0.0.1:18080`. No poner el dominio en producción hasta que exista y resuelva al VPS. Validar el stack con `docker compose ... config --quiet`; nunca mostrar la salida resuelta.
+4. Confirmar que el backend conserva `TRUST_PROXY_HOPS=2`. La cadena pública debe tener exactamente los dos proxies documentados y el backend/MySQL no deben aceptar conexiones desde Internet.
+5. Instalar Caddy desde el repositorio oficial estable de Ubuntu, no desde un binario de origen desconocido. La instalación oficial crea un servicio systemd y puede iniciarlo; por eso preparar primero `/etc/caddy/Caddyfile` con el dominio real y el upstream loopback, y ejecutar este paso solo durante la activación autorizada:
 
 ```caddyfile
-pos.<dominio-real> {
+<dominio-real> {
     encode zstd gzip
+    tls {
+        issuer acme https://acme-v02.api.letsencrypt.org/directory
+    }
     reverse_proxy 127.0.0.1:8080
 }
 ```
 
-Valide y recargue Caddy mediante su servicio. Exponga públicamente solo TCP 80/443 y SSH restringido a direcciones administrativas; habilite las reglas IPv6 correspondientes. Mantenga `POS_HTTP_PORT` ligado a `127.0.0.1`. No publique 3000 ni 3306. Revise también la cadena `DOCKER-USER`: publicar puertos Docker puede saltarse reglas simples de UFW, según la [documentación oficial de Docker](https://docs.docker.com/engine/install/ubuntu/).
+Caddy obtiene y renueva certificados ACME de Let's Encrypt automáticamente y sirve el redirect HTTP→HTTPS cuando DNS apunta al VPS y los puertos requeridos son alcanzables. La configuración anterior fija el issuer de Let's Encrypt; no se necesitan certificados ni claves TLS manuales. Mantener persistente y sin borrar el directorio de datos de Caddy (`/var/lib/caddy` en el paquete systemd oficial). Para probar antes de producción, usar el endpoint de staging de Let's Encrypt en una configuración de prueba separada; no solicitar certificados repetidamente al endpoint productivo.
 
-## Verificación después de instalar o actualizar
+Primero, una vez elegido el hostname, crear el archivo de Caddy con el valor real antes de instalar el paquete. Así el servicio no arranca con una configuración de ejemplo:
 
 ```bash
+sudo install -d -o root -g root -m 0755 /etc/caddy
+sudo tee /etc/caddy/Caddyfile >/dev/null <<'EOF'
+<dominio-real> {
+    encode zstd gzip
+    tls {
+        issuer acme https://acme-v02.api.letsencrypt.org/directory
+    }
+    reverse_proxy 127.0.0.1:8080
+}
+EOF
+```
+
+Luego instalar desde el repositorio oficial estable (requiere sudo y acceso a Internet; no ejecutar ahora). El paquete inicia un servicio systemd; por eso solo ejecutar después de confirmar DNS, Caddyfile, entorno backend y firewall:
+
+```bash
+sudo apt install --yes debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install caddy
+```
+
+Después de instalar Caddy, validar la configuración antes de recargarla:
+
+```bash
+sudo caddy fmt --overwrite /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+systemctl is-active caddy
+sudo ss -lntp
+```
+
+No abrir ni modificar puertos durante la preparación. En el día de activación, confirmar que las reglas UFW existentes son las aprobadas; si hace falta cambiarlas, hacerlo como una intervención separada. No abrir 3000, 3306 ni 8080.
+
+## Cambio de entorno sin reinstalar el POS
+
+La configuración privada actual del stack debe tratarse con cuidado. Antes de retirar el override de prueba, comprobar su contenido sin imprimir secretos y confirmar que su única diferencia funcional es la configuración temporal de CORS. Poner ambos orígenes en `/etc/pos/production.env` con `sudoedit` (no copiar el archivo al repositorio), dejar intactas las claves y demás secretos, y validar con la misma combinación de archivos Compose que usa el servicio.
+
+Después de aprobar la configuración, recrear solo el backend para que lea el nuevo origen; no reiniciar MySQL ni cambiar imágenes. Usar el conjunto de archivos de Compose del servicio activo, `config --quiet`, y `up -d --no-deps backend`. Mantener el frontend en `127.0.0.1:8080`; no hay que reconstruirlo para añadir un hostname si sigue sirviendo la misma app y el proxy mantiene el mismo origen `/api`.
+
+## Comprobaciones finales para activar el dominio
+
+Ejecutar antes y después del cambio, sin hacer operaciones comerciales reales:
+
+```bash
+docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml config --quiet
 docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml ps
-curl --fail --silent --show-error https://pos.<dominio-real>/api/health
+curl --fail --silent --show-error --write-out '\nHTTP %{http_code} TTFB %{time_starttransfer}s TLS %{time_appconnect}s\n' https://<dominio-real>/api/health
+curl --fail --silent --show-error --head https://<dominio-real>/
 ```
 
-Compruebe que MySQL, backend y frontend estén sanos, que solo Nginx tenga puerto de host y que `/api/health` responda 200. Después revise desde el navegador el acceso administrativo, el aislamiento entre dos negocios de prueba y las pantallas comerciales con datos ficticios antes de permitir operaciones reales. Las comprobaciones que escriban datos deben hacerse en un entorno temporal.
+Si el servicio activo usa además un override, añadir el mismo `--env-file` y `-f` a todos los comandos hasta que el cambio de entorno se haya validado. `config --quiet` debe terminar con código 0 y no mostrar valores.
 
-## Respaldo y restauración
+Checklist de navegador:
 
-Los scripts oficiales respaldan dump, estructura, datos, rutinas, disparadores, eventos e imágenes, y comparan inventarios. El respaldo actual requiere detener backend y frontend mientras MySQL continúa arriba; esto produce una ventana de mantenimiento. No automatice una tarea diaria sin acordar primero la hora y la interrupción tolerable.
+- Login con una cuenta de prueba autorizada; verificar cookie de sesión `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/` y sin `Domain`, sin copiar el valor de la cookie.
+- Verificar autorización de módulos con ADMIN y VENDEDOR de prueba; comprobar que una sesión vencida vuelve al login y que el backend deniega rutas no autorizadas.
+- Navegar por Ventas, Inventario, Compras, Caja, Reportes y Dashboard; comprobar que no haya llamadas fallidas ni filtración de datos entre negocios.
+- Repetir el acceso privado por túnel SSH y confirmar que el dominio público y el túnel funcionan a la vez.
+- Probar ventas simultáneas, caja, stock, créditos, compras y abonos solo en un entorno temporal aislado. En producción, limitarse a health, login autorizado y lecturas no destructivas.
+- Comprobar respuesta HTTP 200 de `/api/health`, certificado válido y redirect HTTP→HTTPS. Una respuesta 403 de un origen no permitido es esperada; no ampliar CORS para ocultarla.
 
-Ejemplo, ejecutado desde el checkout que creó las imágenes:
+## Migraciones y datos actuales
 
-```bash
-docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml stop backend frontend
-node scripts/docker-backup.cjs --out /var/backups/pos --project pos-production --env-file /etc/pos/production.env --file compose.yaml --file compose.production.yaml --database pos_production --backend-image pos-backend:production
-node scripts/docker-restore-check.cjs --backup /var/backups/pos/<carpeta-generada> --backend-image pos-backend:production
-docker compose -p pos-production --env-file /etc/pos/production.env -f compose.yaml -f compose.production.yaml start backend frontend
-```
+La base `pos_contabo_prod_20261029` tiene las migraciones 001–020 aplicadas según las verificaciones anteriores. Conectar un dominio y habilitar HTTPS no requiere migraciones. No ejecutar `--install-base-schema` ni el inicializador de negocio como parte de la activación del dominio.
 
-El verificador restaura solo en una red y volúmenes aleatorios temporales, comprueba `CHECK TABLE`, objetos SQL, conteos, hashes de imágenes y el estado de todas las migraciones disponibles en la imagen.
+Las escrituras de prueba deben ir a un stack y una base temporal. No usar los negocios actuales para pruebas de ventas, pagos, inventario o concurrencia.
 
-### Política propuesta (no instalada)
+## Respaldos y restauración
 
-- Frecuencia: respaldo completo diario, en una ventana nocturna acordada. El script detiene backend y frontend; medir primero cuánto dura esa interrupción. Objetivo inicial a aprobar: RPO de hasta 24 horas y RTO de hasta 4 horas, sujeto a un simulacro cronometrado.
-- Copia externa: repositorio Restic cifrado del lado del cliente en almacenamiento de objetos compatible con S3, en una cuenta separada del VPS. No se eligió ni contrató proveedor. Proteger las credenciales del repositorio y limitar su acceso a la tarea de respaldo.
-- Retención inicial: 7 copias diarias, 4 semanales y 12 mensuales. Conservar como máximo 2 copias locales recientes; retirar una copia local solo después de verificar que la instantánea externa terminó y es legible. No aplicar `forget`/`prune` automáticamente hasta probar la política con una réplica.
-- Cifrado del staging: el respaldo que genera el script contiene datos legibles. Antes de automatizarlo en un VPS, usar un volumen temporal cifrado y de acceso `root` solamente, o modificar y verificar el flujo para cifrar el paquete antes de persistirlo. Restic cifra el repositorio externo, pero no cifra retroactivamente el staging local.
-- Alertas: una tarea `systemd` debe fallar si el dump, la copia externa, la verificación de integridad o la limpieza controlada falla; un monitor externo debe alertar al administrador si `/api/health` no responde, si queda poco espacio o si la última copia válida supera 26 horas. Destinatario y canal quedan por elegir.
-- Restauración: mensualmente, restaurar la última copia en un proyecto Docker aislado y ejecutar `docker-restore-check.cjs`; trimestralmente, hacer un simulacro de inicio y consulta con datos ficticios. Nunca probar la restauración encima de producción.
+Se conservaron respaldos existentes y se verificó anteriormente una restauración aislada. Por decisión del propietario, todavía no hay Restic, Backblaze, timer diario ni alertas externas; no afirmar que existe un respaldo automático off-site. El respaldo externo automatizado sigue siendo un pendiente importante antes de operar comercialmente. No borrar ni sobrescribir copias anteriores.
 
-La retención, el destino externo, el canal de alertas y el mecanismo para cifrar staging requieren decisión antes de habilitar el timer. No hay automatización de respaldos desplegada.
+El script oficial incluye MySQL e imágenes y requiere detener backend/frontend durante la captura consistente; MySQL permanece arriba. Acordar una ventana de mantenimiento antes de usarlo. Tras generar una copia, verificar manifiesto y hashes, ejecutar `docker-restore-check.cjs` en un entorno aislado y guardar una copia cifrada fuera del VPS. Nunca restaurar sobre la base de producción como prueba.
 
-## Actualización segura
+## Actualizaciones y rollback
 
-1. Descargue una etiqueta aprobada y compruebe su origen. No actualice desde `main` sin revisión.
-2. Detenga backend/frontend, cree un respaldo nuevo y ejecute `docker-restore-check.cjs`.
-3. Valide Compose con `config --quiet`, construya las imágenes y ejecute el plan oficial `--plan` sin `--install-base-schema`.
-4. Revise checksums, dependencias, estados parciales y la lista exacta de migraciones pendientes.
-5. Aplique únicamente el conjunto aprobado con el ejecutor oficial. No se ejecuta DDL al reiniciar backend.
-6. Inicie backend/frontend y verifique salud, inicio administrativo, separación de negocios y módulos principales.
+1. Descargar una etiqueta publicada y verificar el commit exacto y árbol limpio.
+2. Capturar un respaldo nuevo y restaurarlo en aislamiento; conservar las imágenes activas para rollback.
+3. Validar Compose con `config --quiet`; ejecutar el plan oficial de migraciones en solo lectura.
+4. Aplicar migraciones únicamente con autorización explícita y después de revisar el destino. No se ejecuta DDL al reiniciar el backend.
+5. Actualizar en el orden requerido por el contrato frontend/backend; comprobar health, login, permisos y modo privado.
+6. Si el código falla sin cambios de esquema, volver a las imágenes previas. No revertir DDL manualmente ni restaurar sobre una base que ya recibió nuevas escrituras; preservar estado, logs y respaldos, y definir recuperación antes de actuar.
 
-No revierta manualmente DDL ni restaure encima de una base que recibió escrituras después del respaldo. Si falla el binario después de una migración, detenga tráfico, preserve logs y respaldo, y prefiera corregir hacia adelante. La restauración requiere un procedimiento de incidente y una ventana aprobada.
+No usar `docker compose down -v`, `docker volume prune` ni comandos de limpieza en el proyecto existente.
 
-## Respaldos automáticos y monitoreo pendientes
+## Pendientes antes de publicación comercial
 
-No se instaló un timer de backups porque todavía faltan destino off-site, retención, cifrado y destinatario de alertas; guardar copias ilimitadas en el único disco acabaría llenándolo. Además, el respaldo consistente actual detiene backend/frontend. Antes de producción, acuerde el RPO/RTO, el tamaño esperado, la frecuencia y una ventana de mantenimiento, y pruebe restauraciones periódicas. Añada monitoreo externo de HTTPS, salud de `/api/health`, espacio libre y última copia validada. Compose ya ofrece healthchecks locales, pero no envía alertas externas.
+- Comprar y elegir el hostname, publicar DNS y decidir si el acceso público está autorizado.
+- Activar Caddy/ACME, validar TLS y confirmar el acceso privado de recuperación.
+- Completar respaldo externo cifrado, verificación periódica de restauración y alertas; pospuesto por decisión del propietario.
+- Ejecutar la checklist manual de roles y navegación, más pruebas concurrentes en aislamiento.
+- Acordar proceso operativo de mensualidades y atención a incidentes.
 
-## Plan, precio y capacidad
-
-El backend impone el máximo de usuarios del plan Básico (3: un administrador y dos vendedores) y los límites se verifican al crear/reactivar usuarios. El catálogo no fija el precio de USD 20 ni existe cobro recurrente integrado: los pagos mensuales se registran manualmente desde administración. Defina el proceso de facturación, seguimiento de vencimientos y suspensión antes de vender suscripciones.
-
-Para arrancar, presupuestaría al menos 4 vCPU y 8 GB RAM, con 100–150 GB de almacenamiento; elegir NVMe si el costo lo permite. Es una recomendación de planificación, no capacidad garantizada. Contabo describe Cloud VPS 4 con 4 vCPU, 8 GB RAM y 100 GB SSD, y Cloud VPS Plus 4 con 4 vCPU, 8 GB y 150 GB NVMe; su documentación advierte que las vCPU son compartidas. Valide la carga, espacio de imágenes, respaldos y latencias en el VPS contratado antes de anunciar un número de usuarios soportados. Consulte [precios y recursos actuales de Contabo](https://contabo.com/en-us/pricing/) y [documentación de sus VPS](https://docs.contabo.com/docs/products/cloud-vps/).
-
-Las pruebas locales previas llegaron a 50 usuarios simultáneos en esta computadora. Eso no equivale a una garantía para un VPS. No existe todavía una medición del servidor Contabo real.
+La medición local previa de carga no garantiza la capacidad del VPS. No anunciar capacidad concurrente hasta medir el servidor Contabo con datos ficticios y un perfil de carga acordado.

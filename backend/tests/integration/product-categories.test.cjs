@@ -62,9 +62,13 @@ test('categorías de producto se administran por negocio y solo por ADMIN', asyn
 
   await t.test('ADMIN crea categorías y los duplicados normalizados se rechazan', async () => {
     assert.equal((await anon.request('/product-categories', 'POST', { name: 'Temporal' })).status, 401);
+    assert.equal((await admin.request('/product-categories', 'POST', { name: '' })).status, 400);
+    assert.equal((await admin.request('/product-categories', 'POST', { name: '   ' })).status, 400);
     const first = await admin.request('/product-categories', 'POST', { name: 'Panadería' });
     assert.equal(first.status, 201); assert.equal(first.data.category.businessId, businessA);
     assert.equal((await admin.request('/product-categories', 'POST', { name: '  PANADERIA  ' })).status, 409);
+    await rows(pool, 'INSERT INTO product_categories (business_id, name, normalized_name) VALUES (?, ?, ?)', [businessA, 'Café histórico', 'café histórico']);
+    assert.equal((await admin.request('/product-categories', 'POST', { name: 'Cafe historico' })).status, 409);
     assert.equal((await admin.request('/product-categories', 'POST', { name: 'nombre\ninválido' })).status, 400);
     assert.equal((await admin.request('/product-categories', 'POST', { name: 'Otra', businessId: businessB })).status, 400);
   });
@@ -84,11 +88,39 @@ test('categorías de producto se administran por negocio y solo por ADMIN', asyn
   await t.test('renombrar actualiza los productos del mismo negocio y conserva auditoría', async () => {
     const oldCategory = await admin.request('/product-categories', 'POST', { name: 'Abarrotes' });
     const otherCategory = await other.request('/product-categories', 'POST', { name: 'Abarrotes' });
-    assert.equal(oldCategory.status, 201); assert.equal(otherCategory.status, 201);
-    const product = await admin.request('/products', 'POST', { barcode: 'CAT-' + randomUUID().slice(0, 12), name: 'Producto categoría', category: 'Abarrotes', cost: '1.00', marginRetail: '0', marginWholesale: '0', retailPrice: '2.00', wholesalePrice: '2.00', stock: '1', minStock: '0', taxRate: '0', image: null, active: true });
+    const otherOnlyCategory = await other.request('/product-categories', 'POST', { name: 'Solo negocio B' });
+    assert.equal(oldCategory.status, 201); assert.equal(otherCategory.status, 201); assert.equal(otherOnlyCategory.status, 201);
+    const productInput = (category, name = 'Producto categoría') => ({ barcode: 'CAT-' + randomUUID().slice(0, 12), name, category, cost: '1.00', marginRetail: '0', marginWholesale: '0', retailPrice: '2.00', wholesalePrice: '2.00', stock: '1', minStock: '0', taxRate: '0', image: null, active: true });
+    const product = await admin.request('/products', 'POST', productInput('Abarrotes'));
     assert.equal(product.status, 201);
+    const legacyCategoryProduct = await admin.request('/products', 'POST', productInput('Cafe historico', 'Producto de categoría previa'));
+    assert.equal(legacyCategoryProduct.status, 201); assert.equal(legacyCategoryProduct.data.product.category, 'Café histórico');
+    const missingCategory = await admin.request('/products', 'POST', productInput('No existe'));
+    assert.equal(missingCategory.status, 400); assert.equal(missingCategory.data.error.code, 'PRODUCT_CATEGORY_NOT_FOUND');
+    assert.equal(missingCategory.data.error.message, 'Selecciona una categoría existente de este negocio.');
+    const foreignCategory = await admin.request('/products', 'POST', productInput('Solo negocio B'));
+    assert.equal(foreignCategory.status, 400); assert.equal(foreignCategory.data.error.code, 'PRODUCT_CATEGORY_NOT_FOUND');
     assert.equal((await admin.request('/product-categories/' + oldCategory.data.category.id, 'PATCH', { name: 'Despensa' })).status, 200);
     assert.equal((await admin.request('/products/' + product.data.product.id)).data.product.category, 'Despensa');
+    const currentProduct = (await admin.request('/products/' + product.data.product.id)).data.product;
+    const validEdit = await admin.request('/products/' + product.data.product.id, 'PATCH', { revision: currentProduct.revision, category: 'Panadería' });
+    assert.equal(validEdit.status, 200); assert.equal(validEdit.data.product.category, 'Panadería');
+    const invalidEdit = await admin.request('/products/' + product.data.product.id, 'PATCH', { revision: validEdit.data.product.revision, category: 'Inexistente' });
+    assert.equal(invalidEdit.status, 400); assert.equal(invalidEdit.data.error.code, 'PRODUCT_CATEGORY_NOT_FOUND');
+    const foreignEdit = await admin.request('/products/' + product.data.product.id, 'PATCH', { revision: validEdit.data.product.revision, category: 'Solo negocio B' });
+    assert.equal(foreignEdit.status, 400); assert.equal(foreignEdit.data.error.code, 'PRODUCT_CATEGORY_NOT_FOUND');
+
+    const historicProduct = await admin.request('/products', 'POST', productInput('Panadería', 'Producto histórico'));
+    assert.equal(historicProduct.status, 201);
+    await rows(pool, 'UPDATE products SET category = ? WHERE business_id = ? AND id = ?', ['  Panadería  ', businessA, historicProduct.data.product.id]);
+    const historicBefore = (await admin.request('/products/' + historicProduct.data.product.id)).data.product;
+    const historicEdit = await admin.request('/products/' + historicProduct.data.product.id, 'PATCH', { revision: historicBefore.revision, category: 'Panadería' });
+    assert.equal(historicEdit.status, 200); assert.equal(historicEdit.data.product.category, '  Panadería  ');
+
+    const quickProduct = await admin.request('/purchases/products', 'POST', productInput('Despensa', 'Producto desde compras'));
+    assert.equal(quickProduct.status, 201); assert.equal(quickProduct.data.product.category, 'Despensa');
+    const invalidQuickProduct = await admin.request('/purchases/products', 'POST', productInput('Solo negocio B', 'Producto desde compras no válido'));
+    assert.equal(invalidQuickProduct.status, 400); assert.equal(invalidQuickProduct.data.error.code, 'PRODUCT_CATEGORY_NOT_FOUND');
     const otherList = await other.request('/product-categories');
     assert.ok(otherList.data.categories.some(category => category.id === otherCategory.data.category.id && category.name === 'Abarrotes'));
     assert.equal((await other.request('/product-categories/' + oldCategory.data.category.id, 'PATCH', { name: 'Ajena' })).status, 404);

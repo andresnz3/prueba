@@ -1,0 +1,25 @@
+ARG FRONTEND_BASE
+ARG BACKEND_BASE
+ARG FRONTEND_BASE_ID
+ARG BACKEND_BASE_ID
+ARG PACKAGE_SHA256
+
+FROM ${FRONTEND_BASE} AS active_frontend
+FROM ${BACKEND_BASE} AS patcher
+ARG FRONTEND_BASE_ID
+ARG BACKEND_BASE_ID
+ARG PACKAGE_SHA256
+COPY --chown=node:node apply-softventa-overlay.cjs /tmp/apply-softventa-overlay.cjs
+COPY --chown=node:node frontend.patch /tmp/frontend.patch
+COPY --chown=node:node softventaweb-favicon-20261106-16.png softventaweb-favicon-20261106-32.png softventaweb-favicon-20261106-48.png softventaweb-favicon-20261106.svg softventaweb-touch-20261106-192.png softventaweb-pwa-20261106-512.png /tmp/icons/
+COPY --chown=node:node --from=active_frontend /usr/share/nginx/html /tmp/site
+RUN node /tmp/apply-softventa-overlay.cjs frontend /tmp/site /tmp/frontend.patch ${PACKAGE_SHA256} /tmp/icons
+
+FROM ${FRONTEND_BASE}
+ARG FRONTEND_BASE_ID
+ARG BACKEND_BASE_ID
+ARG PACKAGE_SHA256
+LABEL org.softventa.billing-favicon.frontend-base-image-id="${FRONTEND_BASE_ID}" \
+      org.softventa.billing-favicon.backend-base-image-id="${BACKEND_BASE_ID}" \
+      org.softventa.billing-favicon.package-sha256="${PACKAGE_SHA256}"
+COPY --from=patcher /tmp/site /usr/share/nginx/html

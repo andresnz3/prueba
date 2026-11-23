@@ -1,0 +1,23 @@
+ARG FRONTEND_BASE
+ARG BACKEND_BASE
+ARG FRONTEND_BASE_ID
+ARG BACKEND_BASE_ID
+ARG PACKAGE_SHA256
+
+FROM ${FRONTEND_BASE} AS active_frontend
+FROM ${BACKEND_BASE} AS patcher
+ARG FRONTEND_BASE_ID
+ARG BACKEND_BASE_ID
+ARG PACKAGE_SHA256
+COPY --chown=node:node apply-connected-charge-fix.cjs /tmp/apply-connected-charge-fix.cjs
+COPY --chown=node:node --from=active_frontend /usr/share/nginx/html /tmp/site
+RUN node /tmp/apply-connected-charge-fix.cjs --apply /tmp/site ${PACKAGE_SHA256}
+
+FROM ${FRONTEND_BASE}
+ARG FRONTEND_BASE_ID
+ARG BACKEND_BASE_ID
+ARG PACKAGE_SHA256
+LABEL org.softventa.connected-charge-fix.frontend-base-image-id="${FRONTEND_BASE_ID}" \
+      org.softventa.connected-charge-fix.backend-base-image-id="${BACKEND_BASE_ID}" \
+      org.softventa.connected-charge-fix.package-sha256="${PACKAGE_SHA256}"
+COPY --from=patcher /tmp/site /usr/share/nginx/html

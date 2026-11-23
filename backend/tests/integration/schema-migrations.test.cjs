@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readConfig } = require('../../src/config/environment');
 const { createDatabasePool } = require('../../src/config/database');
-const { migrate } = require('../../src/services/schema-migrations');
+const { MIGRATIONS, migrate } = require('../../src/services/schema-migrations');
 
 const database = process.env.POS_INTEGRATION_DATABASE;
 if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === process.env.DB_NAME) throw new Error('Use isolated runner');
@@ -15,7 +15,24 @@ test('ordered migrations are tracked, adopted from a compatible existing schema,
   t.after(() => pool.end());
 
   const [ledger] = await pool.execute("SELECT version,status FROM schema_migrations ORDER BY version");
-  assert.deepEqual(ledger.map(row => [row.version, row.status]), Array.from({ length: 21 }, (_, index) => [String(index + 1).padStart(3, '0'), 'APPLIED']));
+  assert.deepEqual(ledger.map(row => [row.version, row.status]), Array.from({ length: 23 }, (_, index) => [String(index + 1).padStart(3, '0'), 'APPLIED']));
+  const [activeColumn] = await pool.execute("SELECT data_type AS dataType,column_type AS columnType,is_nullable AS nullable,column_default AS columnDefault,extra AS columnExtra,generation_expression AS generationExpression FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='product_categories' AND column_name='active'");
+  assert.deepEqual(activeColumn.map(row => [row.dataType, row.columnType, row.nullable, String(row.columnDefault), row.columnExtra, row.generationExpression]), [['tinyint', 'tinyint(1)', 'NO', '1', '', '']]);
+  const [categoriesBeforeRecovery] = await pool.execute('SELECT COUNT(*) AS count FROM product_categories');
+  await pool.execute('DELETE FROM schema_migrations WHERE version = \'022\'');
+  await pool.execute('ALTER TABLE product_categories DROP COLUMN active');
+  await pool.execute('UPDATE schema_migrations SET checksum = ? WHERE version = \'021\'', [MIGRATIONS.find(migration => migration.version === '021').legacyChecksums[0]]);
+  const recoveredLegacy = await migrate(pool, database, 'apply');
+  assert.equal(recoveredLegacy.find(item => item.version === '022').action, 'applied');
+  const [activeAfterRecovery] = await pool.execute("SELECT data_type AS dataType,column_type AS columnType,is_nullable AS nullable,column_default AS columnDefault,extra AS columnExtra,generation_expression AS generationExpression FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='product_categories' AND column_name='active'");
+  assert.deepEqual(activeAfterRecovery.map(row => [row.dataType, row.columnType, row.nullable, String(row.columnDefault), row.columnExtra, row.generationExpression]), [['tinyint', 'tinyint(1)', 'NO', '1', '', '']]);
+  await pool.execute('ALTER TABLE product_categories MODIFY active TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await assert.rejects(migrate(pool, database, 'plan'), /partially present/);
+  await pool.execute('ALTER TABLE product_categories MODIFY active TINYINT(1) NOT NULL DEFAULT 1');
+  const [categoriesAfterRecovery] = await pool.execute('SELECT COUNT(*) AS count FROM product_categories');
+  assert.equal(Number(categoriesAfterRecovery[0].count), Number(categoriesBeforeRecovery[0].count));
+  const [inactiveCategories] = await pool.execute('SELECT COUNT(*) AS count FROM product_categories WHERE active <> TRUE');
+  assert.equal(Number(inactiveCategories[0].count), 0);
   const [rateLimitTable] = await pool.execute("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='auth_login_rate_limits'");
   assert.equal(Number(rateLimitTable[0].count), 1);
   const [orderColumns] = await pool.execute("SELECT column_name AS columnName,is_nullable AS isNullable,column_default AS columnDefault FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='sale_order_items' AND column_name IN ('estimated_unit_price','estimated_subtotal','price_snapshot_available') ORDER BY ordinal_position");

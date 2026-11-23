@@ -1,7 +1,7 @@
 'use strict';
 const v = require('../middleware/validation');
 const { httpError } = require('../middleware/errors');
-const { productCategoryName } = require('./product-category-values');
+const { normalizeProductCategory, productCategoryName } = require('./product-category-values');
 function decimal(value, scale, digits, signed = false) {
   if (!['string', 'number'].includes(typeof value) || (typeof value === 'number' && !Number.isFinite(value))) v.invalid();
   const raw = String(value);
@@ -43,6 +43,15 @@ function product(body, editing = false) {
   if (!editing) return { taxRate: '0.0000', image: null, active: true, ...result };
   return { ...result, revision: data.revision };
 }
+async function resolveProductCategory(repo, db, businessId, value) {
+  const normalizedName = normalizeProductCategory(typeof value === 'string' ? value : '');
+  if (!normalizedName) throw httpError(400, 'PRODUCT_CATEGORY_NOT_FOUND');
+  const [category] = await repo.rows(db,
+    'SELECT name FROM product_categories WHERE business_id = ? AND normalized_name = ? LIMIT 1 FOR SHARE',
+    [String(businessId), normalizedName]);
+  if (!category) throw httpError(400, 'PRODUCT_CATEGORY_NOT_FOUND');
+  return { name: category.name, normalizedName };
+}
 function movement(body) {
   const data = v.body(body, ['type', 'quantity', 'reason']);
   if (!['ADJUSTMENT', 'WASTE'].includes(data.type)) v.invalid();
@@ -57,4 +66,4 @@ function page(query, allowed = []) {
   if (typeof limit !== 'string' || !/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > 100 || typeof offset !== 'string' || !/^\d{1,7}$/.test(offset)) v.invalid();
   return { limit: Number(limit), offset: Number(offset) };
 }
-module.exports = { decimal, fixed, units, product, productCategoryName, movement, page };
+module.exports = { decimal, fixed, units, product, productCategoryName, resolveProductCategory, movement, page };

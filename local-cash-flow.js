@@ -73,7 +73,7 @@
       const previous = (await localDB.sales.toArray()).filter(s => window.PosLocalIdentity.matches(s));
       const numero = Math.max(0, ...previous.map(s => Number(s.numero) || 0)) + 1;
       const id = Date.now() + Math.random(), now = Date.now();
-      const sale = { id, business_id: DEFAULT_BUSINESS_ID, numero, fecha: new Date(now).toLocaleString(), fechaTS: now, vendedor: input.seller || currentUser.displayName, cajero: currentUser.displayName, detalle: input.detail || '-', metodo: method === 'credit' ? 'Crédito' : 'Contado', medioPago: method, cliente: client?.name || '-', clienteId: client?.id || null, cajaSessionId: session.id, estadoCaja: method === 'cash' ? 'confirmado' : method === 'credit' ? 'no_aplica' : 'pendiente', vencimiento: dueTS ? new Date(dueTS).toLocaleDateString() : null, vencimientoTS: dueTS, subtotal: calc.subtotal, descuentoPct: input.discountPercent, descuentoMonto: calc.discount, total: calc.total, tarifa: input.buyerType === 'retail' ? 'Menudeo' : 'Mayoreo', items: calc.items, plazo: dueTS ? input.creditDays + ' días' : '-', anulada: false, ordenId: order?.id || null };
+      const sale = { id, business_id: DEFAULT_BUSINESS_ID, numero, fecha: new Date(now).toLocaleString(), fechaTS: now, vendedor: input.seller || currentUser.displayName, cajero: currentUser.displayName, detalle: input.detail || '-', detalleCliente: input.detail, metodo: method === 'credit' ? 'Crédito' : 'Contado', medioPago: method, cliente: client?.name || '-', clienteId: client?.id || null, cajaSessionId: session.id, estadoCaja: method === 'cash' ? 'confirmado' : method === 'credit' ? 'no_aplica' : 'pendiente', vencimiento: dueTS ? new Date(dueTS).toLocaleDateString() : null, vencimientoTS: dueTS, subtotal: calc.subtotal, descuentoPct: input.discountPercent, descuentoMonto: calc.discount, total: calc.total, tarifa: input.buyerType === 'retail' ? 'Menudeo' : 'Mayoreo', items: calc.items, plazo: dueTS ? input.creditDays + ' días' : '-', anulada: false, ordenId: order?.id || null };
       await localDB.sales.add(sale);
       if (client) { await localDB.clients.put(client); await localDB.sync_queue.add({ action: 'UPDATE', table_name: 'clients', data: JSON.stringify(client), status: 'pending' }); }
       for (const item of calc.items) {
@@ -206,7 +206,9 @@
     if (method === 'cash' && (!/^\d+(?:\.\d{1,2})?$/.test(raw) || Number(raw) < preview.total)) { window.PosValidation.field('localOrderReceived', 'Ingresa efectivo suficiente, con hasta dos decimales'); return; }
     busy = true; el('localOrderConfirmBtn').disabled = true;
     try {
+      const saleDetail = selected.input.detail;
       const sale = await record(selected.input, { orderId: selected.id, quoteToken: preview.token, paymentMethod: method, received: method === 'cash' ? Number(raw) : null });
+      window.PosRuntime.clearSaleDetail(saleDetail);
       el('localOrderCheckoutModal').classList.add('hidden'); selected = preview = null;
       await refresh(); generarVisualizacionTicket(sale, method === 'cash' ? Number(raw) : sale.total, method === 'cash' ? r2(Number(raw) - sale.total) : 0, false);
     } catch (error) { showAlert(window.PosMessages.fromError(error, 'No se pudo completar esta operación. Actualiza la pantalla e inténtalo de nuevo.')); }

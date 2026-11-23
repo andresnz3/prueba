@@ -1,0 +1,33 @@
+diff --git a/backend/src/routes/sales.js b/backend/src/routes/sales.js
+index f927114..9ce2fb0 100644
+--- a/backend/src/routes/sales.js
++++ b/backend/src/routes/sales.js
+@@ -30,7 +30,9 @@ function salesRoutes(authentication, service, customers) {
+   router.put('/business-settings/sales-flow', async (req, res) => res.json(await service.setSalesFlow(req.auth, values.salesFlow(req.body))));
+   router.post('/sales/orders', async (req, res) => res.status(201).json(await service.createOrder(req.auth, values.order(req.body))));
+   router.get('/sales', async (req, res) => {
+-    const options = page(req.query, ['maxId']); if (req.query.maxId !== undefined) options.maxId = v.id(req.query.maxId);
++    const options = page(req.query, ['maxId', 'q']); if (req.query.maxId !== undefined) options.maxId = v.id(req.query.maxId);
++    if (req.query.q === undefined || (typeof req.query.q === 'string' && !req.query.q.trim())) options.q = '';
++    else options.q = v.text(req.query.q, 100);
+     res.json({ sales: await service.list(req.auth, options) });
+   });
+   router.get('/sales/orders/history', async (req, res) => { v.body(req.query, ['limit', 'offset'], []); res.json({ orders: await service.listHistoricalOrders(req.auth, page(req.query)) }); });
+
+diff --git a/backend/src/services/sales.js b/backend/src/services/sales.js
+index 487d24a..88bc168 100644
+--- a/backend/src/services/sales.js
++++ b/backend/src/services/sales.js
+@@ -415,7 +415,10 @@ function createSalesService({ repo, auth, config, creditSnapshot }) {
+     return recoverResult(db, current, row);
+   });
+   const list = (session, options) => work(session, 'history', async (db, current) => {
+-    const rows = await repo.rows(db, 'SELECT id FROM sales WHERE business_id = ?' + (options.maxId ? ' AND id <= ?' : '') + ' ORDER BY id DESC LIMIT ? OFFSET ?', [current.business_id, ...(options.maxId ? [options.maxId] : []), options.limit, options.offset]);
++    const query = options.q || '';
++    const filter = query ? " AND (LOCATE(LOWER(?), LOWER(COALESCE(s.invoice_number, ''))) > 0 OR LOCATE(LOWER(?), LOWER(COALESCE(s.detail, ''))) > 0 OR LOCATE(LOWER(?), LOWER(COALESCE(c.name, ''))) > 0)" : '';
++    const values = [current.business_id, ...(options.maxId ? [options.maxId] : []), ...(query ? [query, query, query] : []), options.limit, options.offset];
++    const rows = await repo.rows(db, 'SELECT s.id FROM sales s LEFT JOIN clients c ON c.business_id = s.business_id AND c.id = s.client_id WHERE s.business_id = ?' + (options.maxId ? ' AND s.id <= ?' : '') + filter + ' ORDER BY s.id DESC LIMIT ? OFFSET ?', values);
+     const sourceNames = await loadSourceBusinessNames(repo, db, current.business_id);
+     const sourcePaymentMethods = await loadHistoricalPaymentMethods(repo, db, current.business_id, rows.map(row => String(row.id)));
+     const result = []; for (const row of rows) result.push(await getSale(db, current, String(row.id), sourceNames, sourcePaymentMethods)); return result;
+

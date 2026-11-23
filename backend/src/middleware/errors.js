@@ -19,6 +19,7 @@ function logInternalFailure(error, req, status, code) {
   console.warn(JSON.stringify(diagnostic));
 }
 const publicMessages = Object.freeze({
+  PRODUCT_CATEGORY_NOT_FOUND: 'Selecciona una categoría existente de este negocio.',
   BUSINESS_NOT_FOUND: 'No se encontr\u00f3 el negocio solicitado.',
   BUSINESS_DELETE_PROTECTED: 'No se puede eliminar el negocio principal del sistema.',
   BUSINESS_DELETE_BLOCKED: 'Otra información del sistema todavía depende de este negocio. No se realizaron cambios; revise esas relaciones antes de volver a intentarlo.',

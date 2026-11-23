@@ -53,8 +53,38 @@ test('venta fraccionaria, descuento, factura y stock persisten al recargar',asyn
   await expect(page.locator('#connectedCheckoutTitle')).toHaveText('Cobro en Efectivo');await expect(page.locator('#connectedCheckoutPaymentMethod')).toHaveText('Efectivo');await expect(page.locator('#connectedCashChangePreview')).toBeHidden();
   await page.setViewportSize({width:390,height:844});const card=page.locator('#connectedCheckoutModal .modal-card');const box=await card.evaluate(el=>({width:el.getBoundingClientRect().width,scrollWidth:el.scrollWidth,clientWidth:el.clientWidth}));expect(box.width).toBeLessThanOrEqual(390);expect(box.scrollWidth).toBeLessThanOrEqual(box.clientWidth);await expect(page.locator('#confirmConnectedSaleBtn')).toBeVisible();await page.setViewportSize({width:1280,height:900});
   await confirm(page,'1');await expect(page.locator('#connectedCashReceivedFieldError')).toContainText('suficiente');await expect(page.locator('#connectedCashReceived')).toHaveValue('1');await expect(page.locator('#connectedCashReceived')).toBeFocused();
-  await page.locator('#connectedCashReceived').fill('20');await expect(page.locator('#connectedCashChangePreview')).toBeVisible();await expect(page.locator('#connectedCashChangeAmount')).toHaveText('C$7.54');await page.locator('#confirmConnectedSaleBtn').click();await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('7.54');await expect(page.locator('#ticketContent')).toContainText('12.46');expect((await call(page,'product',product.id)).stock).toBe(9);
+  await page.locator('#connectedCashReceived').fill('20');await expect(page.locator('#connectedCashChangePreview')).toBeVisible();await expect(page.locator('#connectedCashChangeAmount')).toHaveText('C$7.54');await page.locator('#confirmConnectedSaleBtn').click();await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('7.54');await expect(page.locator('#ticketContent')).toContainText('12.46');await expect(page.locator('#ticketContent')).not.toContainText('Nombre o detalle indicado');expect((await call(page,'product',product.id)).stock).toBe(9);
   await page.reload();await expect(page.locator('#app')).toBeVisible();await page.locator('#navHistoryBtn').click();await expect(page.locator('#historyTableBody')).toContainText('12.46');const sales=await call(page,'sales');expect(sales.find(s=>s.items.some(i=>i.productId===product.id)).total).toBe('12.46');
+});
+test('venta conectada conserva, imprime, limpia y busca el nombre o detalle',async({page})=>{
+  const {product}=await fixture(page);await add(page,product);await page.locator('#saleDetailInput').fill('Carlos Martínez');await checkout(page);
+  await confirm(page,'1');await expect(page.locator('#connectedCashReceivedFieldError')).toContainText('suficiente');await expect(page.locator('#saleDetailInput')).toHaveValue('Carlos Martínez');
+  await confirm(page,'100');await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('Carlos Martínez');await expect(page.locator('#saleDetailInput')).toHaveValue('');
+  const sale=(await call(page,'sales')).find(value=>value.detail==='Carlos Martínez');expect(sale).toBeTruthy();
+  await page.locator('#newSaleBtn').click();await page.locator('#navHistoryBtn').click();const search=page.locator('#historyInvoiceSearch');
+  await search.fill('carlos');const row=page.locator('#historyTableBody tr').filter({hasText:'#'+sale.invoiceNumber});await expect(row).toContainText('C$12.31');
+  await search.fill('Carlos Martínez');await expect(row).toHaveCount(1);await search.fill(sale.invoiceNumber);await expect(row).toHaveCount(1);
+  const apiMatches=await call(page,'sales',0,null,'cArLoS');expect(apiMatches.map(value=>value.id)).toContain(sale.id);
+  await row.getByRole('button',{name:'Ver Factura'}).click();await expect(page.locator('#ticketContent')).toContainText('Carlos Martínez');
+});
+test('factura separa el detalle indicado del cliente formal registrado',async({page})=>{
+  const {product}=await fixture(page);const customerName='Cliente formal '+randomUUID().slice(0,8);
+  const customer=await call(page,'createClient',{name:customerName,phone:'5551234',ruc:null,address:'Centro',creditLimit:'100.00',creditDays:15});
+  await page.reload();await expect(page.locator('#app')).toBeVisible();await page.locator('#navSalesBtn').click();
+  await page.locator('input[name=paymentMethod][value=credit]').check();await page.locator('#creditClientSearch').fill(customerName);await page.locator('#autocomplete-creditClientSearch-listbox .autocomplete-option').filter({hasText:customerName}).click();await expect(page.locator('#creditClientSelect')).toHaveValue(customer.id);
+  await add(page,product);await page.locator('#saleDetailInput').fill('Mesa 7 · entrega');await checkout(page);
+  await expect(page.locator('#connectedCheckoutDetail')).toContainText(customerName);
+  await page.locator('#confirmConnectedSaleBtn').click();await expect(page.locator('#ticketModal')).toBeVisible();
+  const sale=(await call(page,'sales')).find(value=>value.clientId===customer.id);expect(sale).toBeTruthy();
+  expect(sale.clientName).toBe(customerName);expect(sale.detail).toBe('Mesa 7 · entrega');
+  await expect(page.locator('#ticketContent .invoice-credit-details')).toContainText(customerName);
+  const detailField=page.locator('#ticketContent .invoice-field').filter({hasText:'Nombre o detalle indicado'});
+  await expect(detailField).toContainText('Mesa 7 · entrega');await expect(detailField).not.toContainText(customerName);
+  await expect(page.locator('#saleDetailInput')).toHaveValue('');
+  await page.locator('#newSaleBtn').click();await page.locator('#navHistoryBtn').click();
+  const historySearch=page.locator('#historyInvoiceSearch');await historySearch.fill(customerName);
+  const invoiceRow=page.locator('#historyTableBody tr').filter({hasText:'#'+sale.invoiceNumber});
+  await expect(invoiceRow).toContainText('Mesa 7 · entrega');
 });
 test('Historial conectado conserva la vista local y carga indicadores desde el backend',async({page})=>{
   const {product}=await fixture(page);const before=await call(page,'connectedReport');
@@ -80,7 +110,7 @@ test('Historial y Factura muestran factura/origen local mientras conservan MIG y
   await page.reload();await expect(page.locator('#app')).toBeVisible();await page.locator('#navHistoryBtn').click();
   const row=page.locator('#historyTableBody tr').filter({hasText:'Paquete Histórico Visual'});await expect(row).toContainText('#000027');await expect(row).toContainText('Histórica');await expect(row).not.toContainText(internalReference);await expect(row.getByRole('button',{name:'Ver Factura'})).toBeVisible();await expect(row.getByRole('button',{name:'Anular'})).toHaveCount(0);
   const historical=await call(page,'sale',sale.id);expect(historical.invoiceNumber).toBe(internalReference);expect(historical.originalInvoiceNumber).toBe('000027');expect(historical.isHistorical).toBe(true);
-  await row.getByRole('button',{name:'Ver Factura'}).click();await expect(page.locator('#ticketContent')).toContainText('#000027');await expect(page.locator('#ticketContent')).toContainText('Histórica · Negocio de origen: Paquete Histórico Visual');await expect(page.locator('#ticketContent')).not.toContainText(internalReference);
+  await row.getByRole('button',{name:'Ver Factura'}).click();await expect(page.locator('#ticketContent')).toContainText('#000027');await expect(page.locator('#ticketContent')).toContainText('Histórica · Negocio de origen: Paquete Histórico Visual');await expect(page.locator('#ticketContent')).toContainText('Venta visual histórica');await expect(page.locator('#ticketContent')).not.toContainText('Factura local:');await expect(page.locator('#ticketContent')).not.toContainText(internalReference);
 });
 test('Caja excluye ventas migradas de operaciones y conserva el cierre',async({page})=>{
   const {cash}=await fixture(page), reportBefore=await call(page,'connectedReport');
@@ -148,11 +178,11 @@ test('Caja confirma tarjeta/transferencia con actor y fecha sin aumentar efectiv
   sale=(await call(page,'sales')).find(value=>value.id===sale.id);expect(sale.cashStatus).toBe('CONFIRMED');const cash=await call(page,'currentCash',true);expect(cash.expectedAmount).toBe(expected);
   const movement=cash.movements.find(value=>value.saleId===sale.id);expect(movement.status).toBe('CONFIRMED');expect(movement.confirmed_by_user_id).toBeTruthy();expect(movement.confirmed_at).toBeTruthy();
 });
-test('Caja conectada oculta el ID de orden y conserva la accion interna',async({page})=>{
+test('Caja conectada muestra el número de pedido y conserva la acción interna',async({page})=>{
   const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:cash.expectedAmount});await call(page,'setSalesFlow','CENTRALIZED');await call(page,'openCash',{operationKey:randomUUID(),openingAmount:'100'});
   const prepared=await call(page,'prepareOrder',{operationKey:randomUUID(),items:[{productId:product.id,quantity:'1'}],priceType:'RETAIL',discountPercent:'0',detail:''}),order=prepared.order;
   await page.locator('#navCajaBtn').click();const row=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=cancel-order][data-id="'+order.id+'"]')});
-  await expect(row.locator('td').nth(1)).toHaveText('Orden pendiente');await expect(row.locator('td').nth(1)).not.toContainText('Orden #');await expect(row.locator('button[data-action=cancel-order]')).toHaveAttribute('data-id',order.id);
+  await expect(row.locator('td').nth(1)).toContainText('Pedido #'+order.id);await expect(row.locator('td').nth(1)).toContainText('Cliente sin nombre');await expect(row.locator('td').nth(1)).toContainText(product.name);await expect(row.locator('button[data-action=cancel-order]')).toHaveAttribute('data-id',order.id);
   await row.locator('button[data-action=cancel-order]').click();await expect(page.locator('#customAlertMessage')).toContainText('Orden cancelada');await closeAlert(page);
 });
 test('flujo centralizado exige caja abierta antes de enviar y cobrar en Caja',async({page})=>{
@@ -165,11 +195,11 @@ test('flujo centralizado exige caja abierta antes de enviar y cobrar en Caja',as
   await expect(page.locator('#connectedSalesFlow')).toHaveValue('CENTRALIZED');expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);expect((await call(page,'cashOverview')).pendingOrders).toHaveLength(0);await openCashFromUi(page);
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browserseller');await add(page,product);await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('Orden enviada a Caja');await expect(page.locator('#customAlertMessage')).toContainText('La próxima factura sigue siendo #'+nextInvoice+'.');await expect(page.locator('#currentSaleNumber')).toHaveText(nextInvoice);await closeAlert(page);
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browseradmin');await page.locator('#navCajaBtn').click();
-  const firstPending=(await call(page,'cashOverview')).pendingOrders.find(value=>value.items.some(item=>item.productId===product.id));expect(firstPending).toBeTruthy();expect(firstPending).not.toHaveProperty('invoiceNumber');const firstPendingRow=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=cancel-order][data-id="'+firstPending.id+'"]')});await expect(firstPendingRow.locator('td').nth(1)).toHaveText(/^Orden pendiente/);await expect(firstPendingRow.locator('td').nth(1)).not.toContainText('Orden #');await expect(firstPendingRow.locator('button[data-action=cancel-order]')).toHaveAttribute('data-id',firstPending.id);expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);
+  const firstPending=(await call(page,'cashOverview')).pendingOrders.find(value=>value.items.some(item=>item.productId===product.id));expect(firstPending).toBeTruthy();expect(firstPending).not.toHaveProperty('invoiceNumber');const firstPendingRow=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=cancel-order][data-id="'+firstPending.id+'"]')});await expect(firstPendingRow.locator('td').nth(1)).toContainText('Pedido #'+firstPending.id);await expect(firstPendingRow.locator('td').nth(1)).toContainText('Cliente sin nombre');await expect(firstPendingRow.locator('td').nth(1)).toContainText(product.name);await expect(firstPendingRow.locator('button[data-action=cancel-order]')).toHaveAttribute('data-id',firstPending.id);expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);
   await firstPendingRow.locator('button[data-action=cancel-order]').click();await expect(page.locator('#customAlertMessage')).toContainText('Orden cancelada');await expect(page.locator('#customAlertMessage')).toContainText('La próxima factura sigue siendo #'+nextInvoice+'.');await closeAlert(page);expect(await call(page,'nextInvoiceNumber')).toBe(nextInvoice);
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browserseller');await expect(page.locator('.sale-number')).toHaveText('Próxima factura #'+nextInvoice);await add(page,product);await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('La próxima factura sigue siendo #'+nextInvoice+'.');await closeAlert(page);
   await page.locator('#logoutBtn').click();await expect(page.locator('#loginScreen')).toBeVisible();await login(page,'browseradmin');await page.locator('#navCajaBtn').click();
-  const pendingOrder=(await call(page,'cashOverview')).pendingOrders.find(value=>value.items.some(item=>item.productId===product.id));expect(pendingOrder).toBeTruthy();expect(pendingOrder).not.toHaveProperty('invoiceNumber');const pendingOrderRow=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=charge-order][data-id="'+pendingOrder.id+'"]')});await expect(pendingOrderRow.locator('td').nth(1)).toHaveText(/^Orden pendiente/);await expect(pendingOrderRow.locator('td').nth(1)).not.toContainText('Orden #');await expect(pendingOrderRow.locator('button[data-action=charge-order]')).toHaveAttribute('data-id',pendingOrder.id);expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);
+  const pendingOrder=(await call(page,'cashOverview')).pendingOrders.find(value=>value.items.some(item=>item.productId===product.id));expect(pendingOrder).toBeTruthy();expect(pendingOrder).not.toHaveProperty('invoiceNumber');const pendingOrderRow=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=charge-order][data-id="'+pendingOrder.id+'"]')});await expect(pendingOrderRow.locator('td').nth(1)).toContainText('Pedido #'+pendingOrder.id);await expect(pendingOrderRow.locator('td').nth(1)).toContainText('Cliente sin nombre');await expect(pendingOrderRow.locator('td').nth(1)).toContainText(product.name);await expect(pendingOrderRow.locator('button[data-action=charge-order]')).toHaveAttribute('data-id',pendingOrder.id);expect(await call(page,'sales')).toEqual(salesBefore);expect((await call(page,'product',product.id)).stock).toBe(stockBefore);
   const live=await call(page,'product',product.id);await call(page,'updateProduct',product.id,{revision:live.revision,retailPrice:'14.00'});
   await pendingOrderRow.locator('button[data-action=charge-order]').click();await expect(page.locator('#connectedCheckoutModal')).toBeVisible();await expect(page.locator('#connectedCheckoutTitle')).toHaveText('Cobrar orden');await expect(page.locator('#connectedPriceChangeMessage')).toContainText('El precio cambió desde que se preparó');
   await page.locator('#connectedOrderPaymentMethod').selectOption('CARD');await expect(page.locator('#connectedCheckoutTotal')).toHaveText('C$14.00');await expect(page.locator('#confirmConnectedSaleBtn')).toHaveText('Confirmar precio y cobrar');
@@ -277,4 +307,173 @@ for (const flow of ['DIRECT','CENTRALIZED']) test('resumen previo y detalles MyS
   const saved=(await call(page,'cashSessions'))[0]; expect(saved.summary).toMatchObject({cashSales:'12.31',cardSales:'12.31',transferSales:'12.31',purchases:'0.00'}); const pendingCard=(await call(page,'sales')).find(s=>s.cashSessionId===saved.id&&s.paymentMethod==='CARD'); await call(page,'cancelSale',pendingCard.id,{operationKey:randomUUID(),reason:'Verificar snapshot del cierre'}); expect((await call(page,'cashSessions'))[0].summary).toEqual(saved.summary);
   await page.locator('#detalleCierreCajaModal .close-modal-btn').click(); await page.reload(); await expect(page.locator('#app')).toBeVisible(); await page.locator('#navCajaBtn').click(); await page.locator('#cajaHistorialBody tr').first().getByRole('button',{name:'Detalles',exact:true}).click(); await expect(page.locator('#cajaDetalleResumen')).toContainText('C$ -2.31');
   expect(await page.evaluate(()=>localDB)).toBeNull();
+});
+test('detalle conectado se transmite y aparece en impresion y PDF',async({page})=>{
+  const saleBodies=[];page.on('request',request=>{if(request.url().endsWith('/api/sales')&&request.method()==='POST')saleBodies.push(request.postDataJSON());});
+  const {product}=await fixture(page);await add(page,product);await page.locator('#saleDetailInput').fill('Detalle manual e2e');await checkout(page);
+  await confirm(page,'1');await expect(page.locator('#connectedCashReceivedFieldError')).toContainText('suficiente');await expect(page.locator('#saleDetailInput')).toHaveValue('Detalle manual e2e');
+  await confirm(page,'100');await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('Detalle manual e2e');await expect(page.locator('#saleDetailInput')).toHaveValue('');
+  expect(saleBodies).toHaveLength(1);expect(saleBodies[0].detail).toBe('Detalle manual e2e');
+  const printed=await page.evaluate(()=>{let html='';const original=window.open;window.open=()=>({document:{write(value){html=value;},close(){}}});try{window.imprimirTicket();}finally{window.open=original;}return html;});expect(printed).toContain('Detalle manual e2e');
+  const pdfText=await page.evaluate(async()=>{let text='';const original=window.html2pdf;window.html2pdf=()=>({set(){return this;},from(node){text=node.textContent;return this;},save(){return Promise.resolve();}});try{document.getElementById('pdfTicketBtn').click();await Promise.resolve();return text;}finally{window.html2pdf=original;}});expect(pdfText).toContain('Detalle manual e2e');
+  const sale=(await call(page,'sales')).find(value=>value.detail==='Detalle manual e2e');expect(sale).toBeTruthy();
+  const mapped=await page.evaluate(()=>window.eval('salesHistory.at(-1)'));await page.evaluate(value=>window.generarVisualizacionTicket({...value,clienteNombre:'',customerName:'',detalleCliente:'',detail:'Detalle alterno guardado'},value.total,0,true),mapped);await expect(page.locator('#ticketContent')).toContainText('Detalle alterno guardado');
+});
+test('orden conectada conserva el detalle hasta facturar y luego lo limpia',async({page})=>{
+  const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:cash.expectedAmount});await call(page,'setSalesFlow','CENTRALIZED');await call(page,'openCash',{operationKey:randomUUID(),openingAmount:'100'});await page.evaluate(()=>window.PosSales.load('salesView'));
+  await add(page,product);await page.locator('#saleDetailInput').fill('Cliente de orden');await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('Orden enviada a Caja');await expect(page.locator('#saleDetailInput')).toHaveValue('Cliente de orden');await closeAlert(page);
+  const order=(await call(page,'cashOverview')).pendingOrders.find(value=>value.items.some(item=>item.productId===product.id));expect(order).toBeTruthy();expect(order.customerName).toBe('Cliente de orden');await page.locator('#navCajaBtn').click();await page.locator('#cashOrderSearch').fill('cliente de orden');await expect(page.locator('#cajaOperacionesBody')).toContainText('Pedido #'+order.id);await expect(page.locator('#cajaOperacionesBody')).toContainText('Cliente de orden');await expect(page.locator('#cajaOperacionesBody')).toContainText(product.name);
+  const row=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=charge-order][data-id="'+order.id+'"]')});await row.locator('button[data-action=charge-order]').click();await expect(page.locator('#connectedCheckoutTitle')).toHaveText('Cobrar orden');await expect(page.locator('#connectedCheckoutDetail')).toContainText('Cliente de orden');await confirm(page,'100');
+  await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('Cliente de orden');await expect(page.locator('#saleDetailInput')).toHaveValue('');const sale=(await call(page,'sales')).find(value=>value.items.some(item=>item.productId===product.id));expect(sale.customerName).toBe('Cliente de orden');await page.locator('#newSaleBtn').click();await page.locator('#navHistoryBtn').click();const historyRow=page.locator('#historyTableBody tr').filter({hasText:'#'+sale.invoiceNumber});await expect(historyRow).toContainText('Cliente de orden');
+});
+test('cobro confirmado tolera runtime publicado sin clearSaleDetail y no queda en estado de error',async({page})=>{
+  const chargeRequests=[];page.on('request',request=>{if(request.method()==='POST'&&/^\/api\/cash\/orders\/\d+\/charge$/.test(new URL(request.url()).pathname))chargeRequests.push(request.url());});
+  const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:cash.expectedAmount});await call(page,'setSalesFlow','CENTRALIZED');await call(page,'openCash',{operationKey:randomUUID(),openingAmount:'100'});await page.evaluate(()=>window.PosSales.load('salesView'));
+  await add(page,product);await page.locator('#saleDetailInput').fill('Detalle confirmado');await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('Orden enviada a Caja');await closeAlert(page);
+  const order=(await call(page,'cashOverview')).pendingOrders.find(value=>value.items.some(item=>item.productId===product.id));expect(order).toBeTruthy();await page.locator('#navCajaBtn').click();
+  const row=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=charge-order][data-id="'+order.id+'"]')});await row.locator('button[data-action=charge-order]').click();await expect(page.locator('#connectedCheckoutTitle')).toHaveText('Cobrar orden');
+  await page.evaluate(()=>{const runtime=window.PosRuntime;window.PosRuntime=new Proxy(runtime,{get(target,key,receiver){return key==='clearSaleDetail'?undefined:Reflect.get(target,key,receiver);}});});
+  await confirm(page,'100');await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('Detalle confirmado');await expect(page.locator('#saleDetailInput')).toHaveValue('');await expect(page.locator('#connectedCheckoutModal')).toBeHidden();
+  await expect(page.locator('#customAlertMessage')).not.toContainText('No se pudo completar la operación');expect(chargeRequests).toHaveLength(1);
+  expect((await call(page,'sales')).filter(value=>value.detail==='Detalle confirmado'&&value.status==='COMPLETED')).toHaveLength(1);expect((await call(page,'cashOverview')).pendingOrders.some(value=>value.id===order.id)).toBe(false);
+});
+test('cobro de orden ambiguo se recupera por su clave aunque falte clearSaleDetail y falle la impresion',async({page})=>{
+  const chargeRequests=[],resolutionRequests=[];
+  page.on('request',request=>{const url=new URL(request.url());if(request.method()==='POST'&&/^\/api\/cash\/orders\/\d+\/charge$/.test(url.pathname))chargeRequests.push(url.pathname);if(request.method()==='POST'&&/^\/api\/operations\/[a-f0-9-]+\/resolve$/.test(url.pathname))resolutionRequests.push(url.pathname);});
+  const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:cash.expectedAmount});await call(page,'setSalesFlow','CENTRALIZED');await call(page,'openCash',{operationKey:randomUUID(),openingAmount:'100'});await page.evaluate(()=>window.PosSales.load('salesView'));
+  await add(page,product);await page.locator('#saleDetailInput').fill('Detalle recuperado');await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('Orden enviada a Caja');await closeAlert(page);
+  const order=(await call(page,'cashOverview')).pendingOrders.find(value=>value.items.some(item=>item.productId===product.id));expect(order).toBeTruthy();await page.locator('#navCajaBtn').click();
+  const row=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=charge-order][data-id="'+order.id+'"]')});await row.locator('button[data-action=charge-order]').click();await expect(page.locator('#connectedCheckoutTitle')).toHaveText('Cobrar orden');
+  await page.evaluate(()=>{const runtime=window.PosRuntime;window.PosRuntime=new Proxy(runtime,{get(target,key,receiver){return key==='clearSaleDetail'?undefined:Reflect.get(target,key,receiver);}});window.__ticketFailureObserved=false;window.generarVisualizacionTicket=()=>{window.__ticketFailureObserved=true;throw new TypeError('fixture-ticket-render-failure');};});
+  await page.route('**/api/cash/orders/*/charge',async route=>{const response=await route.fetch(),body=await response.json();expect(response.status()).toBe(201);expect(body.order?.status).toBe('COMPLETED');const {order:omittedOrder,...malformed}=body;expect(omittedOrder).toBeTruthy();await route.fulfill({status:response.status(),contentType:'application/json',body:JSON.stringify(malformed)});});
+  await confirm(page,'100');await expect(page.locator('#recoverSaleBtn')).toBeVisible();await expect(page.locator('#customAlertModal')).toBeVisible();await closeAlert(page);
+  await page.locator('#recoverSaleBtn').click();await expect(page.locator('#customAlertModal')).toBeVisible();await expect(page.locator('#customAlertMessage')).toContainText('Cobro confirmado');
+  await expect(page.locator('#connectedCheckoutModal')).toBeHidden();await expect(page.locator('#saleDetailInput')).toHaveValue('');expect(await page.evaluate(()=>window.__ticketFailureObserved)).toBe(true);
+  expect(chargeRequests).toHaveLength(1);expect(resolutionRequests).toHaveLength(1);
+  const sales=(await call(page,'sales')).filter(value=>value.detail==='Detalle recuperado');expect(sales).toHaveLength(1);expect(sales[0].status).toBe('COMPLETED');
+  expect((await call(page,'cashOverview')).pendingOrders.some(value=>value.id===order.id)).toBe(false);
+});
+test('ORDER_NOT_PENDING refresca Caja e Historial y no crea otra venta',async({page})=>{
+  const {product,cash}=await fixture(page);await call(page,'closeCash',cash.id,{operationKey:randomUUID(),countedAmount:cash.expectedAmount});await call(page,'setSalesFlow','CENTRALIZED');await call(page,'openCash',{operationKey:randomUUID(),openingAmount:'100'});await page.evaluate(()=>window.PosSales.load('salesView'));
+  await add(page,product);await page.locator('#saleDetailInput').fill('Detalle cobrado desde otra sesión');await page.locator('#processSaleBtn').click();await expect(page.locator('#customAlertMessage')).toContainText('Orden enviada a Caja');await closeAlert(page);
+  const order=(await call(page,'cashOverview')).pendingOrders.find(value=>value.items.some(item=>item.productId===product.id));expect(order).toBeTruthy();await page.locator('#navCajaBtn').click();
+  const row=page.locator('#cajaOperacionesBody tr').filter({has:page.locator('button[data-action=charge-order][data-id="'+order.id+'"]')});await row.locator('button[data-action=charge-order]').click();await expect(page.locator('#connectedCheckoutTitle')).toHaveText('Cobrar orden');
+  const quote=await call(page,'quoteOrder',order.id,'CASH');const saved=await call(page,'chargeOrder',order.id,{operationKey:randomUUID(),quoteToken:quote.quoteToken,paymentMethod:'CASH',cashReceived:'100'});expect(saved.order.status).toBe('COMPLETED');
+  const uiStatuses=[];page.on('response',response=>{const request=response.request(),url=new URL(response.url());if(request.method()==='POST'&&url.pathname==='/api/cash/orders/'+order.id+'/charge')uiStatuses.push(response.status());});
+  await confirm(page,'100');await expect(page.locator('#customAlertModal')).toBeVisible();await expect(page.locator('#customAlertMessage')).toContainText('La orden ya no está pendiente');
+  expect(uiStatuses).toEqual([409]);expect((await call(page,'sales')).filter(value=>value.detail==='Detalle cobrado desde otra sesión')).toHaveLength(1);
+  expect((await call(page,'cashOverview')).pendingOrders.some(value=>value.id===order.id)).toBe(false);await expect(page.locator('#connectedCheckoutModal')).toBeHidden();
+});
+test('detalle de una venta no se copia a la siguiente venta conectada',async({page})=>{
+  const {product}=await fixture(page);await add(page,product);await page.locator('#saleDetailInput').fill('Detalle primera venta');await checkout(page);await confirm(page,'100');await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('Detalle primera venta');await expect(page.locator('#saleDetailInput')).toHaveValue('');
+  await page.locator('#newSaleBtn').click();await add(page,product);await page.locator('input[name=paymentMethod][value=card]').check();await page.locator('#processSaleBtn').click();await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).not.toContainText('Nombre o detalle indicado');
+  const sales=(await call(page,'sales')).filter(value=>value.items.some(item=>item.productId===product.id));expect(sales).toHaveLength(2);expect(sales.map(value=>value.detail)).toContain('Detalle primera venta');expect(sales.map(value=>value.detail)).toContain('');await expect(page.locator('#saleDetailInput')).toHaveValue('');
+});
+test('la venta conectada conserva la captura de detalle hecha al cotizar',async({page})=>{
+  const {product}=await fixture(page);await add(page,product);await page.locator('#saleDetailInput').fill('Detalle capturado');await checkout(page);await page.locator('#saleDetailInput').fill('Dato siguiente');await confirm(page,'100');
+  await expect(page.locator('#ticketModal')).toBeVisible();await expect(page.locator('#ticketContent')).toContainText('Detalle capturado');await expect(page.locator('#ticketContent')).not.toContainText('Dato siguiente');await expect(page.locator('#saleDetailInput')).toHaveValue('Dato siguiente');
+  const sale=(await call(page,'sales')).find(value=>value.items.some(item=>item.productId===product.id));expect(sale.detail).toBe('Detalle capturado');
+});
+test('checkout cancelado o fallido conserva el detalle conectado',async({page})=>{
+  const {product}=await fixture(page);await add(page,product);await page.locator('#saleDetailInput').fill('Conservar en fallo');await checkout(page);
+  await page.locator('#connectedCheckoutModal .close-modal-btn').click();await expect(page.locator('#customConfirmModal')).toBeVisible();await page.locator('#customConfirmBtn').click();await expect(page.locator('#connectedCheckoutModal')).toBeHidden();await expect(page.locator('#saleDetailInput')).toHaveValue('Conservar en fallo');
+  await checkout(page);await page.route('**/api/sales',async route=>route.request().method()==='POST'?route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:{code:'TEST_FAILURE'}})}):route.continue());await confirm(page,'100');
+  await expect(page.locator('#saleDetailInput')).toHaveValue('Conservar en fallo');await expect(page.locator('#ticketModal')).toBeHidden();
+  await expect(page.locator('#customAlertMessage')).toContainText('Comprueba');
+});
+test('error de Reportes no bloquea el historial y deja un diagnóstico HTTP sanitizado',async({page})=>{
+  const diagnostics=[];page.on('console',message=>{if(message.text().startsWith('[SoftVentaWeb diagnostic] '))diagnostics.push(message.text());});
+  await page.goto('/?mode=connected&diag=history');await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
+  await page.locator('#loginUsername').fill('browseradmin');await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button[type=submit]').click();await expect(page.locator('#app')).toBeVisible();
+  expect(diagnostics.some(value=>value.includes('"endpoint":"/admin/support-session/end"')&&value.includes('"status":401'))).toBe(true);
+  expect(diagnostics.some(value=>value.includes('"endpoint":"/auth/logout"')&&value.includes('"status":401'))).toBe(true);
+  await page.route('**/api/reports/connected*',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'DATABASE_UNAVAILABLE',message:'PRIVATE_TEST_PAYLOAD'}})}));
+  await page.locator('#navHistoryBtn').click();await expect(page.locator('#historyTableBody')).toBeVisible();await expect(page.locator('#historyView .connected-module-loading.is-error')).toHaveCount(0);await expect(page.locator('#connectedHistoryStatus')).toBeVisible();
+  await expect.poll(()=>diagnostics.some(value=>value.includes('"endpoint":"/reports/connected"')&&value.includes('"status":503'))).toBeTruthy();
+  const apiDiagnostic=diagnostics.find(value=>value.includes('"endpoint":"/reports/connected"'));
+  expect(apiDiagnostic).toContain('"errorCode":"DATABASE_UNAVAILABLE"');expect(diagnostics.join('\n')).not.toContain('PRIVATE_TEST_PAYLOAD');
+  expect(diagnostics.some(value=>value.includes('"stage":"history-authorized"')&&value.includes('"supportSession":false'))).toBe(true);
+});
+test('excepción al representar órdenes históricas registra fase y ubicación sin mensaje sensible',async({page})=>{
+  const diagnostics=[];page.on('console',message=>{if(message.text().startsWith('[SoftVentaWeb diagnostic] '))diagnostics.push(message.text());});
+  await page.goto('/?mode=connected&diag=history');await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
+  await page.locator('#loginUsername').fill('browseradmin');await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button[type=submit]').click();await expect(page.locator('#app')).toBeVisible();
+  await page.route('**/api/sales/orders/history*',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({orders:[{id:'fixture-order',businessId:business,isHistorical:true,status:'PENDING',items:[null],createdAt:new Date().toISOString(),seller:'fixture',estimatedTotal:'0.00'}]})}));
+  await page.locator('#navHistoryBtn').click();await expect(page.locator('#historyView .connected-module-loading.is-error')).toBeVisible();
+  await expect.poll(()=>diagnostics.some(value=>value.includes('"stage":"render-historical-orders"')&&value.includes('"errorName":"TypeError"'))).toBeTruthy();
+  const diagnostic=diagnostics.find(value=>value.includes('"stage":"render-historical-orders"'));
+  expect(diagnostic).toMatch(/"location":"connected-sales\.js:\d+"/);expect(diagnostic).not.toContain('PRIVATE_TEST_PAYLOAD');
+});
+function historySalesFixture(businessId) {
+  return Array.from({length:14},(_,index)=>({
+    id:String(index+1),businessId,invoiceNumber:String(index+1).padStart(6,'0'),status:'COMPLETED',paymentMethod:'CASH',cashStatus:'CONFIRMED',
+    items:[{productId:'9001',name:'Artículo de prueba',barcode:'FIXTURE-9001',quantity:'1.000',unitPrice:'12.31',subtotal:'12.31',total:'12.31',taxRate:'0.0000'}],
+    createdAt:new Date(Date.UTC(2026,10,8,12,index)).toISOString(),subtotal:'12.31',discount:'0.00',discountPercent:'0.0000',tax:'0.00',total:'12.31',
+    detail:index===13?'Detalle de fixture':'',seller:'Cajero de prueba',cashier:'Cajero de prueba',clientId:null,clientName:null,dueAt:null,cashSessionId:'900',cancelReason:null,isHistorical:false
+  }));
+}
+function historyReportFixture(businessId) {
+  return {businessId,sales:{total:'172.34',cost:'100.00',grossProfit:'72.34',netProfit:'72.34',history:[],paymentMethods:[{method:'CASH',total:'172.34'}],sellers:[],topProducts:[]},
+    cash:{periodIn:'172.34',periodOut:'0.00',currentExpected:null,closures:[],movements:[]},inventory:{movements:[],products:[]},receivables:{clients:[],payments:[]},
+    expenses:{total:'0.00',count:0,byCategory:[],history:[]},purchases:{total:'0.00',history:[]},payables:{balance:'0.00',pendingPayments:'0.00',invoices:[]},suppliers:{list:[],payments:[]}};
+}
+async function loginForHistoryFixture(page,viewport) {
+  await page.setViewportSize(viewport);await page.goto('/?mode=connected&diag=history');await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
+  await page.locator('#loginUsername').fill('browseradmin');await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button[type=submit]').click();await expect(page.locator('#app')).toBeVisible();
+}
+async function mockHistoryResponses(page,{businessId,sales,onSalesRequest=async()=>{}}) {
+  const responses=[];
+  await page.route('**/api/**',async route=>{
+    const request=route.request(),url=new URL(request.url());
+    if(request.method()!=='GET')return route.continue();
+    let body,endpoint;
+    if(url.pathname.endsWith('/api/sales/orders/history')){endpoint='/sales/orders/history';body={orders:[]};}
+    else if(url.pathname.endsWith('/api/reports/connected')){endpoint='/reports/connected';body={report:historyReportFixture(businessId)};}
+    else if(url.pathname.endsWith('/api/sales')){endpoint='/sales';await onSalesRequest();body={sales};}
+    else return route.continue();
+    responses.push({endpoint,status:200});
+    return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+  });
+  return responses;
+}
+for(const [device,viewport] of [['escritorio',{width:1365,height:900}],['móvil',{width:390,height:844}]]) test(`14 respuestas de historial con detalle renderizan en ${device}`,async({page})=>{
+  const diagnostics=[];page.on('console',message=>{if(message.text().startsWith('[SoftVentaWeb diagnostic] '))diagnostics.push(message.text());});
+  await loginForHistoryFixture(page,viewport);const responses=await mockHistoryResponses(page,{businessId:business,sales:historySalesFixture(business)});
+  await page.locator('#navHistoryBtn').click();await expect(page.locator('#historyView .connected-module-loading.is-error')).toHaveCount(0);await page.locator('[data-period-filter="history"] [data-period-preset="all"]').click();
+  await expect(page.locator('#historyTableBody tr')).toHaveCount(14);await expect(page.locator('#historyTableBody')).toContainText('#000014');
+  await expect(page.locator('#historyTableBody tr').filter({hasText:'#000014'})).toContainText('Detalle de fixture');await expect(page.locator('#summaryTotalSales')).toHaveText('C$172.34');
+  expect(responses).toEqual(expect.arrayContaining([{endpoint:'/sales',status:200},{endpoint:'/sales/orders/history',status:200},{endpoint:'/reports/connected',status:200}]));
+  const session=diagnostics.find(value=>value.includes('"stage":"history-authorized"'));
+  expect(session).toContain('"effectiveBusinessId":"'+business+'"');expect(session).toContain('"runtimeBusinessId":"'+business+'"');expect(session).toContain('"businessContextMatches":true');
+  expect(diagnostics.some(value=>value.includes('"area":"history-api","stage":"response","method":"GET","endpoint":"/sales","status":200'))).toBeTruthy();
+});
+test('respuestas HTTP 200 pueden fallar la validación del cliente y se identifican sin datos del comprobante',async({page})=>{
+  const diagnostics=[];page.on('console',message=>{if(message.text().startsWith('[SoftVentaWeb diagnostic] '))diagnostics.push(message.text());});
+  await loginForHistoryFixture(page,{width:1365,height:900});const sales=historySalesFixture(business);sales[5].invoiceNumber='6';
+  const responses=await mockHistoryResponses(page,{businessId:business,sales});await page.locator('#navHistoryBtn').click();
+  await expect(page.locator('#historyView .connected-module-loading.is-error')).toBeVisible();
+  await expect.poll(()=>diagnostics.some(value=>value.includes('"stage":"sales-list"')&&value.includes('"code":"INVALID_RESPONSE"'))).toBeTruthy();
+  expect(responses).toEqual(expect.arrayContaining([{endpoint:'/sales',status:200},{endpoint:'/sales/orders/history',status:200},{endpoint:'/reports/connected',status:200}]));
+  const diagnostic=diagnostics.find(value=>value.includes('"stage":"sales-list"'));
+  expect(diagnostic).toContain('"status":null');expect(diagnostic).not.toContain('Detalle de fixture');
+});
+test('desajuste de negocio entre sesión API y runtime produce el genérico aun con tres respuestas HTTP 200',async({page})=>{
+  const diagnostics=[];page.on('console',message=>{if(message.text().startsWith('[SoftVentaWeb diagnostic] '))diagnostics.push(message.text());});
+  await loginForHistoryFixture(page,{width:1365,height:900});const responses=await mockHistoryResponses(page,{businessId:business,sales:historySalesFixture(business),onSalesRequest:()=>page.evaluate(id=>window.PosRuntime.setEffectiveBusinessId(id),process.env.POS_TEST_BUSINESS_B)});
+  await page.locator('#navHistoryBtn').click();await expect(page.locator('#historyView .connected-module-loading.is-error')).toBeVisible();
+  await expect(page.locator('#historyView .connected-module-loading.is-error')).toContainText('No se pudieron cargar los datos de Historial.');
+  await expect.poll(()=>diagnostics.some(value=>value.includes('"stage":"publish-sales"')&&value.includes('"location":"app.js:'))).toBeTruthy();
+  expect(responses).toEqual(expect.arrayContaining([{endpoint:'/sales',status:200},{endpoint:'/sales/orders/history',status:200},{endpoint:'/reports/connected',status:200}]));
+  const session=diagnostics.find(value=>value.includes('"stage":"history-load-failed"'));
+  expect(session).toContain('"effectiveBusinessId":"'+business+'"');expect(session).toContain('"runtimeBusinessId":"'+process.env.POS_TEST_BUSINESS_B+'"');expect(session).toContain('"businessContextMatches":false');
+  const stage=diagnostics.find(value=>value.includes('"area":"history","stage":"publish-sales"'));
+  expect(stage).toContain('"code":"BUSINESS_SCOPE_MISMATCH"');expect(stage).toContain('"location":"app.js:');
+});
+test('los diagnósticos de historial no se registran sin diag=history',async({page})=>{
+  const diagnostics=[];page.on('console',message=>{if(message.text().startsWith('[SoftVentaWeb diagnostic] '))diagnostics.push(message.text());});
+  await page.goto('/?mode=connected');await expect(page.locator('#loginForm button[type=submit]')).toBeEnabled();
+  await page.locator('#loginUsername').fill('browseradmin');await page.locator('#loginPassword').fill(password);await page.locator('#loginForm button[type=submit]').click();await expect(page.locator('#app')).toBeVisible();
+  await mockHistoryResponses(page,{businessId:business,sales:historySalesFixture(business)});await page.locator('#navHistoryBtn').click();
+  await expect(page.locator('#historyView .connected-module-loading.is-error')).toHaveCount(0);
+  expect(diagnostics).toEqual([]);
 });

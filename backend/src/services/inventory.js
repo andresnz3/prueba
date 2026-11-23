@@ -1,7 +1,8 @@
 'use strict';
 const { createHash } = require('node:crypto');
 const { httpError } = require('../middleware/errors');
-const { units, fixed } = require('./inventory-values');
+const { units, fixed, resolveProductCategory } = require('./inventory-values');
+const { normalizeProductCategory } = require('./product-category-values');
 const { normalize } = require('./product-images');
 const columns = { barcode: 'barcode', name: 'name', category: 'category', cost: 'cost', marginRetail: 'retail_margin', marginWholesale: 'wholesale_margin', retailPrice: 'retail_price', wholesalePrice: 'wholesale_price', stock: 'stock', minStock: 'min_stock', taxRate: 'tax_rate', image: 'image', active: 'active' };
 const publicCategory = row => ({ id: String(row.id), businessId: String(row.business_id), name: row.name });
@@ -86,8 +87,10 @@ function createInventoryService({ repo, auth, config }, imageStore) {
   function create(session, data) {
     return work(session, 'inventory', async (db, current) => {
       await imageStore.assertOwned(current.business_id,data.image);
+      const category = await resolveProductCategory(repo, db, current.business_id, data.category);
+      const productData = { ...data, category: category.name };
       const fields = Object.keys(columns);
-      const result = await repo.rows(db, 'INSERT INTO products (business_id, ' + fields.map(field => columns[field]).join(', ') + ') VALUES (' + ['?', ...fields.map(() => '?')].join(', ') + ')', [current.business_id, ...fields.map(field => data[field])]);
+      const result = await repo.rows(db, 'INSERT INTO products (business_id, ' + fields.map(field => columns[field]).join(', ') + ') VALUES (' + ['?', ...fields.map(() => '?')].join(', ') + ')', [current.business_id, ...fields.map(field => productData[field])]);
       const row = await find(db, current, String(result.insertId));
       if (units(row.stock) !== 0n) await record(db, current, row, 'INITIAL', row.stock, 'Creacion de producto');
       await repo.audit(db, current, 'CREATE_PRODUCT', 'products', row.id, { barcode: row.barcode, name: row.name });
@@ -100,8 +103,20 @@ function createInventoryService({ repo, auth, config }, imageStore) {
       if (previous.deleted) throw httpError(409, 'PRODUCT_ARCHIVED');
       if (publicProduct(previous).revision !== data.revision) throw httpError(409, 'PRODUCT_CONFLICT');
       if (Object.hasOwn(data,'image')) await imageStore.assertOwned(current.business_id,data.image);
+      const productData = { ...data };
+      if (Object.hasOwn(data, 'category')) {
+        const sameHistoricalCategory = normalizeProductCategory(data.category) === normalizeProductCategory(previous.category);
+        if (!sameHistoricalCategory) {
+          const category = await resolveProductCategory(repo, db, current.business_id, data.category);
+          productData.category = category.name;
+        } else {
+          try { await resolveProductCategory(repo, db, current.business_id, data.category); }
+          catch (error) { if (error.publicCode !== 'PRODUCT_CATEGORY_NOT_FOUND') throw error; }
+          productData.category = previous.category;
+        }
+      }
       const fields = Object.keys(data).filter(field => Object.hasOwn(columns, field));
-      await repo.rows(db, 'UPDATE products SET ' + fields.map(field => columns[field] + ' = ?').join(', ') + ' WHERE business_id = ? AND id = ?', [...fields.map(field => data[field]), current.business_id, id]);
+      await repo.rows(db, 'UPDATE products SET ' + fields.map(field => columns[field] + ' = ?').join(', ') + ' WHERE business_id = ? AND id = ?', [...fields.map(field => productData[field]), current.business_id, id]);
       const row = await find(db, current, id);
       const delta = units(row.stock) - units(previous.stock);
       if (delta !== 0n) await record(db, current, row, 'MANUAL_EDIT', fixed(delta, 3), 'Ajuste desde edicion');

@@ -1,7 +1,7 @@
 'use strict';
 const { createHash } = require('node:crypto');
 const { httpError } = require('../middleware/errors');
-const { fixed, units } = require('./inventory-values');
+const { fixed, units, resolveProductCategory } = require('./inventory-values');
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const textSearch = value => '%' + value.replace(/[\\%_]/g, '\\$&') + '%';
 
@@ -238,9 +238,10 @@ function createProcurementService({ repo, auth, config }) {
     return rows.map(row => ({ id: String(row.id), businessId: String(row.business_id), business_id: String(row.business_id), barcode: row.barcode, name: row.name, category: row.category, cost: Number(row.cost), marginRetail: Number(row.retail_margin), marginWholesale: Number(row.wholesale_margin), retailPrice: Number(row.retail_price), wholesalePrice: Number(row.wholesale_price), stock: Number(row.stock), minStock: Number(row.min_stock), taxRate: Number(row.tax_rate), image: row.image, active: Boolean(row.active), deleted: Boolean(row.deleted) }));
   });
   const createPurchaseProduct = (session, data) => work(session, 'purchases', async (db, current) => {
+    const category = await resolveProductCategory(repo, db, current.business_id, data.category);
     const [duplicate] = await repo.rows(db, 'SELECT id FROM products WHERE business_id = ? AND barcode = ? LIMIT 1 FOR UPDATE', [current.business_id, data.barcode]);
     if (duplicate) throw httpError(409, 'BARCODE_EXISTS');
-    const values = { ...data, stock: '0.000' };
+    const values = { ...data, category: category.name, stock: '0.000' };
     const columns = ['barcode', 'name', 'category', 'cost', 'retail_margin', 'wholesale_margin', 'retail_price', 'wholesale_price', 'stock', 'min_stock', 'tax_rate', 'image', 'active'];
     const props = ['barcode', 'name', 'category', 'cost', 'marginRetail', 'marginWholesale', 'retailPrice', 'wholesalePrice', 'stock', 'minStock', 'taxRate', 'image', 'active'];
     const result = await repo.rows(db, 'INSERT INTO products (business_id,' + columns.join(',') + ') VALUES (' + ['?', ...columns.map(() => '?')].join(',') + ')', [current.business_id, ...props.map(key => values[key])]);

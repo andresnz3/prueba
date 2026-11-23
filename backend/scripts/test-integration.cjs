@@ -12,6 +12,7 @@ const integrationFiles = [
   'tests/integration/pool-saturation.test.cjs',
   'tests/integration/migration-016-compatibility.test.cjs',
   'tests/integration/migration-017-compatibility.test.cjs',
+  'tests/integration/migration-023-compatibility.test.cjs',
   'tests/integration/business-plans.test.cjs',
   'tests/integration/business-settings.test.cjs',
   'tests/integration/financial.test.cjs',
@@ -109,6 +110,7 @@ function selectedIntegrationFiles(args) {
     ['--migration-continuation-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/system-admin-migration-real-continuation.test.cjs']],
       ['--migration-016-only', ['tests/integration/migration-016-compatibility.test.cjs']],
     ['--migration-017-only', ['tests/integration/migration-017-compatibility.test.cjs']],
+    ['--migration-023-only', ['tests/integration/migration-023-compatibility.test.cjs']],
     ['--business-plans-only', ['tests/integration/business-plans.test.cjs']],
     ['--auth-only', ['tests/integration/auth.test.cjs']],
     ['--local-licenses-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/local-licenses.test.cjs']],
@@ -121,6 +123,7 @@ function selectedIntegrationFiles(args) {
     ['--cash-support-only', ['tests/integration/cash-support-history.test.cjs']],
     ['--reports-only', ['tests/integration/reports.test.cjs']],
     ['--sales-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/sales.test.cjs']],
+    ['--customers-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/sales.test.cjs', 'tests/integration/customers.test.cjs']],
     ['--product-categories-only', ['tests/integration/schema-migrations.test.cjs', 'tests/integration/product-categories.test.cjs']],
     ['--business-deletion-only', ['tests/integration/business-deletion.test.cjs']]
   ];
@@ -170,7 +173,7 @@ async function main() {
     const files = selectedIntegrationFiles(process.argv.slice(2));
     if (!files.length) throw new Error('No hay suites de integración seleccionadas');
     for (const file of files) {
-      const throughVersion = process.argv.includes('--migration-016-only') ? '015' : process.argv.includes('--migration-017-only') || file.endsWith('migration-017-compatibility.test.cjs') ? '016' : null;
+      const throughVersion = process.argv.includes('--migration-016-only') ? '015' : process.argv.includes('--migration-017-only') || file.endsWith('migration-017-compatibility.test.cjs') ? '016' : process.argv.includes('--migration-023-only') || file.endsWith('migration-023-compatibility.test.cjs') ? '022' : null;
       const code = await runFile(connection, config, file, { throughVersion });
       if (code !== 0) exitCode = 1;
     }

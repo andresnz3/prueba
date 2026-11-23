@@ -30,7 +30,9 @@ function salesRoutes(authentication, service, customers) {
   router.put('/business-settings/sales-flow', async (req, res) => res.json(await service.setSalesFlow(req.auth, values.salesFlow(req.body))));
   router.post('/sales/orders', async (req, res) => res.status(201).json(await service.createOrder(req.auth, values.order(req.body))));
   router.get('/sales', async (req, res) => {
-    const options = page(req.query, ['maxId']); if (req.query.maxId !== undefined) options.maxId = v.id(req.query.maxId);
+    const options = page(req.query, ['maxId', 'q']); if (req.query.maxId !== undefined) options.maxId = v.id(req.query.maxId);
+    if (req.query.q === undefined || (typeof req.query.q === 'string' && !req.query.q.trim())) options.q = '';
+    else options.q = v.text(req.query.q, 100);
     res.json({ sales: await service.list(req.auth, options) });
   });
   router.get('/sales/orders/history', async (req, res) => { v.body(req.query, ['limit', 'offset'], []); res.json({ orders: await service.listHistoricalOrders(req.auth, page(req.query)) }); });

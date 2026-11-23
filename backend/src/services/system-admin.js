@@ -13,7 +13,7 @@ const { createSystemAdminMigrationArchive } = require('./system-admin-migration-
 const { randomUUID, createHash } = require('node:crypto');
 const { PLAN_CATALOG, CONNECTED_PLAN_CODES, planByCode, businessPlan, businessUserCounts, assertWithinPlan, assertUserAddition, capacityView } = require('./business-plans');
 const { isSystemAdmin, requireSystemAdmin } = require('./system-admin-access');
-const { seedDefaultProductCategories } = require('./product-category-values');
+const { seedDefaultProductCategories, ensureProductCategory } = require('./product-category-values');
 const businessRecord = row => ({ id: String(row.id), name: row.name, status: row.status, migrationState: row.migration_state || 'NOT_REQUIRED', createdAt: row.created_at, userCount: Number(row.user_count || 0) });
 const migrationProtectionTables = ['migration_import_batches', 'migration_source_records', 'business_migration_controls'];
 const migrationTargetRequiredTables = [
@@ -433,6 +433,7 @@ function createSystemAdminService(repo, options = {}) {
           skipped.products++;
           continue;
         }
+        await ensureProductCategory(repo, db, targetBusinessId, product.category);
         created.products++;
         if (Number(product.stock) > 0) createdProductsWithStock++;
         if (normalizedBarcode) productBarcodes.add(normalizedBarcode);
@@ -684,7 +685,7 @@ function createSystemAdminService(repo, options = {}) {
       if (!business) throw httpError(404, 'USER_NOT_FOUND');
       const [user] = await repo.rows(db, 'SELECT id, business_id, username, full_name, role, active FROM users WHERE business_id = ? AND id = ? FOR UPDATE', [identity.business_id, userId]);
       if (!user) throw httpError(404, 'USER_NOT_FOUND');
-      if (!active && isSystemAdmin(user)) throw httpError(409, 'SYSTEM_ADMIN_PROTECTED');
+      if (!active && user.username === 'andres' && user.role === 'ADMIN' && String(user.business_id) === '1') throw httpError(409, 'SYSTEM_ADMIN_PROTECTED');
       if (Boolean(user.active) !== active) {
         if (active) {
           const plan = await businessPlan(repo, db, user.business_id, { lock: true });

@@ -1,0 +1,35 @@
+diff --git a/app.js b/app.js
+index active..invoice-detail
+--- a/app.js
++++ b/app.js
+@@ -1,2 +1,3 @@
+-    const rawSaleDetail = sale.detalleCliente ?? sale.detail ?? (sale.detalle === '-' ? '' : sale.detalle) ?? '';
+-    const saleDetail = String(rawSaleDetail).trim();
++    const rawSaleDetail = [sale.detalleCliente, sale.detail, sale.detalle]
++        .find(value => typeof value === 'string' && value.trim() && value.trim() !== '-');
++    const saleDetail = typeof rawSaleDetail === 'string' ? rawSaleDetail.trim() : '';
+
+diff --git a/connected-sales.js b/connected-sales.js
+index active..invoice-detail
+--- a/connected-sales.js
++++ b/connected-sales.js
+@@ -1,4 +1,7 @@
+-  function cartData() {
+-    const input = state();
+-    return { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, paymentMethod: input.paymentMethod, clientId: input.clientId };
+-  }
++  function cartData(input = state()) {
++    return { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, paymentMethod: input.paymentMethod, clientId: input.clientId, detail: input.detail };
++  }
++  function quoteData(input) {
++    return { items: input.items, priceType: input.priceType, discountPercent: input.discountPercent, paymentMethod: input.paymentMethod, clientId: input.clientId };
++  }
+@@ -1,1 +1,1 @@
+-      quoteInput = cartData(); quote = await api(client => client.quoteSale(quoteInput));
++      quoteInput = cartData(input); quote = await api(client => client.quoteSale(quoteData(quoteInput)));
+@@ -1,1 +1,1 @@
+-        const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: null, detail: input.detail };
++        const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: null };
+@@ -1,1 +1,1 @@
+-    const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: quote.paymentMethod === 'CASH' ? el('connectedCashReceived').value : null, detail: state().detail };
++    const data = { ...quoteInput, quoteToken: quote.quoteToken, cashReceived: quote.paymentMethod === 'CASH' ? el('connectedCashReceived').value : null };

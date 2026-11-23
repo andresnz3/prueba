@@ -1,0 +1,11 @@
+ARG BASE_IMAGE
+ARG BASE_IMAGE_ID
+ARG PACKAGE_SHA256
+FROM ${BASE_IMAGE}
+ARG BASE_IMAGE_ID
+ARG PACKAGE_SHA256
+LABEL org.softventa.invoice.backend-base-image-id="${BASE_IMAGE_ID}" \
+      org.softventa.invoice.package-sha256="${PACKAGE_SHA256}"
+COPY --chown=node:node apply-invoice-overlay.cjs /tmp/apply-invoice-overlay.cjs
+COPY --chown=node:node backend.patch /tmp/backend.patch
+RUN node /tmp/apply-invoice-overlay.cjs backend /app /tmp/backend.patch ${PACKAGE_SHA256}

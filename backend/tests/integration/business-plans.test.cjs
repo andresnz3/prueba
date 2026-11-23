@@ -52,6 +52,18 @@ test('connected plans enforce backend user limits, preserve accounts on downgrad
   const rootCapacity = await system.request('/admin/businesses/1/user-capacity');
   assert.equal(rootCapacity.status, 200);
   assert.deepEqual([rootCapacity.data.capacity.activeUsers, rootCapacity.data.capacity.activeAdmins], [0, 0], 'the system administrator does not consume a business seat');
+  const secondarySystemAdmin = await system.request('/admin/businesses/1/users', 'POST', { username: 'secondary_operator', fullName: 'Secondary system administrator', password: 'Synthetic-secondary-admin-123!', role: 'ADMIN' });
+  assert.equal(secondarySystemAdmin.status, 201, JSON.stringify(secondarySystemAdmin.data));
+  const capacityWithSecondAdmin = await system.request('/admin/businesses/1/user-capacity');
+  assert.deepEqual([capacityWithSecondAdmin.data.capacity.activeUsers, capacityWithSecondAdmin.data.capacity.activeAdmins], [1, 1], 'the secondary system-business administrator consumes the same plan quota as before');
+  const thirdSystemAdmin = await system.request('/admin/businesses/1/users', 'POST', { username: 'third_operator', fullName: 'Third system administrator', password: 'Synthetic-third-admin-123!', role: 'ADMIN' });
+  assert.equal(thirdSystemAdmin.status, 409); assert.equal(thirdSystemAdmin.data.error.code, 'BUSINESS_PLAN_ADMIN_LIMIT_EXCEEDED');
+  const secondAdminSession = client(base);
+  assert.equal((await secondAdminSession.login('secondary_operator', 'Synthetic-secondary-admin-123!')).status, 200);
+  assert.equal((await secondAdminSession.request('/admin/businesses')).status, 200);
+  const deactivatedSecondAdmin = await system.request('/admin/users/' + secondarySystemAdmin.data.user.id + '/status', 'PATCH', { active: false });
+  assert.equal(deactivatedSecondAdmin.status, 200);
+  assert.equal((await secondAdminSession.request('/auth/me')).status, 401);
 
   const planSpecs = [
     ['CONECTADO_BASICO', 3], ['CONECTADO_ESTANDAR', 5], ['CONECTADO_PREMIUM', 10]

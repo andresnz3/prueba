@@ -7,8 +7,8 @@ const root = resolve(__dirname, '..');
 const output = join(root, 'dist');
 const check = spawnSync(process.execPath, [join(__dirname, 'check-vendored-assets.cjs')], { stdio: 'inherit' });
 if (check.status !== 0) process.exit(check.status || 1);
-const publicFiles = ['index.html', 'app.js', 'local-auth.js', 'local-license-config.js', 'local-license.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'offline.html', 'manifest.webmanifest', 'pwa.js', 'api-config.js', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'connected-expenses.js', 'connected-purchases.js', 'connected-reports.js', 'dashboard-period.js', 'period-filters.js', 'connected-dashboard.js', 'local-cash-flow.js', 'local-migration-preview.js', 'local-migration-export.js', 'connected-migration-history.js'];
-const publicDirectories = ['vendor', 'assets/pwa'];
+const publicFiles = ['index.html', 'robots.txt', 'sitemap.xml', 'app.js', 'local-auth.js', 'local-license-config.js', 'local-license.js', 'data-tables.js', 'styles.css', 'icons.js', '404.html', 'offline.html', 'manifest.webmanifest', 'pwa.js', 'api-config.js', 'api-client.js', 'connected-auth.js', 'connected-inventory.js', 'validation.js', 'connected-sales.js', 'connected-clients.js', 'connected-expenses.js', 'connected-purchases.js', 'connected-reports.js', 'dashboard-period.js', 'period-filters.js', 'connected-dashboard.js', 'local-cash-flow.js', 'local-migration-preview.js', 'local-migration-export.js', 'connected-migration-history.js'];
+const publicDirectories = ['vendor', 'assets/pwa', 'inicio'];
 mkdirSync(output, { recursive: true });
 // Destino absoluto y fijo dentro del repositorio: solo se limpia dist.
 for (const entry of readdirSync(output)) rmSync(join(output, entry), { recursive: true, force: true });
@@ -23,7 +23,7 @@ function copyPublicDirectory(source, destination) {
   }
 }
 for (const directory of publicDirectories) copyPublicDirectory(join(root, directory), join(output, directory));
-const cacheableExtensions = new Set(['.html', '.css', '.js', '.svg', '.png', '.ico', '.woff2', '.webmanifest']);
+const cacheableExtensions = new Set(['.html', '.css', '.js', '.svg', '.png', '.ico', '.webp', '.woff2', '.webmanifest']);
 const precachePaths = [];
 function collectStaticFiles(directory, relative = '') {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {

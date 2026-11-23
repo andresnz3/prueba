@@ -65,10 +65,12 @@ test('un error inesperado del servidor se explica sin mostrar el código ni la c
     body: JSON.stringify({ error: { code: 'INTERNAL_SQL_COLUMN_012', message: 'SELECT password FROM users' } })
   }));
   await page.locator('#navInventoryBtn').click();
-  await expect(page.locator('#connectedNotice')).toBeVisible();
-  const message = await page.locator('#connectedNotice').innerText();
-  expect(message).toBe('No se pudo completar la solicitud. Inténtalo nuevamente.');
+  const alert = page.getByRole('alert');
+  await expect(alert).toBeVisible();
+  const message = await alert.innerText();
+  expect(message).toContain('No se pudieron cargar los datos de Inventario.');
   expect(message).not.toContain('INTERNAL_SQL_COLUMN_012');
   expect(message).not.toContain('SELECT password');
   assertNoTechnicalLeak(message, 'mensaje de error del inventario');
+  await expect(alert.getByRole('button', { name: 'Reintentar carga' })).toBeVisible();
 });

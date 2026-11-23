@@ -53,7 +53,7 @@ test('MySQL importa compras historicas una sola vez y no altera inventario, caja
     }
   };
 
-  await assert.rejects(service.previewPurchasesMigration({ ...systemAdmin, username: 'no-autorizado' }, targetBusiness, sourcePackage), { publicCode: 'SYSTEM_ADMIN_REQUIRED' });
+  await assert.rejects(service.previewPurchasesMigration({ ...systemAdmin, role: 'VENDEDOR' }, targetBusiness, sourcePackage), { publicCode: 'SYSTEM_ADMIN_REQUIRED' });
   const gatePreview = await service.previewPurchasesMigration(systemAdmin, targetBusiness, sourcePackage);
   assert.equal(gatePreview.purchases.detected, 5);
   assert.equal(gatePreview.eligible, false);

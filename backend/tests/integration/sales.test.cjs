@@ -9,6 +9,7 @@ const { createAuthRepository, rows } = require('../../src/repositories/auth');
 const { createAuthService } = require('../../src/services/auth');
 const { createUsersService } = require('../../src/services/users');
 const { hashPassword } = require('../../src/services/passwords');
+const { seedDefaultProductCategories } = require('../../src/services/product-category-values');
 const { createApp } = require('../../src/app');
 const database = process.env.POS_INTEGRATION_DATABASE;
 if (!/^pos_auth_test_[a-f0-9]{24}$/.test(database || '') || database === process.env.DB_NAME) throw new Error('Use isolated runner');
@@ -28,6 +29,7 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
   const config=readConfig(), authConfig=readAuthConfig({CSRF_SECRET:randomBytes(32).toString('hex'),AUTH_RATE_MAX:'100'});
   const pool=createDatabasePool({...config.database,database,connectionLimit:20}); t.after(()=>pool.end());
   const business=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Sales A'])).insertId), businessB=String((await rows(pool,'INSERT INTO businesses (name) VALUES (?)',['Sales B'])).insertId);
+  await seedDefaultProductCategories(pool,business); await seedDefaultProductCategories(pool,businessB);
   const hash=await hashPassword(password);
   for (const [tenant,username,role] of [[business,'salesadmin','ADMIN'],[business,'salesone','VENDEDOR'],[business,'salestwo','VENDEDOR'],[businessB,'salesadmin_b','ADMIN']]) await rows(pool,'INSERT INTO users (business_id, username, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?)',[tenant,username,username,hash,role]);
   const repo=createAuthRepository(pool,authConfig),auth=createAuthService(repo,authConfig);
@@ -67,6 +69,7 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
   await t.test('venta calcula importes exactos, usuario, factura, stock y efectivo sin duplicar',async()=>{
     const input=await body(); const response=await one.request('/sales','POST',input); assert.equal(response.status,201); firstSale=response.data.sale;
     assert.equal(firstSale.invoiceNumber,'000001'); assert.equal(firstSale.subtotal,'13.85'); assert.equal(firstSale.discount,'1.39'); assert.equal(firstSale.total,'12.46'); assert.equal(firstSale.changeAmount,'87.54'); assert.equal(firstSale.seller,'salesone'); assert.equal(await stock(product.id),'98.875');
+    assert.equal(firstSale.detail,'Venta de prueba');
     assert.equal((await one.request('/sales/next-invoice')).data.invoiceNumber,'000002');
     assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount,'22.46');
     assert.equal(await count('cash_movements'),1); assert.equal(firstSale.items[0].unitPrice,'12.31');
@@ -281,11 +284,11 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     assert.equal((await one.request('/sales/quote','POST',cart())).data.error.code,'SALES_FLOW_CHANGED');
     const beforeStock=await stock(product.id), beforeSales=await count('sales'), beforeMovements=await count('cash_movements'), sequenceBeforeOrder=await saleSequence();
     assert.equal((await one.request('/sales/next-invoice')).data.invoiceNumber,(sequenceBeforeOrder+1n).toString().padStart(6,'0'));
-    const orderInput={items:[{productId:product.id,quantity:'1.125'}],priceType:'RETAIL',discountPercent:'0',detail:'Pedido de caja',operationKey:randomUUID()};
+    const orderInput={items:[{productId:product.id,quantity:'1.125'}],priceType:'RETAIL',discountPercent:'0',detail:'Pedido de caja',customerName:'Cliente de prueba',operationKey:randomUUID()};
     const rejected=await one.request('/sales/orders','POST',orderInput);assert.equal(rejected.status,409);assert.equal(rejected.data.error.code,'CASH_CLOSED');
     assert.equal(await count('sales'),beforeSales);assert.equal(await count('cash_movements'),beforeMovements);
     await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'5.00'});
-    const created=await one.request('/sales/orders','POST',orderInput);assert.equal(created.status,201);assert.equal(created.data.order.status,'PENDING');
+    const created=await one.request('/sales/orders','POST',orderInput);assert.equal(created.status,201);assert.equal(created.data.order.status,'PENDING');assert.equal(created.data.order.customerName,'Cliente de prueba');
     assert.equal(Object.hasOwn(created.data.order,'invoiceNumber'),false);assert.equal(await saleSequence(),sequenceBeforeOrder);
     assert.equal((await one.request('/sales/orders','POST',orderInput)).data.order.id,created.data.order.id);
     current=(await admin.request('/cash/current?full=true')).data.cash;await admin.request('/cash/sessions/'+current.id+'/close','POST',{operationKey:randomUUID(),countedAmount:current.expectedAmount});
@@ -306,7 +309,7 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     assert.equal((await admin.request('/cash/orders/'+created.data.order.id+'/charge','POST',{operationKey:randomUUID(),quoteToken:q.quoteToken,paymentMethod:'CARD',cashReceived:null})).data.error.code,'QUOTE_CHANGED');
     const q2=(await admin.request('/cash/orders/'+created.data.order.id+'/quote','POST',{paymentMethod:'CARD'})).data.quote;
     const charged=await admin.request('/cash/orders/'+created.data.order.id+'/charge','POST',{operationKey:randomUUID(),quoteToken:q2.quoteToken,paymentMethod:'CARD',cashReceived:null});
-    assert.equal(charged.status,201);assert.equal(charged.data.sale.seller,'salesone');assert.equal(charged.data.sale.cashier,'salesadmin');assert.equal(charged.data.order.status,'COMPLETED');
+    assert.equal(charged.status,201);assert.equal(charged.data.sale.seller,'salesone');assert.equal(charged.data.sale.cashier,'salesadmin');assert.equal(charged.data.sale.customerName,'Cliente de prueba');assert.equal(charged.data.order.customerName,'Cliente de prueba');assert.equal(charged.data.order.status,'COMPLETED');
     assert.equal(charged.data.sale.invoiceNumber,(sequenceBeforeOrder+1n).toString().padStart(6,'0'));assert.equal(await saleSequence(),sequenceBeforeOrder+1n);assert.equal((await one.request('/sales/next-invoice')).data.invoiceNumber,(sequenceBeforeOrder+2n).toString().padStart(6,'0'));
     assert.equal(await stock(product.id),(Number(beforeStock)-1.125).toFixed(3));
     assert.equal((await admin.request('/cash/current?full=true')).data.cash.expectedAmount,'5.00');
@@ -386,5 +389,37 @@ test('Integracion MySQL ventas y caja fase 5.3', async t => {
     const after={stock:await stock(product.id),cash:await count('cash_movements'),inventory:await count('inventory_movements'),payments:await count('customer_payments')};
     assert.deepEqual(after,before);
     const [saved]=await rows(pool,'SELECT status, invoice_number FROM sales WHERE business_id = ? AND id = ?',[business,fixtureSale.id]);assert.equal(saved.status,'COMPLETED');assert.equal(saved.invoice_number,internalReference);
+  });
+  await t.test('busqueda paginada encuentra factura, detalle y cliente dentro del negocio',async()=>{
+    const cashA=(await admin.request('/cash/current?full=true')).data.cash;
+    if(!cashA) assert.equal((await admin.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'100.00'})).status,201);
+    const marker='Carlos-'+randomUUID().slice(0,8), input=await body(one,{}, {detail:'Nota de venta',customerName:marker}), created=await one.request('/sales','POST',input);
+    assert.equal(created.status,201);assert.equal(created.data.sale.detail,'Nota de venta');assert.equal(created.data.sale.customerName,marker);
+    const byDetail=await admin.request('/sales?limit=100&q='+encodeURIComponent('nota de venta'));
+    assert.equal(byDetail.status,200);assert.ok(byDetail.data.sales.some(sale=>sale.id===created.data.sale.id));assert.ok(byDetail.data.sales.every(sale=>sale.businessId===business));
+    const byName=await admin.request('/sales?limit=100&q='+encodeURIComponent(marker.slice(2).toLowerCase()));
+    assert.ok(byName.data.sales.some(sale=>sale.id===created.data.sale.id));
+    const byInvoice=await admin.request('/sales?limit=100&q='+encodeURIComponent(created.data.sale.invoiceNumber));
+    assert.ok(byInvoice.data.sales.some(sale=>sale.id===created.data.sale.id));
+    const firstPage=await admin.request('/sales?limit=1&offset=0&q=venta%20de%20prueba'), secondPage=await admin.request('/sales?limit=1&offset=1&q=venta%20de%20prueba');
+    assert.equal(firstPage.data.sales.length,1);assert.equal(secondPage.data.sales.length,1);assert.notEqual(firstPage.data.sales[0].id,secondPage.data.sales[0].id);
+
+    const cashB=(await other.request('/cash/current?full=true')).data.cash;
+    if(!cashB) assert.equal((await other.request('/cash/sessions','POST',{operationKey:randomUUID(),openingAmount:'100.00'})).status,201);
+    const productB=await createProduct({},other), cartB={items:[{productId:productB.id,quantity:'1'}],priceType:'RETAIL',discountPercent:'0',paymentMethod:'CASH'};
+    const quoteB=await other.request('/sales/quote','POST',cartB);assert.equal(quoteB.status,200);
+    const saleB=await other.request('/sales','POST',{...cartB,operationKey:randomUUID(),quoteToken:quoteB.data.quote.quoteToken,cashReceived:'100.00',detail:'Sin relación',customerName:marker});assert.equal(saleB.status,201);
+    const searchA=await admin.request('/sales?limit=100&q='+encodeURIComponent(marker));
+    const searchB=await other.request('/sales?limit=100&q='+encodeURIComponent(marker));
+    assert.ok(searchA.data.sales.some(sale=>sale.id===created.data.sale.id));assert.ok(searchA.data.sales.every(sale=>sale.businessId===business));assert.ok(!searchA.data.sales.some(sale=>sale.id===saleB.data.sale.id));
+    assert.ok(searchB.data.sales.some(sale=>sale.id===saleB.data.sale.id));assert.ok(searchB.data.sales.every(sale=>sale.businessId===businessB));assert.ok(!searchB.data.sales.some(sale=>sale.id===created.data.sale.id));
+
+    const clientName='Cliente registrado '+randomUUID().slice(0,8), clientResponse=await admin.request('/clients','POST',{name:clientName,phone:null,ruc:null,address:null,creditLimit:'100.00',creditDays:30});
+    assert.equal(clientResponse.status,201);
+    const creditCart={items:[{productId:product.id,quantity:'1'}],priceType:'RETAIL',discountPercent:'0',paymentMethod:'CREDIT',clientId:clientResponse.data.client.id};
+    const creditQuote=await one.request('/sales/quote','POST',creditCart);assert.equal(creditQuote.status,200);
+    const creditSale=await one.request('/sales','POST',{...creditCart,operationKey:randomUUID(),quoteToken:creditQuote.data.quote.quoteToken,cashReceived:null,detail:''});assert.equal(creditSale.status,201);assert.equal(creditSale.data.sale.customerName,clientName);
+    const byClient=await admin.request('/sales?limit=100&q='+encodeURIComponent(clientName.slice(8).toLowerCase()));
+    assert.ok(byClient.data.sales.some(sale=>sale.id===creditSale.data.sale.id));assert.ok(byClient.data.sales.every(sale=>sale.businessId===business));
   });
 });

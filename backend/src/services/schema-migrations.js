@@ -25,7 +25,16 @@ const MIGRATIONS = [
   { version: '018', file: '018_shared_login_rate_limits.sql', requires: ['017'], checks: migration018 },
   { version: '019', file: '019_local_perpetual_licenses.sql', requires: ['018'], checks: migration019 },
   { version: '020', file: '020_local_license_business_identity.sql', requires: ['019'], checks: migration020 },
-  { version: '021', file: '021_business_product_categories.sql', requires: ['020'], checks: migration021 }
+  {
+    version: '021', file: '021_business_product_categories.sql', requires: ['020'], checks: migration021,
+    // La migración se publicó una vez antes de añadir `active`; aceptamos su checksum histórico LF/CRLF.
+    legacyChecksums: [
+      '3d8640d361526861789e9935aabb584f75ee1944ccf1aa4ecb3b37331b97a016',
+      'dbd9fb61f5126e1c2da5313b536437332c40201d8646def7bdcddb529cbfe237'
+    ]
+  },
+  { version: '022', file: '022_add_product_category_active.sql', requires: ['021'], checks: migration022 },
+  { version: '023', file: '023_sale_customer_names.sql', requires: ['004'], checks: migration023 }
 ];
 
 const BASE_TABLES = [
@@ -355,6 +364,21 @@ async function migration021(db, database) {
   return [table, columns, Number(unique.n) === 2, foreignKey];
 }
 
+async function migration022(db, database) {
+  const table = await tableExists(db, database, 'product_categories');
+  if (!table) return [false];
+  const active = await scalar(db, 'SELECT data_type AS dataType, column_type AS columnType, is_nullable AS nullable, column_default AS columnDefault, extra AS columnExtra, generation_expression AS generationExpression FROM information_schema.columns WHERE table_schema=? AND table_name=\'product_categories\' AND column_name=\'active\'', [database]);
+  if (!active) return [false];
+  return [true, active.dataType === 'tinyint' && String(active.columnType).toLowerCase() === 'tinyint(1)' && active.nullable === 'NO' && String(active.columnDefault) === '1' && !active.columnExtra && !active.generationExpression];
+}
+
+async function migration023(db, database) {
+  return [
+    await columnsExist(db, database, 'sales', ['customer_name']),
+    await columnsExist(db, database, 'sale_orders', ['customer_name'])
+  ];
+}
+
 async function migrationState(migration, db, database) {
   const checks = await migration.checks(db, database);
   const present = checks.filter(Boolean).length;
@@ -420,7 +444,8 @@ async function readMigrationRecords(db, database, hasLedger) {
   for (const row of rows) {
     const migration = known.get(row.version);
     if (!migration || migration.file !== row.fileName) throw new Error('Unknown migration ledger entry: ' + row.version);
-    if (row.checksum !== checksum(readMigration(migration))) throw new Error('Migration file checksum changed after application: ' + row.version);
+    const acceptedChecksums = [checksum(readMigration(migration)), ...(migration.legacyChecksums || [])];
+    if (!acceptedChecksums.includes(row.checksum)) throw new Error('Migration file checksum changed after application: ' + row.version);
     if (!['RUNNING', 'APPLIED'].includes(row.status)) throw new Error('Invalid migration ledger state: ' + row.version);
     records.set(row.version, row);
   }
